@@ -82,10 +82,8 @@ public sealed class WebSearchTool : ITool, IDisposable
         };
 
         // Build JSON manually for AOT safety
-        request.Content = new StringContent(
-            BuildSearchJson(body),
-            Encoding.UTF8,
-            "application/json");
+        using var content = BuildSearchJsonContent(body);
+        request.Content = content;
 
         using var response = await _http.SendAsync(request, ct);
         response.EnsureSuccessStatusCode();
@@ -182,9 +180,9 @@ public sealed class WebSearchTool : ITool, IDisposable
     public void Dispose() => _http.Dispose();
 
     /// <summary>AOT-safe JSON builder for simple search request bodies.</summary>
-    private static string BuildSearchJson(Dictionary<string, object?> data)
+    private static Utf8JsonContent BuildSearchJsonContent(Dictionary<string, object?> data)
     {
-        using var ms = new System.IO.MemoryStream();
+        var ms = new System.IO.MemoryStream();
         using (var writer = new System.Text.Json.Utf8JsonWriter(ms))
         {
             writer.WriteStartObject();
@@ -202,6 +200,7 @@ public sealed class WebSearchTool : ITool, IDisposable
             }
             writer.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(ms.ToArray());
+        ms.Position = 0L;
+        return new Utf8JsonContent(ms);
     }
 }

@@ -1,8 +1,8 @@
-using System.Text;
-using System.Text.Json;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Http;
 using OpenClaw.Core.Plugins;
+using System.Text;
+using System.Text.Json;
 
 namespace OpenClaw.Agent.Tools;
 
@@ -166,13 +166,13 @@ public sealed class CalendarTool : ITool, IDisposable
         // Default end = start + 1 hour
         end ??= DateTimeOffset.Parse(start).AddHours(1).ToString("o");
 
-        var body = BuildEventJson(title, start, end,
+        using var content = BuildEventJsonContent(title, start, end,
             args.TryGetProperty("description", out var desc) ? desc.GetString() : null,
             args.TryGetProperty("location", out var loc) ? loc.GetString() : null);
 
         var url = $"{CalendarApiBase}/calendars/{Uri.EscapeDataString(_config.CalendarId)}/events";
         using var request = CreateAuthRequest(HttpMethod.Post, url);
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        request.Content = content;
 
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
@@ -200,11 +200,11 @@ public sealed class CalendarTool : ITool, IDisposable
         var description = args.TryGetProperty("description", out var desc) ? desc.GetString() : null;
         var location = args.TryGetProperty("location", out var loc) ? loc.GetString() : null;
 
-        var body = BuildPartialEventJson(title, start, end, description, location);
+        using var content = BuildPartialEventJsonContent(title, start, end, description, location);
 
         var url = $"{CalendarApiBase}/calendars/{Uri.EscapeDataString(_config.CalendarId)}/events/{Uri.EscapeDataString(eventId)}";
         using var request = CreateAuthRequest(HttpMethod.Patch, url);
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        request.Content = content;
 
         using var response = await _http.SendAsync(request, ct);
         if (!response.IsSuccessStatusCode)
@@ -356,9 +356,9 @@ public sealed class CalendarTool : ITool, IDisposable
         return Encoding.UTF8.GetString(ms.ToArray());
     }
 
-    private static string BuildEventJson(string title, string start, string end, string? description, string? location)
+    private static Utf8JsonContent BuildEventJsonContent(string title, string start, string end, string? description, string? location)
     {
-        using var ms = new System.IO.MemoryStream();
+        var ms = new System.IO.MemoryStream();
         using (var w = new Utf8JsonWriter(ms))
         {
             w.WriteStartObject();
@@ -373,12 +373,14 @@ public sealed class CalendarTool : ITool, IDisposable
             if (location is not null) w.WriteString("location", location);
             w.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(ms.ToArray());
+
+        ms.Position = 0L;
+        return new Utf8JsonContent(ms);
     }
 
-    private static string BuildPartialEventJson(string? title, string? start, string? end, string? description, string? location)
+    private static Utf8JsonContent BuildPartialEventJsonContent(string? title, string? start, string? end, string? description, string? location)
     {
-        using var ms = new System.IO.MemoryStream();
+        var ms = new System.IO.MemoryStream();
         using (var w = new Utf8JsonWriter(ms))
         {
             w.WriteStartObject();
@@ -389,7 +391,8 @@ public sealed class CalendarTool : ITool, IDisposable
             if (location is not null) w.WriteString("location", location);
             w.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(ms.ToArray());
+        ms.Position = 0L;
+        return new Utf8JsonContent(ms);
     }
 
     private static string Base64UrlEncode(byte[] data)

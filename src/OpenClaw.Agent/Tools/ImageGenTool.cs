@@ -74,9 +74,8 @@ public sealed class ImageGenTool : ITool, IDisposable
 
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
         request.Headers.Add("Authorization", $"Bearer {apiKey}");
-
-        var body = BuildRequestJson(prompt, size, quality);
-        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var content = BuildRequestJsonContent(prompt, size, quality);
+        request.Content = content;
 
         try
         {
@@ -119,9 +118,9 @@ public sealed class ImageGenTool : ITool, IDisposable
     }
 
     /// <summary>AOT-safe JSON builder for the image gen request.</summary>
-    private string BuildRequestJson(string prompt, string size, string quality)
+    private Utf8JsonContent BuildRequestJsonContent(string prompt, string size, string quality)
     {
-        using var ms = new System.IO.MemoryStream();
+        var ms = new System.IO.MemoryStream();
         using (var writer = new Utf8JsonWriter(ms))
         {
             writer.WriteStartObject();
@@ -133,7 +132,8 @@ public sealed class ImageGenTool : ITool, IDisposable
             writer.WriteString("response_format", "url");
             writer.WriteEndObject();
         }
-        return Encoding.UTF8.GetString(ms.ToArray());
+        ms.Position = 0L;
+        return new Utf8JsonContent(ms);
     }
 
     private string? ResolveKey() => SecretResolver.Resolve(_config.ApiKey);
