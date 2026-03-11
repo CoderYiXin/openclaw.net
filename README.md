@@ -21,6 +21,12 @@ Self-hosted OpenClaw.NET gateway + agent runtime in .NET (NativeAOT-friendly).
 - [Changelog](CHANGELOG.md) — Tracked project changes.
 - [Docker Hub Overview](DOCKERHUB.md)
 
+Published container images:
+
+- `ghcr.io/clawdotnet/openclaw.net:latest`
+- `tellikoroma/openclaw.net:latest`
+- `public.ecr.aws/u6i5b9b7/openclaw.net:latest`
+
 ## Architecture
 
 OpenClaw.NET now separates gateway startup and runtime composition into explicit layers instead of a single large startup path.
@@ -353,12 +359,30 @@ docker run -d -p 18789:18789 \
   openclaw.net
 ```
 
-### Push to a registry (Docker Hub or GHCR)
+### Published images
+
+The same multi-arch image is published to:
+
+- `ghcr.io/clawdotnet/openclaw.net:latest`
+- `tellikoroma/openclaw.net:latest`
+- `public.ecr.aws/u6i5b9b7/openclaw.net:latest`
+
+Example pull:
+
+```bash
+docker pull ghcr.io/clawdotnet/openclaw.net:latest
+```
+
+### Push to a registry (Docker Hub, GHCR, or ECR Public)
 Multi-arch push (recommended):
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 \
-  -t <dockerhub-user>/openclaw.net:latest \
-  -t <dockerhub-user>/openclaw.net:<version> \
+  -t ghcr.io/clawdotnet/openclaw.net:latest \
+  -t ghcr.io/clawdotnet/openclaw.net:<version> \
+  -t tellikoroma/openclaw.net:latest \
+  -t tellikoroma/openclaw.net:<version> \
+  -t public.ecr.aws/u6i5b9b7/openclaw.net:latest \
+  -t public.ecr.aws/u6i5b9b7/openclaw.net:<version> \
   --push .
 ```
 

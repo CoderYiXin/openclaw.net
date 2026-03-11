@@ -2,6 +2,12 @@
 
 Self-hosted OpenClaw.NET gateway + agent runtime in .NET (NativeAOT-friendly).
 
+Registry mirrors for the same published image:
+
+- `ghcr.io/clawdotnet/openclaw.net:latest`
+- `tellikoroma/openclaw.net:latest`
+- `public.ecr.aws/u6i5b9b7/openclaw.net:latest`
+
 This image runs the gateway on port `18789` and persists memory under `/app/memory`.
 
 ## Quick start
@@ -17,6 +23,28 @@ docker run -d --name openclaw \
 ```
 
 Open WebChat at `http://127.0.0.1:18789/chat` and paste your `OPENCLAW_AUTH_TOKEN`.
+
+If you prefer a different registry, the equivalent commands are:
+
+```bash
+docker run -d --name openclaw \
+  -p 18789:18789 \
+  -e MODEL_PROVIDER_KEY="sk-..." \
+  -e OPENCLAW_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  -v openclaw-memory:/app/memory \
+  -v "$(pwd)/workspace:/app/workspace" \
+  ghcr.io/clawdotnet/openclaw.net:latest
+```
+
+```bash
+docker run -d --name openclaw \
+  -p 18789:18789 \
+  -e MODEL_PROVIDER_KEY="sk-..." \
+  -e OPENCLAW_AUTH_TOKEN="$(openssl rand -hex 32)" \
+  -v openclaw-memory:/app/memory \
+  -v "$(pwd)/workspace:/app/workspace" \
+  public.ecr.aws/u6i5b9b7/openclaw.net:latest
+```
 
 ## Required environment variables
 
@@ -49,6 +77,12 @@ The image includes a healthcheck that runs:
 - `/app/OpenClaw.Gateway --health-check`
 
 ## Docker Compose
+
+Equivalent image values:
+
+- `image: tellikoroma/openclaw.net:latest`
+- `image: ghcr.io/clawdotnet/openclaw.net:latest`
+- `image: public.ecr.aws/u6i5b9b7/openclaw.net:latest`
 
 ```yaml
 services:
