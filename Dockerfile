@@ -38,7 +38,7 @@ FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled AS runtime
 # Non-root user (chiseled images use app user by default)
 WORKDIR /app
 
-COPY --from=build /app .
+COPY --from=build --chown=1654:1654 /app .
 
 # Default environment variables (safe public-bind defaults).
 # Note: Program.cs binds to `OpenClaw:BindAddress` + `OpenClaw:Port` (not ASPNETCORE_URLS).
