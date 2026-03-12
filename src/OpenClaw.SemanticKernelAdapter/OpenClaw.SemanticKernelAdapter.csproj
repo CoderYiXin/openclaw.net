@@ -4,6 +4,10 @@
     <!-- Keep SK interop optional; do not claim AOT compatibility. -->
     <IsAotCompatible>false</IsAotCompatible>
     <IsTrimmable>false</IsTrimmable>
+    <IsPackable>true</IsPackable>
+    <PackageId>OpenClaw.SemanticKernelAdapter</PackageId>
+    <Description>Semantic Kernel adapter types for exposing Microsoft Semantic Kernel integrations through OpenClaw.NET.</Description>
+    <PackageTags>openclaw;semantic-kernel;ai;agent;dotnet</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <!-- Avoid requiring XML docs for every public member in this optional adapter. -->
     <NoWarn>$(NoWarn);1591</NoWarn>

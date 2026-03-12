@@ -1,6 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <RootNamespace>OpenClaw.PluginKit</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>OpenClaw.PluginKit</PackageId>
+    <Description>Plugin abstractions and helper types for building OpenClaw.NET extensions.</Description>
+    <PackageTags>openclaw;plugins;ai;agent;dotnet</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />

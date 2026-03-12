@@ -1,0 +1,61 @@
+name: NuGet
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version to publish (for example 0.1.0)"
+        required: true
+        type: string
+
+env:
+  DOTNET_VERSION: "10.0.x"
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PACKAGE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Normalize version
+        run: echo "PACKAGE_VERSION=${PACKAGE_VERSION#v}" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: |
+          dotnet restore src/OpenClaw.Core
+          dotnet restore src/OpenClaw.PluginKit
+          dotnet restore src/OpenClaw.SemanticKernelAdapter
+
+      - name: Pack
+        run: |
+          mkdir -p ./artifacts/nuget
+          dotnet pack src/OpenClaw.Core/OpenClaw.Core.csproj -c Release --no-restore -p:PackageVersion=${PACKAGE_VERSION} -o ./artifacts/nuget
+          dotnet pack src/OpenClaw.PluginKit/OpenClaw.PluginKit.csproj -c Release --no-restore -p:PackageVersion=${PACKAGE_VERSION} -o ./artifacts/nuget
+          dotnet pack src/OpenClaw.SemanticKernelAdapter/OpenClaw.SemanticKernelAdapter.csproj -c Release --no-restore -p:PackageVersion=${PACKAGE_VERSION} -o ./artifacts/nuget
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages-${{ env.PACKAGE_VERSION }}
+          path: ./artifacts/nuget
+
+      - name: Publish to NuGet.org
+        run: |
+          dotnet nuget push "./artifacts/nuget/*.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

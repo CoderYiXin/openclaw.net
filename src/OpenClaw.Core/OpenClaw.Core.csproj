@@ -2,6 +2,10 @@
   <PropertyGroup>
     <RootNamespace>OpenClaw.Core</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
+    <IsPackable>true</IsPackable>
+    <PackageId>OpenClaw.Core</PackageId>
+    <Description>Core abstractions, models, validation, security, and memory primitives for OpenClaw.NET.</Description>
+    <PackageTags>openclaw;ai;agent;dotnet;llm</PackageTags>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="OpenClaw.Tests" />
