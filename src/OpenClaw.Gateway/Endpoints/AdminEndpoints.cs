@@ -20,6 +20,7 @@ internal static class AdminEndpoints
     {
         var browserSessions = app.Services.GetRequiredService<BrowserSessionAuthService>();
         var adminSettings = app.Services.GetRequiredService<AdminSettingsService>();
+        var heartbeat = app.Services.GetRequiredService<HeartbeatService>();
         var sessionAdminStore = (ISessionAdminStore)app.Services.GetRequiredService<IMemoryStore>();
         var operations = runtime.Operations;
 
@@ -374,6 +375,86 @@ internal static class AdminEndpoints
                 result.RestartRequiredFields,
                 "Settings overrides cleared.");
             return Results.Json(response, CoreJsonContext.Default.AdminSettingsResponse);
+        });
+
+        app.MapGet("/admin/heartbeat", (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.heartbeat");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var preview = heartbeat.BuildPreview(heartbeat.LoadConfig(), runtime, ctx.RequestAborted);
+            return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapPost("/admin/heartbeat/preview", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.heartbeat.preview");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var request = await JsonSerializer.DeserializeAsync(
+                ctx.Request.Body,
+                CoreJsonContext.Default.HeartbeatConfigDto,
+                ctx.RequestAborted);
+
+            if (request is null)
+            {
+                return Results.BadRequest(new OperationStatusResponse
+                {
+                    Success = false,
+                    Error = "Heartbeat config payload is required."
+                });
+            }
+
+            var preview = heartbeat.BuildPreview(request, runtime, ctx.RequestAborted);
+            return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapPut("/admin/heartbeat", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.heartbeat.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+            var auth = authResult.Authorization!;
+
+            var request = await JsonSerializer.DeserializeAsync(
+                ctx.Request.Body,
+                CoreJsonContext.Default.HeartbeatConfigDto,
+                ctx.RequestAborted);
+
+            if (request is null)
+            {
+                return Results.BadRequest(new OperationStatusResponse
+                {
+                    Success = false,
+                    Error = "Heartbeat config payload is required."
+                });
+            }
+
+            var before = heartbeat.LoadConfig();
+            var preview = heartbeat.BuildPreview(request, runtime, ctx.RequestAborted);
+            var hasErrors = preview.Issues.Any(static issue => string.Equals(issue.Severity, "error", StringComparison.OrdinalIgnoreCase));
+            if (hasErrors)
+            {
+                RecordOperatorAudit(ctx, operations, auth, "heartbeat_save", "heartbeat.default", "Heartbeat save rejected by validation.", success: false, before, after: request);
+                return Results.Json(preview, CoreJsonContext.Default.HeartbeatPreviewResponse, statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            var saved = heartbeat.SaveConfig(request);
+            var savedPreview = heartbeat.BuildPreview(saved, runtime, ctx.RequestAborted);
+            RecordOperatorAudit(ctx, operations, auth, "heartbeat_save", "heartbeat.default", "Saved managed heartbeat configuration.", success: true, before, after: saved);
+            return Results.Json(savedPreview, CoreJsonContext.Default.HeartbeatPreviewResponse);
+        });
+
+        app.MapGet("/admin/heartbeat/status", (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.heartbeat.status");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var status = heartbeat.BuildStatus(runtime, ctx.RequestAborted);
+            return Results.Json(status, CoreJsonContext.Default.HeartbeatStatusResponse);
         });
 
         app.MapGet("/tools/approvals", (HttpContext ctx, string? channelId, string? senderId) =>
@@ -956,6 +1037,7 @@ internal static class AdminEndpoints
             ActorRateLimitPolicy item => JsonSerializer.Serialize(item, CoreJsonContext.Default.ActorRateLimitPolicy),
             WebhookDeadLetterEntry item => JsonSerializer.Serialize(item, CoreJsonContext.Default.WebhookDeadLetterEntry),
             AdminSettingsSnapshot item => JsonSerializer.Serialize(item, CoreJsonContext.Default.AdminSettingsSnapshot),
+            HeartbeatConfigDto item => JsonSerializer.Serialize(item, CoreJsonContext.Default.HeartbeatConfigDto),
             _ => value.ToString()
         };
     }

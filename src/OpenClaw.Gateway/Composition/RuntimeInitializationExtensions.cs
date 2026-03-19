@@ -53,8 +53,10 @@ internal static class RuntimeInitializationExtensions
         var webhookDeliveryStore = app.Services.GetRequiredService<WebhookDeliveryStore>();
         var actorRateLimits = app.Services.GetRequiredService<ActorRateLimitService>();
         var sessionMetadataStore = app.Services.GetRequiredService<SessionMetadataStore>();
+        var heartbeatService = app.Services.GetRequiredService<HeartbeatService>();
         var pluginHealth = app.Services.GetRequiredService<PluginHealthService>();
         var memoryStore = app.Services.GetRequiredService<IMemoryStore>();
+        var cronJobSource = app.Services.GetRequiredService<ICronJobSource>();
         var toolSandbox = app.Services.GetService<IToolSandbox>();
         var pipeline = app.Services.GetRequiredService<MessagePipeline>();
         var wsChannel = app.Services.GetRequiredService<WebSocketChannel>();
@@ -208,7 +210,7 @@ internal static class RuntimeInitializationExtensions
             app.Services.GetRequiredService<ILogger<SkillWatcherService>>());
         skillWatcher.Start(app.Lifetime.ApplicationStopping);
 
-        var cronTask = StartCronIfEnabled(config, loggerFactory, pipeline, app.Lifetime.ApplicationStopping);
+        var cronTask = StartCronIfEnabled(loggerFactory, pipeline, cronJobSource, app.Lifetime.ApplicationStopping);
         StartNativeEventBridges(config, loggerFactory, pipeline, app.Lifetime.ApplicationStopping);
 
         var profile = app.Services.GetRequiredService<IRuntimeProfile>();
@@ -245,6 +247,7 @@ internal static class RuntimeInitializationExtensions
             ApprovalAuditStore = approvalAuditStore,
             RuntimeMetrics = runtimeMetrics,
             ProviderUsage = providerUsage,
+            Heartbeat = heartbeatService,
             SkillWatcher = skillWatcher,
             PluginReports = GetCombinedPluginReports(pluginHost, nativeDynamicPluginHost, runtimeDiagnostics),
             Operations = operations,
@@ -257,10 +260,12 @@ internal static class RuntimeInitializationExtensions
                 ? config.Security.AllowedOrigins.ToFrozenSet(StringComparer.Ordinal)
                 : null,
             DynamicProviderOwners = dynamicProviderOwners.ToArray(),
+            EstimatedSkillPromptChars = SkillPromptBuilder.EstimateCharacterCost(skills),
             CronTask = cronTask,
             TwilioSmsWebhookHandler = smsWebhookHandler,
             PluginHost = pluginHost,
-            NativeDynamicPluginHost = nativeDynamicPluginHost
+            NativeDynamicPluginHost = nativeDynamicPluginHost,
+            RegisteredToolNames = tools.Select(t => t.Name).ToFrozenSet(StringComparer.Ordinal)
         };
 
         pluginHealth.SetRuntimeReports(runtime.PluginReports, pluginHost, nativeDynamicPluginHost);
@@ -402,16 +407,13 @@ internal static class RuntimeInitializationExtensions
     }
 
     private static CronScheduler? StartCronIfEnabled(
-        GatewayConfig config,
         ILoggerFactory loggerFactory,
         MessagePipeline pipeline,
+        ICronJobSource jobSource,
         CancellationToken stoppingToken)
     {
-        if (!config.Cron.Enabled)
-            return null;
-
         var logger = loggerFactory.CreateLogger<CronScheduler>();
-        var cronTask = new CronScheduler(config, logger, pipeline.InboundWriter);
+        var cronTask = new CronScheduler(jobSource, logger, pipeline.InboundWriter);
         _ = cronTask.StartAsync(stoppingToken).ContinueWith(
             t => logger.LogError(t.Exception!.InnerException, "CronScheduler failed to start"),
             TaskContinuationOptions.OnlyOnFaulted);

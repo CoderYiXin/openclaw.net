@@ -36,6 +36,8 @@ internal static class CoreServicesExtensions
             new SessionMetadataStore(
                 config.Memory.StoragePath,
                 sp.GetRequiredService<ILogger<SessionMetadataStore>>()));
+        services.AddSingleton<HeartbeatService>();
+        services.AddSingleton<ICronJobSource, GatewayCronJobSource>();
         services.AddSingleton<ActorRateLimitService>(sp =>
             new ActorRateLimitService(
                 config.Memory.StoragePath,
