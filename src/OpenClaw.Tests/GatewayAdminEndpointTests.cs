@@ -978,19 +978,6 @@ public sealed class GatewayAdminEndpointTests
             AdminSettingsService.GetSettingsPath(config),
             NullLogger<AdminSettingsService>.Instance));
 
-        var contractStore = new ContractStore(storagePath, NullLogger<ContractStore>.Instance);
-        var runtimeEventStoreForContracts = new RuntimeEventStore(storagePath, NullLogger<RuntimeEventStore>.Instance);
-        var providerUsageForContracts = new OpenClaw.Core.Observability.ProviderUsageTracker();
-        builder.Services.AddSingleton(contractStore);
-        builder.Services.AddSingleton(runtimeEventStoreForContracts);
-        builder.Services.AddSingleton(providerUsageForContracts);
-        builder.Services.AddSingleton(new ContractGovernanceService(
-            startup,
-            contractStore,
-            runtimeEventStoreForContracts,
-            providerUsageForContracts,
-            NullLogger<ContractGovernanceService>.Instance));
-
         var app = builder.Build();
         var runtime = CreateRuntime(config, storagePath, memoryStore, sessionManager, heartbeatService);
         app.MapOpenApi("/openapi/{documentName}.json");
