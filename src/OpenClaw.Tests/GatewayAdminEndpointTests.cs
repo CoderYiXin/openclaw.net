@@ -285,6 +285,23 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task AdminSettings_Mutation_RejectsOversizedPayload()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        var oversizedFooter = new string('x', 300_000);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/settings")
+        {
+            Content = JsonContent($$"""{"usageFooter":"{{oversizedFooter}}"}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+    }
+
+    [Fact]
     public async Task ToolsApprovals_AndHistory_AreServed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
