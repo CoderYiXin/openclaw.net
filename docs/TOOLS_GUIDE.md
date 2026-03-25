@@ -308,10 +308,15 @@ Helpful knobs:
 ### Tool Approvals (Supervised Mode)
 When a tool requires approval, the gateway emits a `tool_approval_required` event to WebSocket envelope clients.
 - WebChat supports approvals via a confirmation dialog.
-- On non-loopback/public binds, approval decisions are tied to the original requester (`channelId` + `senderId`).
+- On non-loopback/public binds, HTTP approval behavior depends on `OpenClaw:Security:RequireRequesterMatchForHttpToolApproval`.
+  - `true`: approval is tied to the original requester (`channelId` + `senderId`).
+  - `false`: any authenticated admin/operator can approve the pending request by id.
 - Fallbacks:
   - Reply in chat: `/approve <approvalId> yes|no`
   - HTTP: `POST /tools/approve?approvalId=...&approved=true|false` (admin override; Bearer-protected on non-loopback binds)
+- Read-only simulator:
+  - `POST /admin/approvals/simulate`
+  - `openclaw admin approvals simulate`
 
 ### Strict Allowlists + Onboarding Helpers
 To make allowlists consistent across channels, set:
@@ -331,6 +336,7 @@ The gateway exposes:
 - `GET /doctor/text` (human-readable)
 
 These reports summarize autonomy posture, allowlists, pairing, memory backend status, cron jobs, and skills.
+They also include a security posture section covering public-bind approval mode, browser-session/proxy safety, sandbox posture, and plugin transport risk.
 
 ### Media Marker Protocol (Telegram + WebChat)
 The gateway/channels support portable attachment markers embedded in text (one per line):

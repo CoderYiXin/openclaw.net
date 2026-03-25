@@ -53,6 +53,7 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly ProviderUsageTracker? _providerUsage;
     private readonly ILlmExecutionService? _llmExecutionService;
     private readonly long _sessionTokenBudget;
+    private readonly bool _estimateTokenBudgetAdmission;
     private readonly LlmProviderConfig _config;
     private readonly MemoryRecallConfig? _recall;
     private readonly SkillsConfig? _skillsConfig;
@@ -134,6 +135,7 @@ public sealed class AgentRuntime : IAgentRuntime
             toolUsageTracker: toolUsageTracker);
         _cachedToolDeclarations = _toolExecutor.ToolDeclarations;
         _sessionTokenBudget = sessionTokenBudget;
+        _estimateTokenBudgetAdmission = gatewayConfig?.EnableEstimatedTokenAdmissionControl ?? false;
         _recall = recall;
         ApplySkills(skills ?? []);
     }
@@ -251,6 +253,12 @@ public sealed class AgentRuntime : IAgentRuntime
             }
             catch (Exception ex)
             {
+                if (IsEstimatedBudgetAdmissionError(ex))
+                {
+                    LogTurnComplete(turnCtx);
+                    return ex.Message;
+                }
+
                 _metrics?.IncrementLlmErrors();
                 _logger?.LogError(ex, "[{CorrelationId}] LLM call failed after all retries and fallbacks", turnCtx.CorrelationId);
                 LogTurnComplete(turnCtx);
@@ -609,6 +617,12 @@ public sealed class AgentRuntime : IAgentRuntime
         var result = new StreamCollectResult();
         var llmSw = Stopwatch.StartNew();
         var estimate = LlmExecutionEstimateBuilder.Create(messages, _skillPromptLength);
+        if (TryRejectEstimatedBudget(session, estimate, out var admissionMessage))
+        {
+            result.Error = admissionMessage;
+            LogTurnComplete(turnCtx);
+            return result;
+        }
 
         if (_llmExecutionService is not null)
         {
@@ -902,13 +916,17 @@ public sealed class AgentRuntime : IAgentRuntime
         using var activity = Telemetry.ActivitySource.StartActivity("Agent.CallLlm");
         activity?.SetTag("llm.messages_count", messages.Count);
 
+        var estimate = LlmExecutionEstimateBuilder.Create(messages, _skillPromptLength);
+        if (TryRejectEstimatedBudget(session, estimate, out var admissionMessage))
+            throw new InvalidOperationException(admissionMessage);
+
         if (_llmExecutionService is not null)
             return await _llmExecutionService.GetResponseAsync(
                 session,
                 messages,
                 options,
                 turnCtx,
-                LlmExecutionEstimateBuilder.Create(messages, _skillPromptLength),
+                estimate,
                 ct);
 
         var lastException = default(Exception);
@@ -1200,6 +1218,32 @@ public sealed class AgentRuntime : IAgentRuntime
         string.Equals(toolName, "file_write", StringComparison.Ordinal)
             ? "write_file"
             : toolName;
+
+    private bool TryRejectEstimatedBudget(Session session, LlmExecutionEstimate estimate, out string message)
+    {
+        message = string.Empty;
+        if (!_estimateTokenBudgetAdmission || _sessionTokenBudget <= 0)
+            return false;
+
+        var remaining = _sessionTokenBudget - (session.TotalInputTokens + session.TotalOutputTokens);
+        if (remaining <= 0 || estimate.EstimatedInputTokens < remaining)
+            return false;
+
+        message =
+            $"This session is close to its token budget. Estimated prompt tokens ({estimate.EstimatedInputTokens:N0}) " +
+            $"meet or exceed the remaining budget ({remaining:N0}). Please start a new conversation.";
+        _metrics?.IncrementEstimatedTokenAdmissionRejects();
+        _logger?.LogInformation(
+            "Estimated token admission control rejected session {SessionId} ({EstimatedInputTokens}/{RemainingBudget})",
+            session.Id,
+            estimate.EstimatedInputTokens,
+            remaining);
+        return true;
+    }
+
+    private static bool IsEstimatedBudgetAdmissionError(Exception ex)
+        => ex is InvalidOperationException &&
+           ex.Message.Contains("close to its token budget", StringComparison.OrdinalIgnoreCase);
 
     private void LogTurnComplete(TurnContext turnCtx)
     {

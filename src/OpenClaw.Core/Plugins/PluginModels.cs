@@ -630,6 +630,9 @@ public sealed class BridgeTransportRuntimeConfig
 {
     public string Mode { get; init; } = "stdio";
     public string? SocketPath { get; init; }
+    public string? SocketDirectory { get; init; }
+    public string? SocketAuthToken { get; init; }
+    public string SecurityMode { get; init; } = "legacy";
 }
 
 /// <summary>

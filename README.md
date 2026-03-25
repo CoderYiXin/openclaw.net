@@ -225,6 +225,12 @@ Environment variables for the CLI:
 - `OPENCLAW_BASE_URL` (default `http://127.0.0.1:18789`)
 - `OPENCLAW_AUTH_TOKEN` (only required when the gateway enforces auth)
 
+Admin operator commands:
+
+- `dotnet run --project src/OpenClaw.Cli -c Release -- admin posture`
+- `dotnet run --project src/OpenClaw.Cli -c Release -- admin approvals simulate --tool shell --sender user1 --approval-tool shell`
+- `dotnet run --project src/OpenClaw.Cli -c Release -- admin incident export`
+
 For advanced provider setup, webhook channels, and deployment hardening, see the [User Guide](docs/USER_GUIDE.md) and [Security Guide](SECURITY.md).
 
 ## Usage
@@ -238,6 +244,7 @@ Common local usage paths:
 - Typed integration API: `curl http://127.0.0.1:18789/api/integration/status`
 - MCP JSON-RPC: `POST http://127.0.0.1:18789/mcp`
 - Doctor/report mode: `dotnet run --project src/OpenClaw.Gateway -c Release -- --doctor`
+- Admin posture: `dotnet run --project src/OpenClaw.Cli -c Release -- admin posture`
 
 Common runtime choices:
 
@@ -251,6 +258,7 @@ The most practical local setup is:
 - CLI for scripting and automation
 - `OpenClaw.Client` when you want typed .NET access to the integration API or MCP surface
 - `--doctor` before exposing a public bind or enabling plugins
+- `openclaw admin posture` after the deployed config is live behind its real proxy
 
 ## Typed Integration API, MCP, and shared SDK
 
