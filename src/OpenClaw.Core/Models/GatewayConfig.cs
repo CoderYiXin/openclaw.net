@@ -240,12 +240,13 @@ public sealed class ChannelsConfig
     public SmsChannelConfig Sms { get; set; } = new();
     public TelegramChannelConfig Telegram { get; set; } = new();
     public WhatsAppChannelConfig WhatsApp { get; set; } = new();
+    public TeamsChannelConfig Teams { get; set; } = new();
 }
 
 public sealed class WhatsAppChannelConfig
 {
     public bool Enabled { get; set; } = false;
-    public string Type { get; set; } = "official"; // "official" or "bridge"
+    public string Type { get; set; } = "official"; // "official", "bridge", or "first_party_worker"
     public string DmPolicy { get; set; } = "pairing"; // open, pairing, closed
     public string WebhookPath { get; set; } = "/whatsapp/inbound";
     public string? WebhookPublicBaseUrl { get; set; }
@@ -276,6 +277,9 @@ public sealed class WhatsAppChannelConfig
     public string BridgeTokenRef { get; set; } = "env:WHATSAPP_BRIDGE_TOKEN";
     public bool BridgeSuppressSendExceptions { get; set; } = false;
 
+    // First-party worker settings
+    public WhatsAppFirstPartyWorkerConfig FirstPartyWorker { get; set; } = new();
+
     public int MaxInboundChars { get; set; } = 4096;
 
     /// <summary>Max inbound webhook request size in bytes.</summary>
@@ -283,6 +287,98 @@ public sealed class WhatsAppChannelConfig
 
     /// <summary>Optional allowlist for inbound senders (wa_id / from). Interpreted using Channels.AllowlistSemantics.</summary>
     public string[] AllowedFromIds { get; set; } = [];
+}
+
+public sealed class WhatsAppFirstPartyWorkerConfig
+{
+    /// <summary>
+    /// Worker transport engine. "baileys_csharp" is the intended production engine;
+    /// "simulated" is available for tests and dry-run validation.
+    /// </summary>
+    public string Driver { get; set; } = "baileys_csharp";
+
+    /// <summary>
+    /// Optional explicit path to the worker executable or DLL. When empty, the gateway tries
+    /// colocated deployment paths before failing.
+    /// </summary>
+    public string? ExecutablePath { get; set; }
+
+    /// <summary>Optional explicit working directory for the worker child process.</summary>
+    public string? WorkingDirectory { get; set; }
+
+    /// <summary>Root path used by the worker for session, media, and cache files.</summary>
+    public string StoragePath { get; set; } = "./memory/whatsapp-worker";
+
+    public string? MediaCachePath { get; set; }
+    public bool HistorySync { get; set; } = true;
+    public string? Proxy { get; set; }
+    public List<WhatsAppWorkerAccountConfig> Accounts { get; set; } = [];
+}
+
+public sealed class WhatsAppWorkerAccountConfig
+{
+    public string AccountId { get; set; } = "default";
+    public string SessionPath { get; set; } = "./session/default";
+    public string DeviceName { get; set; } = "OpenClaw";
+    public string PairingMode { get; set; } = "qr"; // "qr" or "pairing_code"
+    public string? PhoneNumber { get; set; }
+    public bool SendReadReceipts { get; set; } = true;
+    public bool AckReaction { get; set; } = false;
+    public string? MediaCachePath { get; set; }
+    public bool HistorySync { get; set; } = true;
+    public string? Proxy { get; set; }
+}
+
+public sealed class TeamsChannelConfig
+{
+    public bool Enabled { get; set; } = false;
+    public string DmPolicy { get; set; } = "pairing"; // open, pairing, closed
+    public string GroupPolicy { get; set; } = "allowlist"; // open, allowlist, disabled
+
+    /// <summary>Azure Bot App ID.</summary>
+    public string? AppId { get; set; }
+    public string AppIdRef { get; set; } = "env:TEAMS_APP_ID";
+
+    /// <summary>Azure Bot Client Secret.</summary>
+    public string? AppPassword { get; set; }
+    public string AppPasswordRef { get; set; } = "env:TEAMS_APP_PASSWORD";
+
+    /// <summary>Azure AD Tenant ID (single-tenant).</summary>
+    public string? TenantId { get; set; }
+    public string TenantIdRef { get; set; } = "env:TEAMS_TENANT_ID";
+
+    /// <summary>Webhook path for inbound Bot Framework activities.</summary>
+    public string WebhookPath { get; set; } = "/api/messages";
+
+    /// <summary>Validate the Azure Bot Framework JWT token on inbound requests.</summary>
+    public bool ValidateToken { get; set; } = true;
+
+    /// <summary>Require @mention of the bot in team channels and group chats.</summary>
+    public bool RequireMention { get; set; } = true;
+
+    /// <summary>Reply style: "thread" posts as reply, "top-level" posts new message.</summary>
+    public string ReplyStyle { get; set; } = "thread";
+
+    /// <summary>Maximum text length per outbound message before chunking.</summary>
+    public int TextChunkLimit { get; set; } = 4000;
+
+    /// <summary>Chunking mode: "length" splits at character limit, "newline" splits at newline boundaries.</summary>
+    public string ChunkMode { get; set; } = "length";
+
+    public int MaxInboundChars { get; set; } = 4096;
+    public int MaxRequestBytes { get; set; } = 256 * 1024;
+
+    /// <summary>Allowed Azure AD tenant IDs (empty = all tenants).</summary>
+    public string[] AllowedTenantIds { get; set; } = [];
+
+    /// <summary>Allowed sender IDs (AAD object IDs or UPNs).</summary>
+    public string[] AllowedFromIds { get; set; } = [];
+
+    /// <summary>Allowed team IDs for group policy.</summary>
+    public string[] AllowedTeamIds { get; set; } = [];
+
+    /// <summary>Allowed conversation IDs for group policy.</summary>
+    public string[] AllowedConversationIds { get; set; } = [];
 }
 
 public sealed class SmsChannelConfig

@@ -62,6 +62,7 @@ public sealed class MafGatewayIntegrationTests
         var config = services.GetRequiredService<GatewayConfig>();
         var memoryStore = new FileMemoryStore(storagePath, 8);
         var sessionManager = new SessionManager(memoryStore, config, NullLogger.Instance);
+        var heartbeatService = new HeartbeatService(config, memoryStore, sessionManager, NullLogger<HeartbeatService>.Instance);
         var pipeline = new MessagePipeline();
         var middleware = new MiddlewarePipeline([]);
         var wsChannel = new OpenClaw.Channels.WebSocketChannel(config.WebSocket);
@@ -131,6 +132,7 @@ public sealed class MafGatewayIntegrationTests
             },
             config,
             cronScheduler: null,
+            heartbeatService,
             toolApprovalService,
             approvalAuditStore,
             pairingManager,

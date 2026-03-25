@@ -9,6 +9,8 @@ using OpenClaw.Agent;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Observability;
+using OpenClaw.Core.Skills;
 using OpenClaw.MicrosoftAgentFrameworkAdapter;
 using Xunit;
 

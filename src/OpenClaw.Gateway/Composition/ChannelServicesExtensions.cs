@@ -12,7 +12,9 @@ internal static class ChannelServicesExtensions
         if (config.Channels.WhatsApp.Enabled)
         {
             services.AddSingleton(config.Channels.WhatsApp);
-            services.AddSingleton<WhatsAppWebhookHandler>();
+            if (!string.Equals(config.Channels.WhatsApp.Type, "first_party_worker", StringComparison.OrdinalIgnoreCase))
+                services.AddSingleton<WhatsAppWebhookHandler>();
+
             if (config.Channels.WhatsApp.Type == "bridge")
             {
                 services.AddSingleton<WhatsAppBridgeChannel>(sp =>
@@ -35,6 +37,20 @@ internal static class ChannelServicesExtensions
         {
             services.AddSingleton(config.Channels.Telegram);
             services.AddSingleton<TelegramChannel>();
+        }
+
+        if (config.Channels.Teams.Enabled)
+        {
+            services.AddSingleton(config.Channels.Teams);
+            services.AddSingleton<ITeamsTokenValidator>(_ =>
+                new BotFrameworkTokenValidator(
+                    OpenClaw.Core.Security.SecretResolver.Resolve(config.Channels.Teams.AppIdRef) ?? config.Channels.Teams.AppId ?? ""));
+            services.AddSingleton<TeamsWebhookHandler>();
+            services.AddSingleton<TeamsChannel>(sp =>
+                new TeamsChannel(
+                    config.Channels.Teams,
+                    OpenClaw.Core.Http.HttpClientFactory.Create(),
+                    sp.GetRequiredService<ILogger<TeamsChannel>>()));
         }
 
         return services;
