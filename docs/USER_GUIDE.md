@@ -474,6 +474,53 @@ Safety model:
 - Keep writes gated via tool approval by adding `home_assistant_write` and `mqtt_publish` to `OpenClaw:Tooling:ApprovalRequiredTools`.
 - Use allow/deny policies (`Policy.Allow*Globs` / `Policy.Deny*Globs`) to restrict entities, services, and MQTT topics.
 
+## Shared Scratchpads (Notion)
+
+OpenClaw.NET supports an optional native Notion integration for shared scratchpads and note databases:
+- `notion`: read/search/list operations
+- `notion_write`: append/create/update operations
+
+Recommended use:
+- shared project scratchpads
+- operator-visible runbooks
+- handoff notes across sessions or team members
+
+Design constraints:
+- Notion is not used for session memory, branch storage, or core retention.
+- Access is bounded by `AllowedPageIds` / `AllowedDatabaseIds` plus any configured defaults.
+- `DefaultPageId` is used for scratchpad-style reads/appends.
+- `DefaultDatabaseId` is used for list/search/create workflows.
+
+Recommended safety posture:
+- Keep `RequireApprovalForWrites=true` unless you intentionally want autonomous writes.
+- Set `ReadOnly=true` if the agent should only search/read Notion.
+- Share only the specific pages/databases the integration needs. The token may have broader workspace reach than the local allowlist, so the allowlist is part of the tool boundary.
+
+Minimal config example:
+
+```json
+"OpenClaw": {
+  "Plugins": {
+    "Native": {
+      "Notion": {
+        "Enabled": true,
+        "ApiKeyRef": "env:NOTION_API_KEY",
+        "DefaultPageId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+        "DefaultDatabaseId": "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy",
+        "AllowedPageIds": [
+          "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        ],
+        "AllowedDatabaseIds": [
+          "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+        ],
+        "ReadOnly": false,
+        "RequireApprovalForWrites": true
+      }
+    }
+  }
+}
+```
+
 ## Plugin Bridge (Ecosystem Compatibility)
 
 OpenClaw.NET is designed to be compatible with the original [OpenClaw](https://github.com/openclaw/openclaw) TypeScript/JavaScript plugin ecosystem. This allows you to leverage hundreds of community plugins without rewriting them.

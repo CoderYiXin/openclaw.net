@@ -214,6 +214,7 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(OpenClaw.Core.Plugins.MqttEventsConfig))]
 [JsonSerializable(typeof(OpenClaw.Core.Plugins.MqttSubscriptionConfig))]
 [JsonSerializable(typeof(List<OpenClaw.Core.Plugins.MqttSubscriptionConfig>))]
+[JsonSerializable(typeof(OpenClaw.Core.Plugins.NotionConfig))]
 [JsonSerializable(typeof(OpenClaw.Core.Pipeline.ToolApprovalRequest))]
 [JsonSerializable(typeof(OpenClaw.Core.Pipeline.ToolApprovalDecisionOutcome))]
 [JsonSerializable(typeof(OpenClaw.Core.Abstractions.MemoryNoteHit))]

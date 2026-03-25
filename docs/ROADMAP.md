@@ -10,6 +10,7 @@
 - Expanded observability for approval decisions, session evictions/cap rejects, browser cancellation resets, plugin bridge auth/restart behavior, and sandbox lease lifecycle.
 - Optional estimated token admission control.
 - Startup/runtime composition split into explicit service, channel, plugin, and runtime assembly stages.
+- Optional native Notion scratchpad integration with scoped read/write tools (`notion`, `notion_write`), allowlists, and write approvals by default.
 
 ## Security Hardening (Likely Breaking)
 

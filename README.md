@@ -38,6 +38,7 @@ If this repo is useful to you, star it.
 - Built-in clients: browser UI at `/chat`, CLI, and Avalonia desktop companion
 - Reusable library packages in-repo: `OpenClaw.Client`, `OpenClaw.Core`, `OpenClaw.PluginKit`, and `OpenClaw.SemanticKernelAdapter`
 - Optional integrations for Telegram, Twilio SMS, WhatsApp, Semantic Kernel, the JS/TS plugin bridge, and the MAF adapter
+- Optional native integrations for Home Assistant, MQTT, and Notion scratchpads/notes
 
 ## Ecosystem Compatibility
 
@@ -232,6 +233,23 @@ Admin operator commands:
 - `dotnet run --project src/OpenClaw.Cli -c Release -- admin incident export`
 
 For advanced provider setup, webhook channels, and deployment hardening, see the [User Guide](docs/USER_GUIDE.md) and [Security Guide](SECURITY.md).
+
+## Optional Notion Scratchpad
+
+OpenClaw.NET includes an optional native Notion integration for shared scratchpads and notes. It is intentionally not used as the core session memory backend.
+
+- Read tool: `notion`
+- Write tool: `notion_write`
+- Implementation: raw Notion REST calls via `HttpClient`, no Notion SDK dependency
+- Recommended use: team scratchpads, deployment notes, operator-visible handoff pages
+
+Recommended safety posture:
+
+- scope access with `AllowedPageIds` / `AllowedDatabaseIds`
+- keep `RequireApprovalForWrites=true` unless you explicitly want autonomous Notion writes
+- use `ReadOnly=true` when you only want retrieval/search
+
+See [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) for config and action details.
 
 ## Usage
 

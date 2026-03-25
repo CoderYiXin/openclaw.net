@@ -490,22 +490,34 @@ internal static class RuntimeInitializationExtensions
         return hooks;
     }
 
-    private static (bool RequireApproval, IReadOnlyList<string> RequiredTools) ResolveApprovalMode(GatewayConfig config)
+    internal static (bool RequireApproval, IReadOnlyList<string> RequiredTools) ResolveApprovalMode(GatewayConfig config)
     {
         var autonomyMode = (config.Tooling.AutonomyMode ?? "full").Trim().ToLowerInvariant();
-        var effectiveRequireToolApproval = config.Tooling.RequireToolApproval || autonomyMode == "supervised";
+        var requireNotionWriteApproval = config.Plugins.Native.Notion.Enabled &&
+            !config.Plugins.Native.Notion.ReadOnly &&
+            config.Plugins.Native.Notion.RequireApprovalForWrites;
+
+        var effectiveRequireToolApproval = config.Tooling.RequireToolApproval || autonomyMode == "supervised" || requireNotionWriteApproval;
         var effectiveApprovalRequiredTools = config.Tooling.ApprovalRequiredTools;
 
         if (autonomyMode == "supervised")
         {
             var defaults = new[]
             {
-                "shell", "write_file", "code_exec", "git", "home_assistant_write", "mqtt_publish",
+                "shell", "write_file", "code_exec", "git", "home_assistant_write", "mqtt_publish", "notion_write",
                 "database", "email", "inbox_zero", "calendar", "delegate_agent"
             };
 
             effectiveApprovalRequiredTools = effectiveApprovalRequiredTools
                 .Concat(defaults)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+
+        if (requireNotionWriteApproval)
+        {
+            effectiveApprovalRequiredTools = effectiveApprovalRequiredTools
+                .Concat(["notion_write"])
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }
