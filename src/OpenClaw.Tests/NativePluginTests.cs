@@ -148,6 +148,26 @@ public class NativePluginRegistryTests
         Assert.Single(registry.Tools);
         Assert.Same(second, registry.Tools[0]);
     }
+
+    [Fact]
+    public void RegisterOwnedResource_Null_ThrowsArgumentNullException()
+    {
+        using var registry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance);
+        Assert.Throws<ArgumentNullException>(() => registry.RegisterOwnedResource(null!));
+    }
+
+    [Fact]
+    public void RegisterOwnedResource_SameInstanceTwice_DisposesOnce()
+    {
+        var registry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance);
+        var resource = new DisposableOwnedResource();
+
+        registry.RegisterOwnedResource(resource);
+        registry.RegisterOwnedResource(resource);
+        registry.Dispose();
+
+        Assert.Equal(1, resource.DisposeCalls);
+    }
 }
 
 public class PluginPreferenceTests
@@ -828,6 +848,13 @@ file sealed class ThrowingDisposableFakeTool(string name) : ITool, IDisposable
         DisposeCalls++;
         throw new InvalidOperationException("dispose failed");
     }
+}
+
+file sealed class DisposableOwnedResource : IDisposable
+{
+    public int DisposeCalls { get; private set; }
+    public void Dispose()
+        => DisposeCalls++;
 }
 
 /// <summary>Minimal ILogger for tests.</summary>

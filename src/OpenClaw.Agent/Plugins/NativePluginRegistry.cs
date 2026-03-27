@@ -100,7 +100,12 @@ public sealed class NativePluginRegistry : IDisposable
         => RegisterTool(tool, pluginId, detail);
 
     public void RegisterOwnedResource(IDisposable resource)
-        => _ownedResources.Add(resource);
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        if (_ownedResources.Any(existing => ReferenceEquals(existing, resource)))
+            return;
+        _ownedResources.Add(resource);
+    }
 
     /// <summary>
     /// All enabled native plugin tools.
