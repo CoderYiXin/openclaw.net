@@ -166,6 +166,36 @@ public static class ConfigValidator
         if (runtimeOrchestrator is not (RuntimeOrchestrator.Native or RuntimeOrchestrator.Maf))
             errors.Add("Runtime.Orchestrator must be 'native' or 'maf'.");
 
+        // MCP plugin servers
+        if (config.Plugins.Mcp.Enabled)
+        {
+            foreach (var (serverId, server) in config.Plugins.Mcp.Servers)
+            {
+                var transport = NormalizeMcpTransport(server);
+                if (transport is not ("stdio" or "http"))
+                {
+                    errors.Add($"Plugins.Mcp.Servers.{serverId}.Transport must be 'stdio' or 'http'.");
+                    continue;
+                }
+
+                if (server.StartupTimeoutSeconds < 1)
+                    errors.Add($"Plugins.Mcp.Servers.{serverId}.StartupTimeoutSeconds must be >= 1 (got {server.StartupTimeoutSeconds}).");
+                if (server.RequestTimeoutSeconds < 1)
+                    errors.Add($"Plugins.Mcp.Servers.{serverId}.RequestTimeoutSeconds must be >= 1 (got {server.RequestTimeoutSeconds}).");
+
+                if (transport == "stdio")
+                {
+                    if (string.IsNullOrWhiteSpace(server.Command))
+                        errors.Add($"Plugins.Mcp.Servers.{serverId}.Command must be set when Transport='stdio'.");
+                }
+                else if (!Uri.TryCreate(server.Url, UriKind.Absolute, out var url) ||
+                         (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+                {
+                    errors.Add($"Plugins.Mcp.Servers.{serverId}.Url must be an absolute http(s) URL when Transport='http'.");
+                }
+            }
+        }
+
         // Channels
         if (config.Channels.Sms.Twilio.MaxInboundChars < 1)
             errors.Add($"Channels.Sms.Twilio.MaxInboundChars must be >= 1 (got {config.Channels.Sms.Twilio.MaxInboundChars}).");
@@ -375,5 +405,20 @@ public static class ConfigValidator
         {
             errors.Add($"{field} must be 'open', 'pairing', or 'closed'.");
         }
+    }
+
+    private static string NormalizeMcpTransport(OpenClaw.Core.Plugins.McpServerConfig config)
+    {
+        var transport = config.Transport?.Trim();
+        if (string.IsNullOrWhiteSpace(transport))
+            return string.IsNullOrWhiteSpace(config.Url) ? "stdio" : "http";
+
+        if (transport.Equals("streamable-http", StringComparison.OrdinalIgnoreCase) ||
+            transport.Equals("streamable_http", StringComparison.OrdinalIgnoreCase))
+        {
+            return "http";
+        }
+
+        return transport.ToLowerInvariant();
     }
 }

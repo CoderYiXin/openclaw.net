@@ -220,6 +220,58 @@ public sealed class ConfigValidatorTests
     }
 
     [Fact]
+    public void Validate_McpHttpServerWithoutUrl_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Plugins = new PluginsConfig
+            {
+                Mcp = new McpPluginsConfig
+                {
+                    Enabled = true,
+                    Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                    {
+                        ["demo"] = new()
+                        {
+                            Transport = "http",
+                            Url = ""
+                        }
+                    }
+                }
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("Plugins.Mcp.Servers.demo.Url", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_McpStdioServerWithoutCommand_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Plugins = new PluginsConfig
+            {
+                Mcp = new McpPluginsConfig
+                {
+                    Enabled = true,
+                    Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                    {
+                        ["demo"] = new()
+                        {
+                            Transport = "stdio",
+                            Command = ""
+                        }
+                    }
+                }
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("Plugins.Mcp.Servers.demo.Command", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Validate_OpenSandboxProviderWithoutEndpoint_ReturnsError()
     {
         var config = new GatewayConfig

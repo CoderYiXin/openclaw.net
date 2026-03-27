@@ -14,6 +14,7 @@ public sealed class NativePluginRegistry : IDisposable
 {
     private readonly List<ITool> _tools = [];
     private readonly Dictionary<string, string> _nativeToolIds = new(StringComparer.Ordinal);
+    private readonly List<IDisposable> _ownedResources = [];
     private readonly ILogger _logger;
 
     public NativePluginRegistry(NativePluginsConfig config, ILogger logger, ToolingConfig? toolingConfig = null)
@@ -76,6 +77,12 @@ public sealed class NativePluginRegistry : IDisposable
         _logger.LogInformation("Native plugin enabled: {PluginId}{Detail}",
             pluginId, detail is not null ? $" ({detail})" : "");
     }
+
+    public void RegisterExternalTool(ITool tool, string pluginId, string? detail = null)
+        => RegisterTool(tool, pluginId, detail);
+
+    public void RegisterOwnedResource(IDisposable resource)
+        => _ownedResources.Add(resource);
 
     /// <summary>
     /// All enabled native plugin tools.
@@ -202,5 +209,8 @@ public sealed class NativePluginRegistry : IDisposable
             if (tool is IDisposable d)
                 d.Dispose();
         }
+
+        foreach (var resource in _ownedResources)
+            resource.Dispose();
     }
 }

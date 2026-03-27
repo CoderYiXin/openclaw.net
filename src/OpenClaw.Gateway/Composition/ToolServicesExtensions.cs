@@ -12,6 +12,10 @@ internal static class ToolServicesExtensions
                 startup.Config.Plugins.Native,
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<NativePluginRegistry>(),
                 startup.Config.Tooling));
+        services.AddSingleton(sp =>
+            new McpServerToolRegistry(
+                startup.Config.Plugins.Mcp,
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<McpServerToolRegistry>()));
 
         return services;
     }

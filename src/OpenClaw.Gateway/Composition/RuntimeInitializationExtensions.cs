@@ -62,6 +62,7 @@ internal static class RuntimeInitializationExtensions
         var pipeline = app.Services.GetRequiredService<MessagePipeline>();
         var wsChannel = app.Services.GetRequiredService<WebSocketChannel>();
         var nativeRegistry = app.Services.GetRequiredService<NativePluginRegistry>();
+        var mcpRegistry = app.Services.GetRequiredService<McpServerToolRegistry>();
         var runtimeDiagnostics = new Dictionary<string, List<PluginCompatibilityDiagnostic>>(StringComparer.Ordinal);
         var dynamicProviderOwners = new HashSet<string>(StringComparer.Ordinal);
         var blockedPluginIds = pluginHealth.GetBlockedPluginIds();
@@ -119,6 +120,7 @@ internal static class RuntimeInitializationExtensions
             loggerFactory.CreateLogger<CronChannel>());
 
         var builtInTools = CreateBuiltInTools(config, memoryStore, sessionManager, pipeline, startup.WorkspacePath);
+        await mcpRegistry.RegisterToolsAsync(nativeRegistry, app.Lifetime.ApplicationStopping);
         LlmClientFactory.ResetDynamicProviders();
         try
         {

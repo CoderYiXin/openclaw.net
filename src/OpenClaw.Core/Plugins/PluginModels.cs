@@ -106,8 +106,33 @@ public sealed class PluginsConfig
     /// <summary>Configuration for native plugin replicas.</summary>
     public NativePluginsConfig Native { get; set; } = new();
 
+    /// <summary>Configuration for MCP servers exposed as native tools.</summary>
+    public McpPluginsConfig Mcp { get; set; } = new();
+
     /// <summary>Configuration for in-process dynamic .NET plugins. JIT mode only.</summary>
     public NativeDynamicPluginsConfig DynamicNative { get; set; } = new();
+}
+
+public sealed class McpPluginsConfig
+{
+    public bool Enabled { get; set; } = false;
+    public Dictionary<string, McpServerConfig> Servers { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class McpServerConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string? Name { get; set; }
+    public string? Transport { get; set; }
+    public string? Command { get; set; }
+    public string[] Arguments { get; set; } = [];
+    public string? WorkingDirectory { get; set; }
+    public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
+    public string? Url { get; set; }
+    public Dictionary<string, string> Headers { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public string? ToolNamePrefix { get; set; }
+    public int StartupTimeoutSeconds { get; set; } = 15;
+    public int RequestTimeoutSeconds { get; set; } = 60;
 }
 
 /// <summary>
