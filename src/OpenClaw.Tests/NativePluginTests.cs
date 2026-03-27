@@ -116,6 +116,22 @@ public class NativePluginRegistryTests
         var registry = new NativePluginRegistry(config, NullLogger.Instance);
         registry.Dispose(); // should not throw
     }
+
+    [Fact]
+    public void RegisterExternalTool_NameCollision_DisposesDisplacedDisposableTool()
+    {
+        using var registry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance);
+        var first = new DisposableFakeTool("dup_tool");
+        var second = new DisposableFakeTool("dup_tool");
+
+        registry.RegisterExternalTool(first, "mcp:first");
+        registry.RegisterExternalTool(second, "mcp:second");
+
+        Assert.Equal(1, first.DisposeCalls);
+        Assert.Equal(0, second.DisposeCalls);
+        Assert.Single(registry.Tools);
+        Assert.Same(second, registry.Tools[0]);
+    }
 }
 
 public class PluginPreferenceTests
@@ -769,6 +785,18 @@ file sealed class FakeTool(string name, string description = "fake") : ITool
     public string ParameterSchema => "{}";
     public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
         => ValueTask.FromResult("ok");
+}
+
+file sealed class DisposableFakeTool(string name) : ITool, IDisposable
+{
+    public int DisposeCalls { get; private set; }
+    public string Name => name;
+    public string Description => "disposable-fake";
+    public string ParameterSchema => "{}";
+    public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+        => ValueTask.FromResult("ok");
+    public void Dispose()
+        => DisposeCalls++;
 }
 
 /// <summary>Minimal ILogger for tests.</summary>

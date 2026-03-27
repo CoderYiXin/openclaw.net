@@ -69,7 +69,13 @@ public sealed class NativePluginRegistry : IDisposable
         if (_nativeToolIds.ContainsKey(tool.Name))
         {
             _logger.LogWarning("Duplicate native tool name '{ToolName}' from plugin '{PluginId}' — overwriting previous registration", tool.Name, pluginId);
+            var displacedTools = _tools.Where(t => t.Name == tool.Name).ToArray();
             _tools.RemoveAll(t => t.Name == tool.Name);
+            foreach (var displaced in displacedTools)
+            {
+                if (!ReferenceEquals(displaced, tool) && displaced is IDisposable disposable)
+                    disposable.Dispose();
+            }
         }
 
         _tools.Add(tool);
