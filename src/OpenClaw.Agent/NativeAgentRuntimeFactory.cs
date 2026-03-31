@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using OpenClaw.Agent.Tools;
 
 namespace OpenClaw.Agent;
@@ -35,9 +36,13 @@ public sealed class NativeAgentRuntimeFactory : IAgentRuntimeFactory
             hooks: context.Hooks,
             sessionTokenBudget: context.Config.SessionTokenBudget,
             recall: context.Config.Memory.Recall,
+            profileStore: context.Services.GetService(typeof(OpenClaw.Core.Abstractions.IUserProfileStore)) as OpenClaw.Core.Abstractions.IUserProfileStore,
+            profilesConfig: context.Config.Profiles,
             toolSandbox: context.ToolSandbox,
             gatewayConfig: context.Config,
-            toolUsageTracker: toolUsageTracker);
+            toolUsageTracker: toolUsageTracker,
+            executionRouter: context.Services.GetService(typeof(Execution.ToolExecutionRouter)) as Execution.ToolExecutionRouter,
+            toolPresetResolver: context.Services.GetService(typeof(OpenClaw.Core.Abstractions.IToolPresetResolver)) as OpenClaw.Core.Abstractions.IToolPresetResolver);
 
     public IAgentRuntime Create(AgentRuntimeFactoryContext context)
     {

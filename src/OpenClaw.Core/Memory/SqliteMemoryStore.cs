@@ -8,7 +8,7 @@ using OpenClaw.Core.Models;
 
 namespace OpenClaw.Core.Memory;
 
-public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore, IDisposable
+public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore, IDisposable
 {
     private readonly string _dbPath;
     private readonly bool _enableFtsRequested;
@@ -92,6 +92,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = """
                     CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(key, content);
+                    CREATE VIRTUAL TABLE IF NOT EXISTS session_turns_fts USING fts5(session_id, channel_id, sender_id, role, content, timestamp UNINDEXED);
 
                     CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
                       INSERT INTO notes_fts(key, content) VALUES (new.key, new.content);
@@ -116,6 +117,8 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
                     WHERE key NOT IN (SELECT key FROM notes_fts);
                     """;
                 backfill.ExecuteNonQuery();
+
+                BackfillSessionSearchIndex(conn);
 
                 _ftsEnabled = true;
             }
@@ -190,6 +193,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
 
         await cmd.ExecuteNonQueryAsync(ct);
+        await SyncSessionSearchIndexAsync(conn, session, ct);
     }
 
     public async ValueTask<string?> LoadNoteAsync(string key, CancellationToken ct)
@@ -1032,5 +1036,175 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
             HasMore = total > skip + pageSize,
             Items = items
         };
+    }
+
+    public async ValueTask<SessionSearchResult> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query.Text))
+            return new SessionSearchResult { Query = query, Items = [] };
+
+        if (_ftsEnabled)
+        {
+            await using var conn = new SqliteConnection(ConnectionString);
+            await conn.OpenAsync(ct);
+            await using var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT session_id, channel_id, sender_id, role, timestamp, snippet(session_turns_fts, 4, '<<', '>>', '...', 16), bm25(session_turns_fts) AS rank
+                FROM session_turns_fts
+                WHERE session_turns_fts MATCH $q
+                ORDER BY rank ASC
+                LIMIT $limit;
+                """;
+            cmd.Parameters.AddWithValue("$q", query.Text);
+            cmd.Parameters.AddWithValue("$limit", Math.Clamp(query.Limit, 1, 200));
+            var hits = new List<SessionSearchHit>();
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+            {
+                hits.Add(new SessionSearchHit
+                {
+                    SessionId = reader.GetString(0),
+                    ChannelId = reader.GetString(1),
+                    SenderId = reader.GetString(2),
+                    Role = reader.GetString(3),
+                    Timestamp = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(4)),
+                    Snippet = reader.GetString(5),
+                    Score = (float)(-reader.GetDouble(6))
+                });
+            }
+
+            return new SessionSearchResult
+            {
+                Query = query,
+                Items = hits
+            };
+        }
+
+        var fallback = await ListSessionsAsync(1, 200, new SessionListQuery
+        {
+            ChannelId = query.ChannelId,
+            SenderId = query.SenderId,
+            FromUtc = query.FromUtc,
+            ToUtc = query.ToUtc
+        }, ct);
+
+        var itemsFallback = new List<SessionSearchHit>();
+        foreach (var summary in fallback.Items)
+        {
+            var session = await GetSessionAsync(summary.Id, ct);
+            if (session is null)
+                continue;
+
+            foreach (var turn in session.History)
+            {
+                if (string.IsNullOrWhiteSpace(turn.Content))
+                    continue;
+
+                var index = turn.Content.IndexOf(query.Text, StringComparison.OrdinalIgnoreCase);
+                if (index < 0)
+                    continue;
+
+                itemsFallback.Add(new SessionSearchHit
+                {
+                    SessionId = session.Id,
+                    ChannelId = session.ChannelId,
+                    SenderId = session.SenderId,
+                    Role = turn.Role,
+                    Timestamp = turn.Timestamp,
+                    Snippet = BuildSnippet(turn.Content, index, query.SnippetLength),
+                    Score = 1f + Math.Max(0, 100 - index) / 100f
+                });
+            }
+        }
+
+        return new SessionSearchResult
+        {
+            Query = query,
+            Items = itemsFallback
+                .OrderByDescending(static item => item.Score)
+                .Take(Math.Clamp(query.Limit, 1, 200))
+                .ToArray()
+        };
+    }
+
+    private static string BuildSnippet(string content, int index, int snippetLength)
+    {
+        snippetLength = Math.Clamp(snippetLength, 40, 400);
+        var start = Math.Max(0, index - (snippetLength / 3));
+        var length = Math.Min(snippetLength, content.Length - start);
+        var snippet = content.Substring(start, length).Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (start > 0)
+            snippet = $"...{snippet}";
+        if (start + length < content.Length)
+            snippet = $"{snippet}...";
+        return snippet;
+    }
+
+    private static void BackfillSessionSearchIndex(SqliteConnection conn)
+    {
+        using var select = conn.CreateCommand();
+        select.CommandText = "SELECT json FROM sessions;";
+        using var reader = select.ExecuteReader();
+        while (reader.Read())
+        {
+            var session = JsonSerializer.Deserialize(reader.GetString(0), CoreJsonContext.Default.Session);
+            if (session is not null)
+                SyncSessionSearchIndex(conn, session);
+        }
+    }
+
+    private async Task SyncSessionSearchIndexAsync(SqliteConnection conn, Session session, CancellationToken ct)
+    {
+        if (_ftsEnabled)
+            SyncSessionSearchIndex(conn, session);
+
+        await Task.CompletedTask;
+    }
+
+    private static void SyncSessionSearchIndex(SqliteConnection conn, Session session)
+    {
+        using var tx = conn.BeginTransaction();
+        using (var delete = conn.CreateCommand())
+        {
+            delete.Transaction = tx;
+            delete.CommandText = "DELETE FROM session_turns_fts WHERE session_id = $id;";
+            delete.Parameters.AddWithValue("$id", session.Id);
+            delete.ExecuteNonQuery();
+        }
+
+        foreach (var turn in session.History)
+        {
+            InsertSessionTurn(conn, tx, session, turn.Role, turn.Content, turn.Timestamp);
+            if (turn.ToolCalls is null)
+                continue;
+
+            foreach (var toolCall in turn.ToolCalls)
+            {
+                if (!string.IsNullOrWhiteSpace(toolCall.Result))
+                    InsertSessionTurn(conn, tx, session, "tool", toolCall.Result, turn.Timestamp);
+            }
+        }
+
+        tx.Commit();
+    }
+
+    private static void InsertSessionTurn(SqliteConnection conn, SqliteTransaction tx, Session session, string role, string? content, DateTimeOffset timestamp)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+
+        using var insert = conn.CreateCommand();
+        insert.Transaction = tx;
+        insert.CommandText = """
+            INSERT INTO session_turns_fts(session_id, channel_id, sender_id, role, content, timestamp)
+            VALUES($session_id, $channel_id, $sender_id, $role, $content, $timestamp);
+            """;
+        insert.Parameters.AddWithValue("$session_id", session.Id);
+        insert.Parameters.AddWithValue("$channel_id", session.ChannelId);
+        insert.Parameters.AddWithValue("$sender_id", session.SenderId);
+        insert.Parameters.AddWithValue("$role", role);
+        insert.Parameters.AddWithValue("$content", content);
+        insert.Parameters.AddWithValue("$timestamp", timestamp.ToUnixTimeSeconds());
+        insert.ExecuteNonQuery();
     }
 }

@@ -35,6 +35,9 @@ public sealed class ApprovalHistoryEntry
     public required string SenderId { get; init; }
     public required string ToolName { get; init; }
     public required string ArgumentsPreview { get; init; }
+    public string? Action { get; init; }
+    public bool IsMutation { get; init; }
+    public string Summary { get; init; } = "";
     public DateTimeOffset TimestampUtc { get; init; }
     public DateTimeOffset? DecisionAtUtc { get; init; }
     public string? ActorChannelId { get; init; }

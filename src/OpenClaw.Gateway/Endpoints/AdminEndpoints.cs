@@ -31,6 +31,10 @@ internal static class AdminEndpoints
         var adminSettings = app.Services.GetRequiredService<AdminSettingsService>();
         var pluginAdminSettings = app.Services.GetRequiredService<PluginAdminSettingsService>();
         var heartbeat = app.Services.GetRequiredService<HeartbeatService>();
+        var fallbackFeatureStore = FeatureFallbackServices.CreateFallbackFeatureStore(startup);
+        var automationService = FeatureFallbackServices.ResolveAutomationService(startup, app.Services, heartbeat, fallbackFeatureStore);
+        var learningService = FeatureFallbackServices.ResolveLearningService(startup, app.Services, fallbackFeatureStore);
+        var facade = IntegrationApiFacade.Create(startup, runtime, app.Services);
         var sessionAdminStore = (ISessionAdminStore)app.Services.GetRequiredService<IMemoryStore>();
         var operations = runtime.Operations;
 
@@ -529,6 +533,218 @@ internal static class AdminEndpoints
 
             var status = heartbeat.BuildStatus(runtime, ctx.RequestAborted);
             return Results.Json(status, CoreJsonContext.Default.HeartbeatStatusResponse);
+        });
+
+        app.MapGet("/admin/automations", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.automations");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            return Results.Json(
+                new IntegrationAutomationsResponse
+                {
+                    Items = await automationService.ListAsync(ctx.RequestAborted)
+                },
+                CoreJsonContext.Default.IntegrationAutomationsResponse);
+        });
+
+        app.MapPost("/admin/automations/migrate", async (HttpContext ctx, bool apply = false) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.migrate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var migrated = await automationService.MigrateLegacyAsync(apply, ctx.RequestAborted);
+            return Results.Json(
+                new IntegrationAutomationsResponse { Items = migrated },
+                CoreJsonContext.Default.IntegrationAutomationsResponse);
+        });
+
+        app.MapPost("/admin/automations/preview", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.preview");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.AutomationDefinition);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var automation = requestPayload.Value;
+            if (automation is null)
+                return Results.BadRequest(new MutationResponse { Success = false, Error = "Automation payload is required." });
+
+            return Results.Json(
+                automationService.BuildPreview(automation),
+                CoreJsonContext.Default.AutomationPreview);
+        });
+
+        app.MapGet("/admin/automations/{id}", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.automations.detail");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var automation = await automationService.GetAsync(id, ctx.RequestAborted);
+            if (automation is null)
+                return Results.NotFound(new MutationResponse { Success = false, Error = "Automation not found." });
+
+            return Results.Json(
+                new IntegrationAutomationDetailResponse
+                {
+                    Automation = automation,
+                    RunState = await automationService.GetRunStateAsync(id, ctx.RequestAborted)
+                },
+                CoreJsonContext.Default.IntegrationAutomationDetailResponse);
+        });
+
+        app.MapPut("/admin/automations/{id}", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.AutomationDefinition);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var automation = requestPayload.Value;
+            if (automation is null)
+                return Results.BadRequest(new MutationResponse { Success = false, Error = "Automation payload is required." });
+
+            var saved = await automationService.SaveAsync(new AutomationDefinition
+            {
+                Id = id,
+                Name = automation.Name,
+                Enabled = automation.Enabled,
+                Schedule = automation.Schedule,
+                Timezone = automation.Timezone,
+                Prompt = automation.Prompt,
+                ModelId = automation.ModelId,
+                RunOnStartup = automation.RunOnStartup,
+                SessionId = automation.SessionId,
+                DeliveryChannelId = automation.DeliveryChannelId,
+                DeliveryRecipientId = automation.DeliveryRecipientId,
+                DeliverySubject = automation.DeliverySubject,
+                Tags = automation.Tags,
+                IsDraft = automation.IsDraft,
+                Source = automation.Source,
+                TemplateKey = automation.TemplateKey,
+                CreatedAtUtc = automation.CreatedAtUtc,
+                UpdatedAtUtc = automation.UpdatedAtUtc
+            }, ctx.RequestAborted);
+
+            operations.RuntimeEvents.Append(new RuntimeEventEntry
+            {
+                Id = $"evt_{Guid.NewGuid():N}"[..20],
+                TimestampUtc = DateTimeOffset.UtcNow,
+                SessionId = saved.SessionId,
+                ChannelId = saved.DeliveryChannelId,
+                SenderId = saved.DeliveryRecipientId,
+                Component = "automations",
+                Action = "saved",
+                Severity = "info",
+                Summary = $"Automation '{saved.Id}' saved."
+            });
+
+            return Results.Json(
+                new IntegrationAutomationDetailResponse
+                {
+                    Automation = saved,
+                    RunState = await automationService.GetRunStateAsync(saved.Id, ctx.RequestAborted)
+                },
+                CoreJsonContext.Default.IntegrationAutomationDetailResponse);
+        });
+
+        app.MapPost("/admin/automations/{id}/run", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.run");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            AutomationRunRequest? request = null;
+            if (ctx.Request.ContentLength is > 0)
+            {
+                var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.AutomationRunRequest);
+                if (requestPayload.Failure is not null)
+                    return requestPayload.Failure;
+                request = requestPayload.Value;
+            }
+
+            var result = await facade.RunAutomationAsync(id, request?.DryRun ?? false, ctx.RequestAborted);
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status400BadRequest);
+        });
+
+        app.MapGet("/admin/learning/proposals", async (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.learning");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var status = ctx.Request.Query.TryGetValue("status", out var statusValues) ? statusValues.ToString() : null;
+            var kind = ctx.Request.Query.TryGetValue("kind", out var kindValues) ? kindValues.ToString() : null;
+            var items = await learningService.ListAsync(status, kind, ctx.RequestAborted);
+            return Results.Json(
+                new LearningProposalListResponse { Items = items },
+                CoreJsonContext.Default.LearningProposalListResponse);
+        });
+
+        app.MapPost("/admin/learning/proposals/{id}/approve", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.learning.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var approved = await learningService.ApproveAsync(id, runtime.AgentRuntime, ctx.RequestAborted);
+            if (approved is null)
+                return Results.NotFound(new MutationResponse { Success = false, Error = "Proposal not found." });
+
+            operations.RuntimeEvents.Append(new RuntimeEventEntry
+            {
+                Id = $"evt_{Guid.NewGuid():N}"[..20],
+                TimestampUtc = DateTimeOffset.UtcNow,
+                ChannelId = approved.ProfileUpdate?.ChannelId ?? approved.AutomationDraft?.DeliveryChannelId,
+                SenderId = approved.ProfileUpdate?.SenderId ?? approved.AutomationDraft?.DeliveryRecipientId,
+                Component = "learning",
+                Action = "approved",
+                Severity = "info",
+                Summary = $"Learning proposal '{approved.Id}' approved."
+            });
+
+            return Results.Json(approved, CoreJsonContext.Default.LearningProposal);
+        });
+
+        app.MapPost("/admin/learning/proposals/{id}/reject", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.learning.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.LearningProposalReviewRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var rejected = await learningService.RejectAsync(id, requestPayload.Value?.Reason, ctx.RequestAborted);
+            if (rejected is null)
+                return Results.NotFound(new MutationResponse { Success = false, Error = "Proposal not found." });
+
+            operations.RuntimeEvents.Append(new RuntimeEventEntry
+            {
+                Id = $"evt_{Guid.NewGuid():N}"[..20],
+                TimestampUtc = DateTimeOffset.UtcNow,
+                ChannelId = rejected.ProfileUpdate?.ChannelId ?? rejected.AutomationDraft?.DeliveryChannelId,
+                SenderId = rejected.ProfileUpdate?.SenderId ?? rejected.AutomationDraft?.DeliveryRecipientId,
+                Component = "learning",
+                Action = "rejected",
+                Severity = "info",
+                Summary = $"Learning proposal '{rejected.Id}' rejected."
+            });
+
+            return Results.Json(rejected, CoreJsonContext.Default.LearningProposal);
         });
 
         app.MapGet("/tools/approvals", (HttpContext ctx, string? channelId, string? senderId) =>

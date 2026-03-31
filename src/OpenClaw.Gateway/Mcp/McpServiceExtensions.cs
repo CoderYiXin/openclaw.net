@@ -25,8 +25,7 @@ internal static class McpServiceExtensions
         services.AddSingleton<IntegrationApiFacade>(sp =>
         {
             var holder = sp.GetRequiredService<GatewayRuntimeHolder>();
-            var sessionAdminStore = (ISessionAdminStore)sp.GetRequiredService<IMemoryStore>();
-            return new IntegrationApiFacade(startup, holder.Runtime, sessionAdminStore);
+            return IntegrationApiFacade.Create(startup, holder.Runtime, sp);
         });
 
         services.AddMcpServer(options =>

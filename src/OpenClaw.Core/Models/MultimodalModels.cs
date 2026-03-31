@@ -1,0 +1,76 @@
+namespace OpenClaw.Core.Models;
+
+public sealed class MultimodalConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string MediaCachePath { get; set; } = "./memory/media-cache";
+    public string VisionProvider { get; set; } = "gemini";
+    public string VisionModel { get; set; } = "gemini-2.5-flash";
+    public TextToSpeechConfig TextToSpeech { get; set; } = new();
+    public GeminiLiveConfig GeminiLive { get; set; } = new();
+}
+
+public sealed class TextToSpeechConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string Provider { get; set; } = "gemini";
+    public string Model { get; set; } = "gemini-2.5-flash-preview-tts";
+    public string VoiceName { get; set; } = "Kore";
+}
+
+public sealed class GeminiLiveConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string Model { get; set; } = "gemini-2.0-flash-live-001";
+    public string Endpoint { get; set; } = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
+    public string[] ResponseModalities { get; set; } = ["TEXT"];
+    public string? VoiceName { get; set; }
+    public bool InputTranscription { get; set; } = true;
+    public bool OutputTranscription { get; set; } = true;
+}
+
+public sealed class StoredMediaAsset
+{
+    public required string Id { get; init; }
+    public required string MediaType { get; init; }
+    public string FileName { get; init; } = "";
+    public string Path { get; init; } = "";
+    public long SizeBytes { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+}
+
+public sealed class LiveSessionOpenRequest
+{
+    public string? Model { get; init; }
+    public string[]? ResponseModalities { get; init; }
+    public string? SystemInstruction { get; init; }
+    public string? VoiceName { get; init; }
+}
+
+public sealed class LiveSessionOpened
+{
+    public required string SessionId { get; init; }
+    public required string Provider { get; init; }
+    public required string Model { get; init; }
+    public string[] ResponseModalities { get; init; } = [];
+}
+
+public sealed class LiveClientEnvelope
+{
+    public string Type { get; init; } = "";
+    public string? Text { get; init; }
+    public string? Base64Data { get; init; }
+    public string? MimeType { get; init; }
+    public bool TurnComplete { get; init; }
+}
+
+public sealed class LiveServerEnvelope
+{
+    public string Type { get; init; } = "";
+    public string? Text { get; init; }
+    public string? Base64Data { get; init; }
+    public string? MimeType { get; init; }
+    public bool TurnComplete { get; init; }
+    public bool Interrupted { get; init; }
+    public string? Error { get; init; }
+}

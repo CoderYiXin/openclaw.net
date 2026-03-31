@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using OpenClaw.Agent.Execution;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Pipeline;
 
 namespace OpenClaw.Agent;
 
@@ -31,6 +33,8 @@ public sealed class OpenClawToolExecutor
     private readonly GatewayConfig _config;
     private readonly IToolSandbox? _toolSandbox;
     private readonly ToolUsageTracker? _toolUsageTracker;
+    private readonly ToolExecutionRouter _executionRouter;
+    private readonly IToolPresetResolver? _toolPresetResolver;
 
     public OpenClawToolExecutor(
         IReadOnlyList<ITool> tools,
@@ -42,7 +46,9 @@ public sealed class OpenClawToolExecutor
         ILogger? logger = null,
         GatewayConfig? config = null,
         IToolSandbox? toolSandbox = null,
-        ToolUsageTracker? toolUsageTracker = null)
+        ToolUsageTracker? toolUsageTracker = null,
+        ToolExecutionRouter? executionRouter = null,
+        IToolPresetResolver? toolPresetResolver = null)
     {
         _toolsByName = tools.ToDictionary(t => t.Name, StringComparer.Ordinal);
         _toolDeclarations = tools.Select(CreateDeclaration).Cast<AITool>().ToArray();
@@ -66,9 +72,22 @@ public sealed class OpenClawToolExecutor
         };
         _toolSandbox = toolSandbox;
         _toolUsageTracker = toolUsageTracker;
+        _executionRouter = executionRouter ?? new ToolExecutionRouter(_config, _toolSandbox, logger);
+        _toolPresetResolver = toolPresetResolver;
     }
 
     public IList<AITool> ToolDeclarations => _toolDeclarations;
+
+    public IList<AITool> GetToolDeclarations(Session session)
+    {
+        if (_toolPresetResolver is null)
+            return _toolDeclarations;
+
+        var preset = _toolPresetResolver.Resolve(session, _toolsByName.Keys);
+        return _toolDeclarations
+            .Where(item => preset.AllowedTools.Contains(item.Name))
+            .ToArray();
+    }
 
     public bool SupportsStreaming(string toolName)
         => _toolsByName.TryGetValue(toolName, out var tool) && tool is IStreamingTool;
@@ -120,6 +139,14 @@ public sealed class OpenClawToolExecutor
             };
         }
 
+        var preset = _toolPresetResolver?.Resolve(session, _toolsByName.Keys);
+        if (preset is not null && !preset.AllowedTools.Contains(tool.Name))
+        {
+            var deniedByPreset = $"Tool '{tool.Name}' is not allowed for preset '{preset.PresetId}'.";
+            _logger?.LogInformation("[{CorrelationId}] {Message}", turnCtx.CorrelationId, deniedByPreset);
+            return CreateImmediateResult(toolName, argsJson, deniedByPreset);
+        }
+
         var hookCtx = new ToolHookContext
         {
             SessionId = session.Id,
@@ -151,7 +178,18 @@ public sealed class OpenClawToolExecutor
             }
         }
 
-        if (_requireToolApproval && _approvalRequiredTools.Contains(NormalizeApprovalToolName(tool.Name)))
+        var approvalDescriptor = ToolActionPolicyResolver.Resolve(tool.Name, argsJson);
+        var normalizedToolName = NormalizeApprovalToolName(tool.Name);
+        var explicitlyConfiguredApproval = _config.Tooling.ApprovalRequiredTools
+            .Any(item => string.Equals(NormalizeApprovalToolName(item), normalizedToolName, StringComparison.Ordinal));
+        var presetRequiresApproval = preset?.ApprovalRequiredTools.Contains(tool.Name) == true;
+        var defaultActionAwareApproval = ToolActionPolicyResolver.SupportsActionAwareApproval(tool.Name) && approvalDescriptor.IsMutation;
+        var listedApproval = _requireToolApproval && (_approvalRequiredTools.Contains(normalizedToolName) || presetRequiresApproval);
+        var requiresApproval = ToolActionPolicyResolver.SupportsActionAwareApproval(tool.Name) && !explicitlyConfiguredApproval && !presetRequiresApproval
+            ? defaultActionAwareApproval
+            : listedApproval || defaultActionAwareApproval;
+
+        if (requiresApproval)
         {
             if (approvalCallback is not null)
             {
@@ -305,16 +343,6 @@ public sealed class OpenClawToolExecutor
         return sb.ToString();
     }
 
-    private async Task<string> ExecuteToolWithTimeoutAsync(ITool tool, string argsJson, CancellationToken ct)
-    {
-        if (_toolTimeoutSeconds <= 0)
-            return await tool.ExecuteAsync(argsJson, ct);
-
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(_toolTimeoutSeconds));
-        return await tool.ExecuteAsync(argsJson, timeoutCts.Token);
-    }
-
     private async Task<SandboxResult> ExecuteSandboxWithTimeoutAsync(
         SandboxExecutionRequest request,
         CancellationToken ct)
@@ -337,73 +365,115 @@ public sealed class OpenClawToolExecutor
         TurnContext turnCtx,
         CancellationToken ct)
     {
+        if (!_executionRouter.TryResolveRoute(tool, out var route, out var template, out var legacySandboxRoute))
+            return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
+
         if (tool is not ISandboxCapableTool sandboxCapableTool)
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
+            return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
 
-        // Provider=None is the operator-facing global off switch for sandbox routing.
-        if (!ToolSandboxPolicy.IsOpenSandboxProviderConfigured(_config))
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
+        var backendName = string.IsNullOrWhiteSpace(route?.Backend)
+            ? _config.Execution.DefaultBackend
+            : route.Backend;
+        if (string.Equals(backendName, "local", StringComparison.OrdinalIgnoreCase) && !legacySandboxRoute)
+            return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
 
-        var mode = ToolSandboxPolicy.ResolveMode(_config, tool.Name, sandboxCapableTool.DefaultSandboxMode);
-        if (mode == ToolSandboxMode.None)
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
-
-        if (_toolSandbox is null)
+        if (_executionRouter.RequiresWorkspace(backendName) && string.IsNullOrWhiteSpace(_config.Tooling.WorkspaceRoot))
         {
-            if (mode == ToolSandboxMode.Require)
-            {
-                throw new ToolSandboxException(
-                    $"Error: Tool '{tool.Name}' requires sandboxing but no sandbox provider is configured.");
-            }
-
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
+            throw new ToolSandboxException(
+                $"Error: Tool '{tool.Name}' is configured to use execution backend '{backendName}' but Tooling.WorkspaceRoot is not set.");
         }
 
-        var template = ToolSandboxPolicy.ResolveTemplate(_config, tool.Name);
-        if (string.IsNullOrWhiteSpace(template))
+        if (legacySandboxRoute && string.IsNullOrWhiteSpace(template) && string.IsNullOrWhiteSpace(route?.FallbackBackend))
         {
-            if (mode == ToolSandboxMode.Require)
-            {
-                throw new ToolSandboxException(
-                    $"Error: Tool '{tool.Name}' requires sandboxing but no sandbox template is configured.");
-            }
+            throw new ToolSandboxException(
+                $"Error: Tool '{tool.Name}' requires sandboxing but no sandbox template is configured.");
+        }
 
-            _logger?.LogWarning(
-                "[{CorrelationId}] Sandbox template is missing for tool {Tool}; falling back to local execution",
-                turnCtx.CorrelationId,
-                tool.Name);
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
+        if (legacySandboxRoute && _toolSandbox is null)
+        {
+            throw new ToolSandboxException(
+                $"Error: Tool '{tool.Name}' requires sandboxing but no sandbox provider is configured.");
         }
 
         try
         {
-            var request = sandboxCapableTool.CreateSandboxRequest(argsJson);
-            request.LeaseKey ??= $"{session.Id}:{tool.Name}";
-            request.Template ??= template;
-            request.TimeToLiveSeconds = ToolSandboxPolicy.ResolveTimeToLiveSeconds(
+            var sandboxRequest = sandboxCapableTool.CreateSandboxRequest(argsJson);
+            sandboxRequest.LeaseKey ??= $"{session.Id}:{tool.Name}";
+            sandboxRequest.Template ??= template;
+            sandboxRequest.TimeToLiveSeconds = ToolSandboxPolicy.ResolveTimeToLiveSeconds(
                 _config,
                 tool.Name,
-                request.TimeToLiveSeconds);
+                sandboxRequest.TimeToLiveSeconds);
 
-            var sandboxResult = await ExecuteSandboxWithTimeoutAsync(request, ct);
+            var executionResult = await _executionRouter.ExecuteAsync(new ExecutionRequest
+            {
+                ToolName = tool.Name,
+                BackendName = backendName,
+                Command = sandboxRequest.Command,
+                Arguments = sandboxRequest.Arguments,
+                LeaseKey = sandboxRequest.LeaseKey,
+                Environment = new Dictionary<string, string>(sandboxRequest.Environment, StringComparer.Ordinal),
+                WorkingDirectory = sandboxRequest.WorkingDirectory,
+                Template = sandboxRequest.Template,
+                TimeToLiveSeconds = sandboxRequest.TimeToLiveSeconds,
+                RequireWorkspace = route?.RequireWorkspace ?? true
+            }, route?.FallbackBackend, ct);
+
+            var sandboxResult = new SandboxResult
+            {
+                ExitCode = executionResult.ExitCode,
+                Stdout = executionResult.Stdout,
+                Stderr = executionResult.Stderr
+            };
             return sandboxCapableTool.FormatSandboxResult(argsJson, sandboxResult);
         }
-        catch (ToolSandboxUnavailableException ex) when (mode == ToolSandboxMode.Prefer)
+        catch (ToolSandboxUnavailableException ex) when (legacySandboxRoute || !string.IsNullOrWhiteSpace(route?.FallbackBackend))
         {
             _logger?.LogWarning(
                 ex,
-                "[{CorrelationId}] Sandbox provider unavailable for tool {Tool}; falling back to local execution",
+                "[{CorrelationId}] Execution backend unavailable for tool {Tool}; falling back to {Fallback}",
                 turnCtx.CorrelationId,
-                tool.Name);
-            return await ExecuteToolWithTimeoutAsync(tool, argsJson, ct);
+                tool.Name,
+                legacySandboxRoute ? "local tool execution" : route!.FallbackBackend);
+            return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
         }
         catch (ToolSandboxUnavailableException ex)
         {
             throw new ToolSandboxException(
-                $"Error: Tool '{tool.Name}' requires sandboxing but the sandbox provider is unavailable.",
+                $"Error: Tool '{tool.Name}' requires execution backend '{backendName}' but the provider is unavailable.",
                 ex);
         }
     }
+
+    private async Task<string> ExecuteToolWithTimeoutAsync(
+        ITool tool,
+        string argsJson,
+        Session session,
+        TurnContext turnCtx,
+        CancellationToken ct)
+    {
+        var context = new ToolExecutionContext
+        {
+            Session = session,
+            TurnContext = turnCtx
+        };
+
+        if (_toolTimeoutSeconds <= 0)
+            return await InvokeToolAsync(tool, argsJson, context, ct);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(_toolTimeoutSeconds));
+        return await InvokeToolAsync(tool, argsJson, context, timeoutCts.Token);
+    }
+
+    private static ValueTask<string> InvokeToolAsync(
+        ITool tool,
+        string argsJson,
+        ToolExecutionContext? context,
+        CancellationToken ct)
+        => tool is IToolWithContext contextualTool && context is not null
+            ? contextualTool.ExecuteAsync(argsJson, context, ct)
+            : tool.ExecuteAsync(argsJson, ct);
 
     internal static AIFunctionDeclaration CreateDeclaration(ITool tool)
     {

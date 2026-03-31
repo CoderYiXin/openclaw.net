@@ -5,25 +5,10 @@ namespace OpenClaw.Gateway;
 
 internal sealed class GatewayCronJobSource : ICronJobSource
 {
-    private readonly GatewayConfig _config;
-    private readonly HeartbeatService _heartbeat;
+    private readonly GatewayAutomationService _automationService;
 
-    public GatewayCronJobSource(GatewayConfig config, HeartbeatService heartbeat)
-    {
-        _config = config;
-        _heartbeat = heartbeat;
-    }
+    public GatewayCronJobSource(GatewayAutomationService automationService)
+        => _automationService = automationService;
 
-    public IReadOnlyList<CronJobConfig> GetJobs()
-    {
-        var jobs = new List<CronJobConfig>();
-        if (_config.Cron.Enabled && _config.Cron.Jobs is { Count: > 0 })
-            jobs.AddRange(_config.Cron.Jobs);
-
-        var managedHeartbeatJob = _heartbeat.BuildManagedJob();
-        if (managedHeartbeatJob is not null)
-            jobs.Add(managedHeartbeatJob);
-
-        return jobs;
-    }
+    public IReadOnlyList<CronJobConfig> GetJobs() => _automationService.BuildCronJobs();
 }

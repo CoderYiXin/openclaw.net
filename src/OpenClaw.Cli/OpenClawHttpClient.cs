@@ -11,14 +11,16 @@ internal sealed class OpenClawHttpClient : IDisposable
 
     public async Task<OpenAiChatCompletionResponse> ChatCompletionAsync(
         OpenAiChatCompletionRequest request,
-        CancellationToken cancellationToken)
-        => await _inner.ChatCompletionAsync(request, cancellationToken);
+        CancellationToken cancellationToken,
+        string? presetId = null)
+        => await _inner.ChatCompletionAsync(request, cancellationToken, presetId);
 
     public async Task<string> StreamChatCompletionAsync(
         OpenAiChatCompletionRequest request,
         Action<string> onText,
-        CancellationToken cancellationToken)
-        => await _inner.StreamChatCompletionAsync(request, onText, cancellationToken);
+        CancellationToken cancellationToken,
+        string? presetId = null)
+        => await _inner.StreamChatCompletionAsync(request, onText, cancellationToken, presetId);
 
     public Task<HeartbeatPreviewResponse> GetHeartbeatAsync(CancellationToken cancellationToken)
         => _inner.GetHeartbeatAsync(cancellationToken);

@@ -85,6 +85,16 @@ internal static class OpenAiEndpoints
             var session = await runtime.SessionManager.GetOrCreateAsync("openai-http", requestId, ctx.RequestAborted);
             if (req.Model is not null)
                 session.ModelOverride = req.Model;
+            var presetHeader = ctx.Request.Headers.TryGetValue("X-OpenClaw-Preset", out var presetValues)
+                ? presetValues.ToString()
+                : null;
+            if (!string.IsNullOrWhiteSpace(presetHeader))
+            {
+                runtime.Operations.SessionMetadata.Set(session.Id, new SessionMetadataUpdateRequest
+                {
+                    ActivePresetId = presetHeader.Trim()
+                });
+            }
 
             try
             {
@@ -346,6 +356,16 @@ internal static class OpenAiEndpoints
             var session = await runtime.SessionManager.GetOrCreateAsync("openai-responses", requestId, ctx.RequestAborted);
             if (req.Model is not null)
                 session.ModelOverride = req.Model;
+            var responsesPresetHeader = ctx.Request.Headers.TryGetValue("X-OpenClaw-Preset", out var responsesPresetValues)
+                ? responsesPresetValues.ToString()
+                : null;
+            if (!string.IsNullOrWhiteSpace(responsesPresetHeader))
+            {
+                runtime.Operations.SessionMetadata.Set(session.Id, new SessionMetadataUpdateRequest
+                {
+                    ActivePresetId = responsesPresetHeader.Trim()
+                });
+            }
 
             try
             {

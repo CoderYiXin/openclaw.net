@@ -139,6 +139,57 @@ internal sealed class OpenClawMcpTools
         return JsonSerializer.Serialize(timeline, CoreJsonContext.Default.IntegrationSessionTimelineResponse);
     }
 
+    [McpServerTool(Name = "openclaw.search_sessions", ReadOnly = true),
+     Description("Search session content across messages and tool results.")]
+    public async Task<string> SearchSessions(
+        [Description("Search text.")] string text,
+        [Description("Maximum number of results.")] int? limit = null,
+        [Description("Optional channel ID filter.")] string? channelId = null,
+        [Description("Optional sender ID filter.")] string? senderId = null,
+        CancellationToken ct = default)
+        => JsonSerializer.Serialize(
+            await _facade.SearchSessionsAsync(new SessionSearchQuery
+            {
+                Text = text,
+                Limit = limit ?? 25,
+                ChannelId = channelId,
+                SenderId = senderId
+            }, ct),
+            CoreJsonContext.Default.IntegrationSessionSearchResponse);
+
+    [McpServerTool(Name = "openclaw.get_profile", ReadOnly = true),
+     Description("Get a user profile by actor ID.")]
+    public async Task<string> GetProfile(
+        [Description("Actor ID in the format channelId:senderId.")] string actorId,
+        CancellationToken ct)
+    {
+        var response = await _facade.GetProfileAsync(actorId, ct);
+        if (response.Profile is null)
+            throw new KeyNotFoundException($"Profile '{actorId}' was not found.");
+
+        return JsonSerializer.Serialize(response, CoreJsonContext.Default.IntegrationProfileResponse);
+    }
+
+    [McpServerTool(Name = "openclaw.list_automations", ReadOnly = true),
+     Description("List automations and their definitions.")]
+    public async Task<string> ListAutomations(CancellationToken ct)
+        => JsonSerializer.Serialize(
+            await _facade.ListAutomationsAsync(ct),
+            CoreJsonContext.Default.IntegrationAutomationsResponse);
+
+    [McpServerTool(Name = "openclaw.get_automation", ReadOnly = true),
+     Description("Get an automation definition and latest run state.")]
+    public async Task<string> GetAutomation(
+        [Description("The automation ID.")] string automationId,
+        CancellationToken ct)
+    {
+        var detail = await _facade.GetAutomationAsync(automationId, ct);
+        if (detail.Automation is null)
+            throw new KeyNotFoundException($"Automation '{automationId}' was not found.");
+
+        return JsonSerializer.Serialize(detail, CoreJsonContext.Default.IntegrationAutomationDetailResponse);
+    }
+
     [McpServerTool(Name = "openclaw.query_runtime_events", ReadOnly = true),
      Description("Query recent runtime events.")]
     public string QueryRuntimeEvents(

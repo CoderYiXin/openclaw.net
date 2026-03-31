@@ -6,6 +6,7 @@ using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
+using OpenClaw.Agent.Execution;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
@@ -29,7 +30,6 @@ public sealed class AgentRuntime : IAgentRuntime
 {
     private readonly IChatClient _chatClient;
     private readonly IReadOnlyList<ITool> _tools;
-    private readonly IList<AITool> _cachedToolDeclarations;
     private readonly OpenClawToolExecutor _toolExecutor;
     private readonly IMemoryStore _memory;
     private readonly ILogger? _logger;
@@ -56,6 +56,8 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly bool _estimateTokenBudgetAdmission;
     private readonly LlmProviderConfig _config;
     private readonly MemoryRecallConfig? _recall;
+    private readonly IUserProfileStore? _profileStore;
+    private readonly ProfilesConfig? _profilesConfig;
     private readonly SkillsConfig? _skillsConfig;
     private readonly string? _skillWorkspacePath;
     private readonly IReadOnlyList<string> _pluginSkillDirs;
@@ -88,9 +90,13 @@ public sealed class AgentRuntime : IAgentRuntime
         IReadOnlyList<IToolHook>? hooks = null,
         long sessionTokenBudget = 0,
         MemoryRecallConfig? recall = null,
+        IUserProfileStore? profileStore = null,
+        ProfilesConfig? profilesConfig = null,
         IToolSandbox? toolSandbox = null,
         GatewayConfig? gatewayConfig = null,
-        ToolUsageTracker? toolUsageTracker = null)
+        ToolUsageTracker? toolUsageTracker = null,
+        ToolExecutionRouter? executionRouter = null,
+        IToolPresetResolver? toolPresetResolver = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -132,11 +138,14 @@ public sealed class AgentRuntime : IAgentRuntime
             logger,
             config: gatewayConfig,
             toolSandbox: toolSandbox,
-            toolUsageTracker: toolUsageTracker);
-        _cachedToolDeclarations = _toolExecutor.ToolDeclarations;
+            toolUsageTracker: toolUsageTracker,
+            executionRouter: executionRouter,
+            toolPresetResolver: toolPresetResolver);
         _sessionTokenBudget = sessionTokenBudget;
         _estimateTokenBudgetAdmission = gatewayConfig?.EnableEstimatedTokenAdmissionControl ?? false;
         _recall = recall;
+        _profileStore = profileStore;
+        _profilesConfig = profilesConfig;
         ApplySkills(skills ?? []);
     }
 
@@ -209,7 +218,9 @@ public sealed class AgentRuntime : IAgentRuntime
 
         // Build conversation for LLM
         var messages = BuildMessages(session);
+        // Order matters: memory recall first, then profile recall (inserted near conversation start).
         await TryInjectRecallAsync(messages, userMessage, ct);
+        await TryInjectProfileRecallAsync(messages, session, ct);
 
         // Build tool definitions for the LLM (use pre-cached declarations)
         var chatOptions = new ChatOptions
@@ -217,7 +228,7 @@ public sealed class AgentRuntime : IAgentRuntime
             ModelId = session.ModelOverride ?? _config.Model,
             MaxOutputTokens = _maxTokens,
             Temperature = _temperature,
-            Tools = _cachedToolDeclarations,
+            Tools = _toolExecutor.GetToolDeclarations(session),
             ResponseFormat = responseSchema.HasValue
                 ? ChatResponseFormat.ForJsonSchema(responseSchema.Value, "response")
                 : null
@@ -370,13 +381,15 @@ public sealed class AgentRuntime : IAgentRuntime
             TrimHistory(session);
 
         var messages = BuildMessages(session);
+        // Order matters: memory recall first, then profile recall (inserted near conversation start).
         await TryInjectRecallAsync(messages, userMessage, ct);
+        await TryInjectProfileRecallAsync(messages, session, ct);
         var chatOptions = new ChatOptions
         {
             ModelId = session.ModelOverride ?? _config.Model,
             MaxOutputTokens = _maxTokens,
             Temperature = _temperature,
-            Tools = _cachedToolDeclarations
+            Tools = _toolExecutor.GetToolDeclarations(session)
         };
 
         for (var i = 0; i < _maxIterations; i++)
@@ -578,6 +591,49 @@ public sealed class AgentRuntime : IAgentRuntime
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Memory recall injection failed; continuing without recall.");
+        }
+    }
+
+    private async ValueTask TryInjectProfileRecallAsync(List<ChatMessage> messages, Session session, CancellationToken ct)
+    {
+        if (_profileStore is null || _profilesConfig is null || !_profilesConfig.Enabled || !_profilesConfig.InjectRecall)
+            return;
+
+        try
+        {
+            var actorId = $"{session.ChannelId}:{session.SenderId}";
+            var profile = await _profileStore.GetProfileAsync(actorId, ct);
+            if (profile is null)
+                return;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("[User profile recall]");
+            if (!string.IsNullOrWhiteSpace(profile.Summary))
+                sb.AppendLine($"Summary: {profile.Summary}");
+            if (!string.IsNullOrWhiteSpace(profile.Tone))
+                sb.AppendLine($"Tone: {profile.Tone}");
+            if (profile.Preferences.Count > 0)
+                sb.AppendLine($"Preferences: {string.Join("; ", profile.Preferences)}");
+            if (profile.ActiveProjects.Count > 0)
+                sb.AppendLine($"Active projects: {string.Join("; ", profile.ActiveProjects)}");
+            if (profile.RecentIntents.Count > 0)
+                sb.AppendLine($"Recent intents: {string.Join("; ", profile.RecentIntents)}");
+            foreach (var fact in profile.Facts.Take(8))
+                sb.AppendLine($"Fact [{fact.Key}]: {fact.Value} (confidence={fact.Confidence:0.00})");
+
+            var text = sb.ToString().TrimEnd();
+            var maxChars = Math.Clamp(_profilesConfig.MaxRecallChars, 256, 20_000);
+            if (text.Length > maxChars)
+                text = text[..maxChars] + "…";
+
+            if (text.Length == 0)
+                return;
+
+            messages.Insert(Math.Min(2, messages.Count), new ChatMessage(ChatRole.User, text));
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "User profile recall injection failed; continuing without profile context.");
         }
     }
 
@@ -1156,7 +1212,7 @@ public sealed class AgentRuntime : IAgentRuntime
             {
                 messages.Add(new ChatMessage(
                     turn.Role == "user" ? ChatRole.User : ChatRole.Assistant,
-                    turn.Content));
+                    BuildTurnContents(turn.Content)));
             }
             else if (turn.Content == "[tool_use]" && turn.ToolCalls is { Count: > 0 })
             {
@@ -1169,6 +1225,45 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         return messages;
+    }
+
+    private static IList<AIContent> BuildTurnContents(string content)
+    {
+        var (markers, remainingText) = MediaMarkerProtocol.Extract(content);
+        var contents = new List<AIContent>();
+        if (!string.IsNullOrWhiteSpace(remainingText))
+            contents.Add(new TextContent(remainingText));
+
+        foreach (var marker in markers)
+        {
+            var mediaType = marker.Kind switch
+            {
+                MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath or MediaMarkerKind.TelegramImageFileId => "image/*",
+                MediaMarkerKind.AudioUrl => "audio/*",
+                MediaMarkerKind.VideoUrl => "video/*",
+                MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath => "application/octet-stream",
+                _ => "application/octet-stream"
+            };
+
+            switch (marker.Kind)
+            {
+                case MediaMarkerKind.ImagePath:
+                case MediaMarkerKind.FilePath:
+                    contents.Add(new UriContent(new Uri(Path.GetFullPath(marker.Value)), mediaType));
+                    break;
+                default:
+                    if (Uri.TryCreate(marker.Value, UriKind.Absolute, out var uri))
+                        contents.Add(new UriContent(uri, mediaType));
+                    else if (Uri.TryCreate(marker.Value, UriKind.Relative, out _))
+                        contents.Add(new TextContent(marker.Value));
+                    break;
+            }
+        }
+
+        if (contents.Count == 0)
+            contents.Add(new TextContent(content));
+
+        return contents;
     }
 
     private void ApplySkills(IReadOnlyList<SkillDefinition> skills)

@@ -1,0 +1,148 @@
+using System.Text;
+using System.Text.Json;
+using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
+
+namespace OpenClaw.Core.Features;
+
+public sealed class FileFeatureStore : IAutomationStore, IUserProfileStore, ILearningProposalStore
+{
+    private readonly string _automationsPath;
+    private readonly string _automationRunsPath;
+    private readonly string _profilesPath;
+    private readonly string _proposalsPath;
+
+    public FileFeatureStore(string storagePath)
+    {
+        var root = Path.GetFullPath(storagePath);
+        _automationsPath = Path.Combine(root, "automations");
+        _automationRunsPath = Path.Combine(root, "automation-runs");
+        _profilesPath = Path.Combine(root, "profiles");
+        _proposalsPath = Path.Combine(root, "learning-proposals");
+
+        Directory.CreateDirectory(_automationsPath);
+        Directory.CreateDirectory(_automationRunsPath);
+        Directory.CreateDirectory(_profilesPath);
+        Directory.CreateDirectory(_proposalsPath);
+    }
+
+    public async ValueTask<IReadOnlyList<AutomationDefinition>> ListAutomationsAsync(CancellationToken ct)
+        => await LoadAllAsync(_automationsPath, CoreJsonContext.Default.AutomationDefinition, ct);
+
+    public ValueTask<AutomationDefinition?> GetAutomationAsync(string automationId, CancellationToken ct)
+        => LoadOneAsync(Path.Combine(_automationsPath, $"{EncodeKey(automationId)}.json"), CoreJsonContext.Default.AutomationDefinition, ct);
+
+    public ValueTask SaveAutomationAsync(AutomationDefinition automation, CancellationToken ct)
+        => SaveOneAsync(Path.Combine(_automationsPath, $"{EncodeKey(automation.Id)}.json"), automation, CoreJsonContext.Default.AutomationDefinition, ct);
+
+    public ValueTask DeleteAutomationAsync(string automationId, CancellationToken ct)
+        => DeleteOneAsync(Path.Combine(_automationsPath, $"{EncodeKey(automationId)}.json"));
+
+    public ValueTask<AutomationRunState?> GetRunStateAsync(string automationId, CancellationToken ct)
+        => LoadOneAsync(Path.Combine(_automationRunsPath, $"{EncodeKey(automationId)}.json"), CoreJsonContext.Default.AutomationRunState, ct);
+
+    public ValueTask SaveRunStateAsync(AutomationRunState runState, CancellationToken ct)
+        => SaveOneAsync(Path.Combine(_automationRunsPath, $"{EncodeKey(runState.AutomationId)}.json"), runState, CoreJsonContext.Default.AutomationRunState, ct);
+
+    public async ValueTask<IReadOnlyList<UserProfile>> ListProfilesAsync(CancellationToken ct)
+        => await LoadAllAsync(_profilesPath, CoreJsonContext.Default.UserProfile, ct);
+
+    public ValueTask<UserProfile?> GetProfileAsync(string actorId, CancellationToken ct)
+        => LoadOneAsync(Path.Combine(_profilesPath, $"{EncodeKey(actorId)}.json"), CoreJsonContext.Default.UserProfile, ct);
+
+    public ValueTask SaveProfileAsync(UserProfile profile, CancellationToken ct)
+        => SaveOneAsync(Path.Combine(_profilesPath, $"{EncodeKey(profile.ActorId)}.json"), profile, CoreJsonContext.Default.UserProfile, ct);
+
+    public async ValueTask<IReadOnlyList<LearningProposal>> ListProposalsAsync(string? status, string? kind, CancellationToken ct)
+    {
+        var all = await LoadAllAsync(_proposalsPath, CoreJsonContext.Default.LearningProposal, ct);
+        return all
+            .Where(item => string.IsNullOrWhiteSpace(status) || string.Equals(item.Status, status, StringComparison.OrdinalIgnoreCase))
+            .Where(item => string.IsNullOrWhiteSpace(kind) || string.Equals(item.Kind, kind, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(static item => item.UpdatedAtUtc)
+            .ToArray();
+    }
+
+    public ValueTask<LearningProposal?> GetProposalAsync(string proposalId, CancellationToken ct)
+        => LoadOneAsync(Path.Combine(_proposalsPath, $"{EncodeKey(proposalId)}.json"), CoreJsonContext.Default.LearningProposal, ct);
+
+    public ValueTask SaveProposalAsync(LearningProposal proposal, CancellationToken ct)
+        => SaveOneAsync(Path.Combine(_proposalsPath, $"{EncodeKey(proposal.Id)}.json"), proposal, CoreJsonContext.Default.LearningProposal, ct);
+
+    private static async ValueTask<IReadOnlyList<T>> LoadAllAsync<T>(
+        string directory,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo,
+        CancellationToken ct)
+    {
+        var results = new List<T>();
+        IEnumerable<string> files;
+        try
+        {
+            files = Directory.EnumerateFiles(directory, "*.json");
+        }
+        catch
+        {
+            return [];
+        }
+
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            var item = await LoadOneAsync(file, typeInfo, ct);
+            if (item is not null)
+                results.Add(item);
+        }
+
+        return results;
+    }
+
+    private static async ValueTask<T?> LoadOneAsync<T>(
+        string path,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo,
+        CancellationToken ct)
+    {
+        if (!File.Exists(path))
+            return default;
+
+        try
+        {
+            var json = await File.ReadAllTextAsync(path, ct);
+            return JsonSerializer.Deserialize(json, typeInfo);
+        }
+        catch
+        {
+            return default;
+        }
+    }
+
+    private static async ValueTask SaveOneAsync<T>(
+        string path,
+        T item,
+        System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo,
+        CancellationToken ct)
+    {
+        var tempPath = $"{path}.tmp";
+        var json = JsonSerializer.Serialize(item, typeInfo);
+        await File.WriteAllTextAsync(tempPath, json, Encoding.UTF8, ct);
+        File.Move(tempPath, path, overwrite: true);
+    }
+
+    private static ValueTask DeleteOneAsync(string path)
+    {
+        if (File.Exists(path))
+            File.Delete(path);
+        return ValueTask.CompletedTask;
+    }
+
+    private static string EncodeKey(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return "item";
+
+        var bytes = Encoding.UTF8.GetBytes(key);
+        return Convert.ToBase64String(bytes)
+            .Replace('+', '-')
+            .Replace('/', '_')
+            .TrimEnd('=');
+    }
+}

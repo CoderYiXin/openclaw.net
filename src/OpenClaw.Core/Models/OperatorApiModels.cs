@@ -281,12 +281,26 @@ public sealed class SessionMetadataSnapshot
     public required string SessionId { get; init; }
     public bool Starred { get; init; }
     public string[] Tags { get; init; } = [];
+    public string? ActivePresetId { get; init; }
+    public IReadOnlyList<SessionTodoItem> TodoItems { get; init; } = [];
 }
 
 public sealed class SessionMetadataUpdateRequest
 {
     public bool? Starred { get; init; }
     public string[]? Tags { get; init; }
+    public string? ActivePresetId { get; init; }
+    public IReadOnlyList<SessionTodoItem>? TodoItems { get; init; }
+}
+
+public sealed class SessionTodoItem
+{
+    public required string Id { get; init; }
+    public string Text { get; init; } = "";
+    public bool Completed { get; init; }
+    public string? Notes { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
 }
 
 public sealed class SessionDiffResponse
