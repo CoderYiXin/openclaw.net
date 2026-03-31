@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Gateway.Bootstrap;
@@ -9,15 +10,57 @@ internal sealed class IntegrationApiFacade
     private readonly GatewayStartupContext _startup;
     private readonly GatewayAppRuntime _runtime;
     private readonly ISessionAdminStore _sessionAdminStore;
+    private readonly ISessionSearchStore _sessionSearchStore;
+    private readonly IUserProfileStore _profileStore;
+    private readonly GatewayAutomationService _automationService;
+    private readonly LearningService _learningService;
+    private readonly IToolPresetResolver? _toolPresetResolver;
+
+    public static IntegrationApiFacade Create(
+        GatewayStartupContext startup,
+        GatewayAppRuntime runtime,
+        IServiceProvider services)
+    {
+        var memoryStore = services.GetRequiredService<IMemoryStore>();
+        var sessionAdminStore = (ISessionAdminStore)memoryStore;
+        var sessionSearchStore = FeatureFallbackServices.ResolveSessionSearchStore(services);
+        var fallbackFeatureStore = FeatureFallbackServices.CreateFallbackFeatureStore(startup);
+        var profileStore = services.GetService<IUserProfileStore>() ?? fallbackFeatureStore;
+        var heartbeat = services.GetService<HeartbeatService>()
+            ?? throw new InvalidOperationException("HeartbeatService must be registered before mapping integration endpoints.");
+        var automationService = FeatureFallbackServices.ResolveAutomationService(startup, services, heartbeat, fallbackFeatureStore);
+        var learningService = FeatureFallbackServices.ResolveLearningService(startup, services, fallbackFeatureStore);
+        var toolPresetResolver = services.GetService<IToolPresetResolver>();
+
+        return new IntegrationApiFacade(
+            startup,
+            runtime,
+            sessionAdminStore,
+            sessionSearchStore,
+            profileStore,
+            automationService,
+            learningService,
+            toolPresetResolver);
+    }
 
     public IntegrationApiFacade(
         GatewayStartupContext startup,
         GatewayAppRuntime runtime,
-        ISessionAdminStore sessionAdminStore)
+        ISessionAdminStore sessionAdminStore,
+        ISessionSearchStore sessionSearchStore,
+        IUserProfileStore profileStore,
+        GatewayAutomationService automationService,
+        LearningService learningService,
+        IToolPresetResolver? toolPresetResolver)
     {
         _startup = startup;
         _runtime = runtime;
         _sessionAdminStore = sessionAdminStore;
+        _sessionSearchStore = sessionSearchStore;
+        _profileStore = profileStore;
+        _automationService = automationService;
+        _learningService = learningService;
+        _toolPresetResolver = toolPresetResolver;
     }
 
     public IntegrationStatusResponse BuildStatusResponse()
@@ -164,6 +207,145 @@ internal sealed class IntegrationApiFacade
         };
     }
 
+    public async Task<IntegrationSessionSearchResponse> SearchSessionsAsync(SessionSearchQuery query, CancellationToken cancellationToken)
+        => new()
+        {
+            Result = await _sessionSearchStore.SearchSessionsAsync(query, cancellationToken)
+        };
+
+    public async Task<IntegrationProfilesResponse> ListProfilesAsync(CancellationToken cancellationToken)
+        => new()
+        {
+            Items = await _profileStore.ListProfilesAsync(cancellationToken)
+        };
+
+    public async Task<IntegrationProfileResponse> GetProfileAsync(string actorId, CancellationToken cancellationToken)
+        => new()
+        {
+            Profile = await _profileStore.GetProfileAsync(actorId, cancellationToken)
+        };
+
+    public async Task<IntegrationProfileResponse> SaveProfileAsync(string actorId, UserProfile profile, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeProfile(actorId, profile);
+        await _profileStore.SaveProfileAsync(normalized, cancellationToken);
+        AppendRuntimeEvent(
+            component: "profiles",
+            action: "updated",
+            summary: $"Profile '{normalized.ActorId}' updated.",
+            channelId: normalized.ChannelId,
+            senderId: normalized.SenderId);
+
+        return new IntegrationProfileResponse { Profile = normalized };
+    }
+
+    public async Task<IntegrationAutomationsResponse> ListAutomationsAsync(CancellationToken cancellationToken)
+        => new()
+        {
+            Items = await _automationService.ListAsync(cancellationToken)
+        };
+
+    public IntegrationToolPresetsResponse ListToolPresets()
+        => new()
+        {
+            Items = _toolPresetResolver?.ListPresets(_runtime.RegisteredToolNames) ?? []
+        };
+
+    public async Task<IntegrationAutomationDetailResponse> GetAutomationAsync(string automationId, CancellationToken cancellationToken)
+        => new()
+        {
+            Automation = await _automationService.GetAsync(automationId, cancellationToken),
+            RunState = await _automationService.GetRunStateAsync(automationId, cancellationToken)
+        };
+
+    public async Task<MutationResponse> RunAutomationAsync(string automationId, bool dryRun, CancellationToken cancellationToken)
+    {
+        var automation = await _automationService.GetAsync(automationId, cancellationToken);
+        if (automation is null)
+        {
+            return new MutationResponse
+            {
+                Success = false,
+                Error = "Automation not found."
+            };
+        }
+
+        if (dryRun)
+        {
+            return new MutationResponse
+            {
+                Success = true,
+                Message = "Dry run validated."
+            };
+        }
+
+        var result = await _automationService.RunNowAsync(automationId, _runtime.Pipeline, cancellationToken);
+        if (result == RunNowResult.Queued)
+        {
+            await _automationService.SaveRunStateAsync(new AutomationRunState
+            {
+                AutomationId = automationId,
+                Outcome = "queued",
+                LastRunAtUtc = DateTimeOffset.UtcNow,
+                SessionId = string.IsNullOrWhiteSpace(automation.SessionId) ? $"automation:{automation.Id}" : automation.SessionId,
+                MessagePreview = automation.Prompt.Length > 180 ? automation.Prompt[..180] : automation.Prompt
+            }, cancellationToken);
+
+            AppendRuntimeEvent(
+                component: "automations",
+                action: "queued",
+                summary: $"Automation '{automationId}' queued for execution.",
+                sessionId: automation.SessionId,
+                channelId: automation.DeliveryChannelId,
+                senderId: automation.DeliveryRecipientId);
+        }
+
+        return result switch
+        {
+            RunNowResult.Queued => new MutationResponse { Success = true, Message = "Automation queued." },
+            RunNowResult.AlreadyRunning => new MutationResponse { Success = false, Error = "Automation is already running." },
+            _ => new MutationResponse { Success = false, Error = "Automation could not be queued." }
+        };
+    }
+
+    public async Task<LearningProposalListResponse> ListLearningProposalsAsync(string? status, string? kind, CancellationToken cancellationToken)
+        => new()
+        {
+            Items = await _learningService.ListAsync(status, kind, cancellationToken)
+        };
+
+    public async Task<LearningProposal?> ApproveLearningProposalAsync(string proposalId, CancellationToken cancellationToken)
+    {
+        var approved = await _learningService.ApproveAsync(proposalId, _runtime.AgentRuntime, cancellationToken);
+        if (approved is not null)
+        {
+            AppendRuntimeEvent(
+                component: "learning",
+                action: "approved",
+                summary: $"Learning proposal '{proposalId}' approved.",
+                channelId: approved.ProfileUpdate?.ChannelId ?? approved.AutomationDraft?.DeliveryChannelId,
+                senderId: approved.ProfileUpdate?.SenderId ?? approved.AutomationDraft?.DeliveryRecipientId);
+        }
+
+        return approved;
+    }
+
+    public async Task<LearningProposal?> RejectLearningProposalAsync(string proposalId, string? reason, CancellationToken cancellationToken)
+    {
+        var rejected = await _learningService.RejectAsync(proposalId, reason, cancellationToken);
+        if (rejected is not null)
+        {
+            AppendRuntimeEvent(
+                component: "learning",
+                action: "rejected",
+                summary: $"Learning proposal '{proposalId}' rejected.",
+                channelId: rejected.ProfileUpdate?.ChannelId ?? rejected.AutomationDraft?.DeliveryChannelId,
+                senderId: rejected.ProfileUpdate?.SenderId ?? rejected.AutomationDraft?.DeliveryRecipientId);
+        }
+
+        return rejected;
+    }
+
     public async Task<IntegrationMessageResponse> QueueMessageAsync(IntegrationMessageRequest request, CancellationToken cancellationToken)
     {
         var effectiveChannelId = string.IsNullOrWhiteSpace(request.ChannelId) ? "integration-api" : request.ChannelId.Trim();
@@ -195,6 +377,54 @@ internal sealed class IntegrationApiFacade
             SenderId = effectiveSenderId,
             SessionId = effectiveSessionId,
             MessageId = request.MessageId
+        };
+    }
+
+    private void AppendRuntimeEvent(
+        string component,
+        string action,
+        string summary,
+        string? sessionId = null,
+        string? channelId = null,
+        string? senderId = null)
+    {
+        _runtime.Operations.RuntimeEvents.Append(new RuntimeEventEntry
+        {
+            Id = $"evt_{Guid.NewGuid():N}"[..20],
+            TimestampUtc = DateTimeOffset.UtcNow,
+            SessionId = sessionId,
+            ChannelId = channelId,
+            SenderId = senderId,
+            Component = component,
+            Action = action,
+            Severity = "info",
+            Summary = summary
+        });
+    }
+
+    private static UserProfile NormalizeProfile(string actorId, UserProfile profile)
+    {
+        var normalizedActorId = string.IsNullOrWhiteSpace(actorId) ? profile.ActorId : actorId.Trim();
+        var parts = normalizedActorId.Split(':', 2, StringSplitOptions.TrimEntries);
+        var channelId = !string.IsNullOrWhiteSpace(profile.ChannelId)
+            ? profile.ChannelId.Trim()
+            : (parts.Length > 0 ? parts[0] : "unknown");
+        var senderId = !string.IsNullOrWhiteSpace(profile.SenderId)
+            ? profile.SenderId.Trim()
+            : (parts.Length > 1 ? parts[1] : normalizedActorId);
+
+        return new UserProfile
+        {
+            ActorId = normalizedActorId,
+            ChannelId = channelId,
+            SenderId = senderId,
+            Summary = profile.Summary,
+            Tone = profile.Tone,
+            Facts = profile.Facts,
+            Preferences = profile.Preferences,
+            ActiveProjects = profile.ActiveProjects,
+            RecentIntents = profile.RecentIntents,
+            UpdatedAtUtc = DateTimeOffset.UtcNow
         };
     }
 

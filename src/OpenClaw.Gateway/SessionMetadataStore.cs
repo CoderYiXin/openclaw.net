@@ -32,7 +32,8 @@ internal sealed class SessionMetadataStore
                 {
                     SessionId = sessionId,
                     Starred = false,
-                    Tags = []
+                    Tags = [],
+                    TodoItems = []
                 };
         }
     }
@@ -55,7 +56,8 @@ internal sealed class SessionMetadataStore
                 {
                     SessionId = sessionId,
                     Starred = false,
-                    Tags = []
+                    Tags = [],
+                    TodoItems = []
                 };
 
             var updated = new SessionMetadataSnapshot
@@ -67,7 +69,11 @@ internal sealed class SessionMetadataStore
                     .Select(static tag => tag.Trim())
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(static tag => tag, StringComparer.OrdinalIgnoreCase)
-                    .ToArray()
+                    .ToArray(),
+                ActivePresetId = string.IsNullOrWhiteSpace(request.ActivePresetId)
+                    ? current.ActivePresetId
+                    : request.ActivePresetId.Trim(),
+                TodoItems = NormalizeTodoItems(request.TodoItems ?? current.TodoItems)
             };
 
             items.RemoveAll(item => string.Equals(item.SessionId, sessionId, StringComparison.Ordinal));
@@ -103,5 +109,26 @@ internal sealed class SessionMetadataStore
         }
 
         _cached = items;
+    }
+
+    private static IReadOnlyList<SessionTodoItem> NormalizeTodoItems(IReadOnlyList<SessionTodoItem>? items)
+    {
+        if (items is null || items.Count == 0)
+            return [];
+
+        return items
+            .Where(static item => !string.IsNullOrWhiteSpace(item.Text))
+            .Select(static item => new SessionTodoItem
+            {
+                Id = string.IsNullOrWhiteSpace(item.Id) ? $"todo_{Guid.NewGuid():N}"[..17] : item.Id.Trim(),
+                Text = item.Text.Trim(),
+                Completed = item.Completed,
+                Notes = string.IsNullOrWhiteSpace(item.Notes) ? null : item.Notes.Trim(),
+                CreatedAtUtc = item.CreatedAtUtc == default ? DateTimeOffset.UtcNow : item.CreatedAtUtc,
+                UpdatedAtUtc = item.UpdatedAtUtc == default ? DateTimeOffset.UtcNow : item.UpdatedAtUtc
+            })
+            .OrderBy(static item => item.Completed)
+            .ThenBy(static item => item.CreatedAtUtc)
+            .ToArray();
     }
 }

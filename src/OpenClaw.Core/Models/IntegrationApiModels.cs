@@ -44,6 +44,21 @@ public sealed class IntegrationMessageResponse
     public string? MessageId { get; init; }
 }
 
+public sealed class IntegrationProfileUpdateRequest
+{
+    public required UserProfile Profile { get; init; }
+}
+
+public sealed class AutomationRunRequest
+{
+    public bool DryRun { get; init; }
+}
+
+public sealed class LearningProposalReviewRequest
+{
+    public string? Reason { get; init; }
+}
+
 public sealed class IntegrationRuntimeEventsResponse
 {
     public required RuntimeEventQuery Query { get; init; }
@@ -97,4 +112,40 @@ public sealed class IntegrationDashboardResponse
     public required IntegrationProvidersResponse Providers { get; init; }
     public required IntegrationPluginsResponse Plugins { get; init; }
     public required IntegrationRuntimeEventsResponse Events { get; init; }
+}
+
+public sealed class IntegrationSessionSearchResponse
+{
+    public required SessionSearchResult Result { get; init; }
+}
+
+public sealed class IntegrationProfilesResponse
+{
+    public IReadOnlyList<UserProfile> Items { get; init; } = [];
+}
+
+public sealed class IntegrationProfileResponse
+{
+    public UserProfile? Profile { get; init; }
+}
+
+public sealed class IntegrationAutomationsResponse
+{
+    public IReadOnlyList<AutomationDefinition> Items { get; init; } = [];
+}
+
+public sealed class IntegrationAutomationDetailResponse
+{
+    public AutomationDefinition? Automation { get; init; }
+    public AutomationRunState? RunState { get; init; }
+}
+
+public sealed class LearningProposalListResponse
+{
+    public IReadOnlyList<LearningProposal> Items { get; init; } = [];
+}
+
+public sealed class IntegrationToolPresetsResponse
+{
+    public IReadOnlyList<ResolvedToolPreset> Items { get; init; } = [];
 }

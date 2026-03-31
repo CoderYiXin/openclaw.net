@@ -35,6 +35,9 @@ internal sealed class ApprovalAuditStore
             SenderId = request.SenderId,
             ToolName = request.ToolName,
             ArgumentsPreview = Truncate(request.Arguments),
+            Action = request.Action,
+            IsMutation = request.IsMutation,
+            Summary = request.Summary,
             TimestampUtc = request.CreatedAt
         });
 
@@ -53,6 +56,9 @@ internal sealed class ApprovalAuditStore
             SenderId = request.SenderId,
             ToolName = request.ToolName,
             ArgumentsPreview = Truncate(request.Arguments),
+            Action = request.Action,
+            IsMutation = request.IsMutation,
+            Summary = request.Summary,
             TimestampUtc = request.CreatedAt,
             DecisionAtUtc = DateTimeOffset.UtcNow,
             ActorChannelId = actorChannelId,

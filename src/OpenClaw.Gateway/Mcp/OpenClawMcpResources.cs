@@ -83,4 +83,33 @@ internal sealed class OpenClawMcpResources
 
         return JsonSerializer.Serialize(timeline, CoreJsonContext.Default.IntegrationSessionTimelineResponse);
     }
+
+    [McpServerResource(UriTemplate = "openclaw://profiles/{actorId}", Name = "User Profile", MimeType = "application/json")]
+    [Description("Read a user profile by actor ID.")]
+    public async Task<string> GetProfile(string actorId, CancellationToken ct)
+    {
+        var response = await _facade.GetProfileAsync(Uri.UnescapeDataString(actorId), ct);
+        if (response.Profile is null)
+            throw new KeyNotFoundException($"Profile '{actorId}' was not found.");
+
+        return JsonSerializer.Serialize(response, CoreJsonContext.Default.IntegrationProfileResponse);
+    }
+
+    [McpServerResource(UriTemplate = "openclaw://automations", Name = "Automations", MimeType = "application/json")]
+    [Description("Read the current automation list.")]
+    public async Task<string> GetAutomations(CancellationToken ct)
+        => JsonSerializer.Serialize(
+            await _facade.ListAutomationsAsync(ct),
+            CoreJsonContext.Default.IntegrationAutomationsResponse);
+
+    [McpServerResource(UriTemplate = "openclaw://automations/{automationId}", Name = "Automation Detail", MimeType = "application/json")]
+    [Description("Read an automation definition and latest run state.")]
+    public async Task<string> GetAutomation(string automationId, CancellationToken ct)
+    {
+        var detail = await _facade.GetAutomationAsync(Uri.UnescapeDataString(automationId), ct);
+        if (detail.Automation is null)
+            throw new KeyNotFoundException($"Automation '{automationId}' was not found.");
+
+        return JsonSerializer.Serialize(detail, CoreJsonContext.Default.IntegrationAutomationDetailResponse);
+    }
 }

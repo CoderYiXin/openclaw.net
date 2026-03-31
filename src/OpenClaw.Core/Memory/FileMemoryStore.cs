@@ -14,7 +14,7 @@ namespace OpenClaw.Core.Memory;
 /// Sessions and notes are stored as JSON files with URL-safe base64 encoded filenames
 /// to prevent path traversal attacks. Includes in-memory LRU cache for sessions.
 /// </summary>
-public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore
+public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore
 {
     private readonly string _basePath;
     private readonly string _sessionsPath;
@@ -834,5 +834,110 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
             HasMore = summaries.Count > skip + pageSize,
             Items = items
         };
+    }
+
+    public async ValueTask<SessionSearchResult> SearchSessionsAsync(SessionSearchQuery query, CancellationToken ct)
+    {
+        var results = new List<SessionSearchHit>();
+        var searchText = (query.Text ?? "").Trim();
+        if (searchText.Length == 0)
+            return new SessionSearchResult { Query = query, Items = [] };
+
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(_sessionsPath, "*.json"); }
+        catch { files = []; }
+
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            Session? session;
+            try
+            {
+                var json = await File.ReadAllTextAsync(file, ct);
+                session = JsonSerializer.Deserialize(json, CoreJsonContext.Default.Session);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (session is null)
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(query.ChannelId) &&
+                !string.Equals(session.ChannelId, query.ChannelId, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(query.SenderId) &&
+                !string.Equals(session.SenderId, query.SenderId, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            foreach (var turn in session.History)
+            {
+                if (query.FromUtc is { } fromUtc && turn.Timestamp < fromUtc)
+                    continue;
+
+                if (query.ToUtc is { } toUtc && turn.Timestamp > toUtc)
+                    continue;
+
+                AddHitIfMatch(results, session, turn.Role, turn.Timestamp, turn.Content, searchText, query.SnippetLength);
+                if (turn.ToolCalls is null)
+                    continue;
+
+                foreach (var toolCall in turn.ToolCalls)
+                    AddHitIfMatch(results, session, "tool", turn.Timestamp, toolCall.Result ?? toolCall.Arguments, searchText, query.SnippetLength);
+            }
+        }
+
+        return new SessionSearchResult
+        {
+            Query = query,
+            Items = results
+                .OrderByDescending(static item => item.Score)
+                .ThenByDescending(static item => item.Timestamp)
+                .Take(Math.Clamp(query.Limit, 1, 200))
+                .ToArray()
+        };
+    }
+
+    private static void AddHitIfMatch(
+        ICollection<SessionSearchHit> results,
+        Session session,
+        string role,
+        DateTimeOffset timestamp,
+        string? content,
+        string searchText,
+        int snippetLength)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+            return;
+
+        var index = content.IndexOf(searchText, StringComparison.OrdinalIgnoreCase);
+        if (index < 0)
+            return;
+
+        results.Add(new SessionSearchHit
+        {
+            SessionId = session.Id,
+            ChannelId = session.ChannelId,
+            SenderId = session.SenderId,
+            Role = role,
+            Timestamp = timestamp,
+            Snippet = BuildSnippet(content, index, snippetLength),
+            Score = 1f + Math.Max(0, 100 - index) / 100f
+        });
+    }
+
+    private static string BuildSnippet(string content, int index, int snippetLength)
+    {
+        snippetLength = Math.Clamp(snippetLength, 40, 400);
+        var start = Math.Max(0, index - (snippetLength / 3));
+        var length = Math.Min(snippetLength, content.Length - start);
+        var snippet = content.Substring(start, length).Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (start > 0)
+            snippet = $"...{snippet}";
+        if (start + length < content.Length)
+            snippet = $"{snippet}...";
+        return snippet;
     }
 }

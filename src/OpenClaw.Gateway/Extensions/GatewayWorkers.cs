@@ -42,10 +42,12 @@ internal static class GatewayWorkers
         PairingManager pairingManager,
         ChatCommandProcessor commandProcessor,
         RuntimeOperationsState operations,
-        RuntimeMetrics? runtimeMetrics = null)
+        RuntimeMetrics? runtimeMetrics = null,
+        LearningService? learningService = null,
+        GatewayAutomationService? automationService = null)
     {
         StartSessionCleanup(lifetime, logger, sessionManager, sessionLocks, lockLastUsed);
-        StartInboundWorkers(lifetime, logger, workerCount, isNonLoopbackBind, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, channelAdapters, config, cronScheduler, heartbeatService, toolApprovalService, approvalAuditStore, pairingManager, commandProcessor, operations, runtimeMetrics);
+        StartInboundWorkers(lifetime, logger, workerCount, isNonLoopbackBind, sessionManager, sessionLocks, lockLastUsed, pipeline, middlewarePipeline, wsChannel, agentRuntime, channelAdapters, config, cronScheduler, heartbeatService, toolApprovalService, approvalAuditStore, pairingManager, commandProcessor, operations, runtimeMetrics, learningService, automationService);
         StartOutboundWorkers(lifetime, logger, workerCount, pipeline, channelAdapters, heartbeatService);
     }
 
@@ -178,7 +180,9 @@ internal static class GatewayWorkers
         PairingManager pairingManager,
         ChatCommandProcessor commandProcessor,
         RuntimeOperationsState operations,
-        RuntimeMetrics? runtimeMetrics)
+        RuntimeMetrics? runtimeMetrics,
+        LearningService? learningService,
+        GatewayAutomationService? automationService)
     {
         for (var i = 0; i < workerCount; i++)
         {
@@ -452,11 +456,18 @@ internal static class GatewayWorkers
                             }
 
                             var messageText = mwContext.Text;
+                            if (!string.IsNullOrWhiteSpace(msg.MediaUrl) && !messageText.Contains("[IMAGE_URL:", StringComparison.Ordinal))
+                            {
+                                var marker = BuildMediaMarker(msg);
+                                if (!string.IsNullOrWhiteSpace(marker))
+                                    messageText = string.IsNullOrWhiteSpace(messageText) ? marker : $"{marker}\n{messageText}";
+                            }
                             var useStreaming = msg.ChannelId == "websocket" && wsChannel.IsClientUsingEnvelopes(msg.SenderId);
 
                             var approvalTimeout = TimeSpan.FromSeconds(Math.Clamp(config.Tooling.ToolApprovalTimeoutSeconds, 5, 3600));
                             async ValueTask<bool> ApprovalCallback(string toolName, string argsJson, CancellationToken ct)
                             {
+                                var actionDescriptor = ToolActionPolicyResolver.Resolve(toolName, argsJson);
                                 var grant = operations.ApprovalGrants.TryConsume(session.Id, msg.ChannelId, msg.SenderId, toolName);
                                 if (grant is not null)
                                 {
@@ -480,7 +491,16 @@ internal static class GatewayWorkers
                                     return true;
                                 }
 
-                                var req = toolApprovalService.Create(session.Id, msg.ChannelId, msg.SenderId, toolName, argsJson, approvalTimeout);
+                                var req = toolApprovalService.Create(
+                                    session.Id,
+                                    msg.ChannelId,
+                                    msg.SenderId,
+                                    toolName,
+                                    argsJson,
+                                    approvalTimeout,
+                                    action: actionDescriptor.Action,
+                                    isMutation: actionDescriptor.IsMutation,
+                                    summary: actionDescriptor.Summary);
                                 approvalAuditStore.RecordCreated(req);
                                 operations.RuntimeEvents.Append(new RuntimeEventEntry
                                 {
@@ -491,11 +511,15 @@ internal static class GatewayWorkers
                                     Component = "approval",
                                     Action = "requested",
                                     Severity = "info",
-                                    Summary = $"Tool approval requested for '{toolName}'.",
+                                    Summary = string.IsNullOrWhiteSpace(actionDescriptor.Summary)
+                                        ? $"Tool approval requested for '{toolName}'."
+                                        : actionDescriptor.Summary,
                                     Metadata = new Dictionary<string, string>
                                     {
                                         ["toolName"] = toolName,
-                                        ["approvalId"] = req.ApprovalId
+                                        ["approvalId"] = req.ApprovalId,
+                                        ["action"] = actionDescriptor.Action,
+                                        ["isMutation"] = actionDescriptor.IsMutation ? "true" : "false"
                                     }
                                 });
 
@@ -510,7 +534,7 @@ internal static class GatewayWorkers
                                         ToolName = toolName,
                                         ArgumentsPreview = preview,
                                         InReplyToMessageId = msg.MessageId,
-                                        Text = "Tool approval required."
+                                        Text = string.IsNullOrWhiteSpace(req.Summary) ? "Tool approval required." : req.Summary
                                     }, ct);
                                 }
                                 else
@@ -518,6 +542,8 @@ internal static class GatewayWorkers
                                     var prompt = $"Tool approval required.\n" +
                                                  $"- id: {req.ApprovalId}\n" +
                                                  $"- tool: {toolName}\n" +
+                                                 $"{(string.IsNullOrWhiteSpace(req.Action) ? "" : $"- action: {req.Action}\n")}" +
+                                                 $"{(string.IsNullOrWhiteSpace(req.Summary) ? "" : $"- summary: {req.Summary}\n")}" +
                                                  $"- args: {preview}\n\n" +
                                                  $"Reply with: /approve {req.ApprovalId} yes|no";
 
@@ -557,6 +583,8 @@ internal static class GatewayWorkers
                                         lifetime.ApplicationStopping);
                                 }
                                 await sessionManager.PersistAsync(session, lifetime.ApplicationStopping);
+                                if (learningService is not null)
+                                    await learningService.ObserveSessionAsync(session, lifetime.ApplicationStopping);
                                 await wsChannel.SendStreamEventAsync(msg.SenderId, "typing_stop", "", msg.MessageId, lifetime.ApplicationStopping);
                             }
                             else
@@ -581,6 +609,8 @@ internal static class GatewayWorkers
 
                                 var responseText = await agentRuntime.RunAsync(session, messageText, lifetime.ApplicationStopping, approvalCallback: ApprovalCallback);
                                 await sessionManager.PersistAsync(session, lifetime.ApplicationStopping);
+                                if (learningService is not null)
+                                    await learningService.ObserveSessionAsync(session, lifetime.ApplicationStopping);
 
                                 var inputTokenDelta = session.TotalInputTokens - initialInputTokens;
                                 var outputTokenDelta = session.TotalOutputTokens - initialOutputTokens;
@@ -666,6 +696,7 @@ internal static class GatewayWorkers
                                 _ = bridgedAdapter.SendTypingAsync(conversationRecipientId, false, lifetime.ApplicationStopping);
 
                             cronScheduler?.MarkJobCompleted(msg.CronJobName);
+                            automationService?.MarkRunCompleted(msg.CronJobName);
 
                             if (lockAcquired && lockObj is not null)
                             {
@@ -832,4 +863,14 @@ internal static class GatewayWorkers
             }
         });
     }
+
+    private static string? BuildMediaMarker(InboundMessage message)
+        => (message.MediaType ?? "").ToLowerInvariant() switch
+        {
+            "image" => $"[IMAGE_URL:{message.MediaUrl}]",
+            "audio" => $"[AUDIO_URL:{message.MediaUrl}]",
+            "video" => $"[VIDEO_URL:{message.MediaUrl}]",
+            "document" or "file" => $"[FILE_URL:{message.MediaUrl}]",
+            _ => null
+        };
 }

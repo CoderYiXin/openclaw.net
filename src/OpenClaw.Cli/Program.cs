@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using OpenClaw.Core.Models;
 
 namespace OpenClaw.Cli;
@@ -8,6 +10,7 @@ internal static class Program
     private const string DefaultBaseUrl = "http://127.0.0.1:18789";
     private const string EnvBaseUrl = "OPENCLAW_BASE_URL";
     private const string EnvAuthToken = "OPENCLAW_AUTH_TOKEN";
+    private const string DefaultSetupConfigPath = "~/.openclaw/config/openclaw.settings.json";
 
     public static async Task<int> Main(string[] args)
     {
@@ -26,6 +29,10 @@ internal static class Program
             {
                 "run" => await RunAsync(rest),
                 "chat" => await ChatAsync(rest),
+                "live" => await LiveAsync(rest),
+                "tui" => await TuiAsync(rest),
+                "setup" => await SetupAsync(rest),
+                "migrate" => await MigrateAsync(rest),
                 "heartbeat" => await HeartbeatAsync(rest),
                 "admin" => await AdminAsync(rest),
                 "clawhub" => await ClawHubCommand.RunAsync(rest),
@@ -67,6 +74,10 @@ internal static class Program
             Usage:
               openclaw run [options] <prompt>
               openclaw chat [options]
+              openclaw live [options]
+              openclaw tui [options]
+              openclaw setup [options]
+              openclaw migrate [options]
               openclaw heartbeat <wizard|preview|status> [options]
               openclaw admin <posture|incident export|approvals simulate> [options]
               openclaw clawhub [wrapper options] [--] <clawhub args...>
@@ -76,6 +87,7 @@ internal static class Program
               --token <token>    Auth token (deprecated: prefer OPENCLAW_AUTH_TOKEN)
               --model <model>    Model override (optional)
               --system <text>    System prompt (optional)
+              --preset <id>      Tool preset / platform policy bundle (optional)
 
             run options:
               --file <path>      Attach file contents (repeatable)
@@ -93,6 +105,10 @@ internal static class Program
               OPENCLAW_AUTH_TOKEN=... openclaw run "summarize this README" --file ./README.md
               cat error.log | openclaw run "what went wrong?"
               openclaw chat --system "Be concise."
+              openclaw live --model gemini-2.0-flash-live-001 --system "Be concise."
+              openclaw tui
+              openclaw setup --workspace ./workspace
+              openclaw migrate --apply
               openclaw heartbeat status
               openclaw heartbeat wizard
               openclaw admin posture
@@ -139,6 +155,69 @@ internal static class Program
             """);
     }
 
+    private static void PrintSetupHelp()
+    {
+        Console.WriteLine(
+            """
+            openclaw setup
+
+            Usage:
+              openclaw setup [--config <path>] [--workspace <path>] [--provider <id>] [--model <id>] [--api-key <secret-or-envref>]
+                              [--bind <address>] [--port <n>] [--auth-token <token>]
+                              [--docker-image <image>] [--opensandbox-endpoint <url>] [--ssh-host <host>] [--ssh-user <user>] [--ssh-key <path>]
+
+            Notes:
+              - Writes an external JSON config file for the gateway.
+              - Validates workspace and optional execution backend prerequisites.
+              - Prints the exact gateway launch command using the generated config.
+            """);
+    }
+
+    private static void PrintMigrateHelp()
+    {
+        Console.WriteLine(
+            """
+            openclaw migrate
+
+            Usage:
+              openclaw migrate [--apply] [--url <url>] [--token <token>]
+
+            Notes:
+              - Without --apply, this previews legacy cron/heartbeat migrations.
+              - With --apply, canonical automation definitions are written through the admin API.
+            """);
+    }
+
+    private static void PrintTuiHelp()
+    {
+        Console.WriteLine(
+            """
+            openclaw tui
+
+            Usage:
+              openclaw tui [--url <url>] [--token <token>]
+
+            Notes:
+              - Launches the Spectre.Console terminal UI for runtime status, sessions, search,
+                automations, profiles, learning proposals, approvals, direct chat, and live sessions.
+            """);
+    }
+
+    private static void PrintLiveHelp()
+    {
+        Console.WriteLine(
+            """
+            openclaw live
+
+            Usage:
+              openclaw live [--url <url>] [--token <token>] [--model <id>] [--system <text>] [--voice <name>] [--modality <TEXT|AUDIO>]...
+
+            Notes:
+              - Opens a Gemini Live websocket session through the gateway.
+              - Interactive commands: /interrupt, /audio-file <path> [mime], /exit
+            """);
+    }
+
     private static async Task<int> RunAsync(string[] args)
     {
         var parsed = CliArgs.Parse(args);
@@ -152,6 +231,7 @@ internal static class Program
         var token = ResolveAuthToken(parsed, Console.Error);
         var model = parsed.GetOption("--model");
         var system = parsed.GetOption("--system");
+        var preset = parsed.GetOption("--preset");
 
         var stream = !parsed.HasFlag("--no-stream");
         var temperature = ParseFloat(parsed.GetOption("--temperature"));
@@ -186,13 +266,13 @@ internal static class Program
 
         if (stream)
         {
-            var full = await client.StreamChatCompletionAsync(request, s => Console.Write(s), CancellationToken.None);
+            var full = await client.StreamChatCompletionAsync(request, s => Console.Write(s), CancellationToken.None, preset);
             if (!string.IsNullOrEmpty(full) && !full.EndsWith('\n'))
                 Console.WriteLine();
             return 0;
         }
 
-        var response = await client.ChatCompletionAsync(request, CancellationToken.None);
+        var response = await client.ChatCompletionAsync(request, CancellationToken.None, preset);
         var text = response.Choices[0].Message.Content;
         Console.WriteLine(text);
         return 0;
@@ -211,6 +291,7 @@ internal static class Program
         var token = ResolveAuthToken(parsed, Console.Error);
         var model = parsed.GetOption("--model");
         var system = parsed.GetOption("--system");
+        var preset = parsed.GetOption("--preset");
 
         var temperature = ParseFloat(parsed.GetOption("--temperature"));
         var maxTokens = ParseInt(parsed.GetOption("--max-tokens"));
@@ -253,12 +334,197 @@ internal static class Program
                 Messages = messages
             };
 
-            var assistantText = await client.StreamChatCompletionAsync(request, s => Console.Write(s), CancellationToken.None);
+            var assistantText = await client.StreamChatCompletionAsync(request, s => Console.Write(s), CancellationToken.None, preset);
             if (!assistantText.EndsWith('\n'))
                 Console.WriteLine();
             conversation.Add(new OpenAiMessage { Role = "assistant", Content = assistantText });
         }
 
+        return 0;
+    }
+
+    private static async Task<int> LiveAsync(string[] args)
+    {
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp)
+        {
+            PrintLiveHelp();
+            return 0;
+        }
+
+        var baseUrl = parsed.GetOption("--url") ?? Environment.GetEnvironmentVariable(EnvBaseUrl) ?? DefaultBaseUrl;
+        var token = ResolveAuthToken(parsed, Console.Error);
+        var model = parsed.GetOption("--model");
+        var system = parsed.GetOption("--system");
+        var voice = parsed.GetOption("--voice");
+        var modalities = parsed.Options.TryGetValue("--modality", out var values)
+            ? values.Select(static item => item.ToUpperInvariant()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+            : ["TEXT"];
+
+        await RunLiveConsoleAsync(baseUrl, token, model, system, voice, modalities);
+        return 0;
+    }
+
+    private static async Task<int> TuiAsync(string[] args)
+    {
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp)
+        {
+            PrintTuiHelp();
+            return 0;
+        }
+
+        var baseUrl = parsed.GetOption("--url") ?? Environment.GetEnvironmentVariable(EnvBaseUrl) ?? DefaultBaseUrl;
+        var token = ResolveAuthToken(parsed, Console.Error);
+        var preset = parsed.GetOption("--preset");
+        try
+        {
+            return await OpenClaw.Tui.TerminalUi.RunAsync(baseUrl, token, preset, CancellationToken.None);
+        }
+        catch (TypeLoadException)
+        {
+            Console.Error.WriteLine("The TUI is not available in this build. Use the non-AOT build or the admin web UI.");
+            return 1;
+        }
+        catch (MissingMethodException)
+        {
+            Console.Error.WriteLine("The TUI is not available in this build. Use the non-AOT build or the admin web UI.");
+            return 1;
+        }
+    }
+
+    private static async Task<int> SetupAsync(string[] args)
+    {
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp)
+        {
+            PrintSetupHelp();
+            return 0;
+        }
+
+        var configPath = ExpandPath(parsed.GetOption("--config") ?? DefaultSetupConfigPath);
+        var workspace = Path.GetFullPath(ExpandPath(parsed.GetOption("--workspace") ?? Path.Combine(Directory.GetCurrentDirectory(), "workspace")));
+        Directory.CreateDirectory(workspace);
+
+        var config = new GatewayConfig
+        {
+            BindAddress = parsed.GetOption("--bind") ?? "127.0.0.1",
+            Port = ParseInt(parsed.GetOption("--port")) ?? 18789,
+            AuthToken = parsed.GetOption("--auth-token")
+                ?? Environment.GetEnvironmentVariable(EnvAuthToken)
+                ?? $"oc_{Guid.NewGuid():N}",
+            Llm = new LlmProviderConfig
+            {
+                Provider = parsed.GetOption("--provider") ?? "openai",
+                Model = parsed.GetOption("--model") ?? new GatewayConfig().Llm.Model,
+                ApiKey = parsed.GetOption("--api-key") ?? "env:MODEL_PROVIDER_KEY"
+            },
+            Tooling = new ToolingConfig
+            {
+                WorkspaceRoot = workspace
+            }
+        };
+
+        var warnings = new List<string>();
+        if (parsed.GetOption("--docker-image") is { Length: > 0 } dockerImage)
+        {
+            config.Execution.Profiles["docker"] = new ExecutionBackendProfileConfig
+            {
+                Type = ExecutionBackendType.Docker,
+                Image = dockerImage,
+                WorkingDirectory = workspace
+            };
+            config.Execution.Tools["shell"] = new ExecutionToolRouteConfig { Backend = "docker", FallbackBackend = "local", RequireWorkspace = true };
+            warnings.AddRange(CheckCommandAvailability("docker", "--version", "Docker backend requested but docker was not found on PATH."));
+        }
+
+        if (parsed.GetOption("--opensandbox-endpoint") is { Length: > 0 } openSandboxEndpoint)
+        {
+            if (!Uri.TryCreate(openSandboxEndpoint, UriKind.Absolute, out _))
+                throw new ArgumentException($"Invalid OpenSandbox endpoint: {openSandboxEndpoint}");
+
+            config.Sandbox.Provider = SandboxProviderNames.OpenSandbox;
+            config.Sandbox.Endpoint = openSandboxEndpoint;
+            config.Execution.Profiles["opensandbox"] = new ExecutionBackendProfileConfig
+            {
+                Type = ExecutionBackendType.OpenSandbox,
+                Endpoint = openSandboxEndpoint
+            };
+        }
+
+        if (parsed.GetOption("--ssh-host") is { Length: > 0 } sshHost)
+        {
+            var sshUser = parsed.GetOption("--ssh-user");
+            if (string.IsNullOrWhiteSpace(sshUser))
+                throw new ArgumentException("--ssh-user is required when --ssh-host is set.");
+
+            config.Execution.Profiles["ssh"] = new ExecutionBackendProfileConfig
+            {
+                Type = ExecutionBackendType.Ssh,
+                Host = sshHost,
+                Username = sshUser,
+                PrivateKeyPath = parsed.GetOption("--ssh-key"),
+                WorkingDirectory = workspace
+            };
+            warnings.AddRange(CheckCommandAvailability("ssh", "-V", "SSH backend requested but ssh was not found on PATH."));
+        }
+
+        var openClawNode = JsonNode.Parse(JsonSerializer.Serialize(config, CoreJsonContext.Default.GatewayConfig))
+            ?? throw new InvalidOperationException("Failed to serialize gateway config.");
+        var root = new JsonObject
+        {
+            ["OpenClaw"] = openClawNode
+        };
+
+        var directory = Path.GetDirectoryName(configPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        await File.WriteAllTextAsync(
+            configPath,
+            root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
+            CancellationToken.None);
+
+        Console.WriteLine($"Wrote config: {configPath}");
+        Console.WriteLine($"Workspace: {workspace}");
+        Console.WriteLine($"Provider/model: {config.Llm.Provider}/{config.Llm.Model}");
+        Console.WriteLine($"Auth token: {config.AuthToken}");
+        if (warnings.Count > 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Validation warnings:");
+            foreach (var warning in warnings)
+                Console.WriteLine($"- {warning}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Launch:");
+        Console.WriteLine($"dotnet run --project src/OpenClaw.Gateway -- --config {QuoteIfNeeded(configPath)}");
+        return 0;
+    }
+
+    private static async Task<int> MigrateAsync(string[] args)
+    {
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp)
+        {
+            PrintMigrateHelp();
+            return 0;
+        }
+
+        var baseUrl = parsed.GetOption("--url") ?? Environment.GetEnvironmentVariable(EnvBaseUrl) ?? DefaultBaseUrl;
+        var token = ResolveAuthToken(parsed, Console.Error);
+        var apply = parsed.HasFlag("--apply");
+
+        using var client = new OpenClaw.Client.OpenClawHttpClient(baseUrl, token);
+        var migrated = await client.MigrateAutomationsAsync(apply, CancellationToken.None);
+
+        Console.WriteLine(apply
+            ? "Applied legacy automation migration."
+            : "Previewed legacy automation migration.");
+        Console.WriteLine($"Automations: {migrated.Items.Count}");
+        foreach (var item in migrated.Items)
+            Console.WriteLine($"- {item.Id} | {item.Name} | {item.Schedule} | enabled={item.Enabled.ToString().ToLowerInvariant()} draft={item.IsDraft.ToString().ToLowerInvariant()}");
         return 0;
     }
 
@@ -471,6 +737,110 @@ internal static class Program
 
         Console.Error.WriteLine($"Unknown command: {command}");
         return false;
+    }
+
+    private static async Task RunLiveConsoleAsync(
+        string baseUrl,
+        string? token,
+        string? model,
+        string? system,
+        string? voice,
+        IReadOnlyList<string> modalities)
+    {
+        await using var client = new OpenClaw.Client.OpenClawLiveClient();
+        client.OnEnvelopeReceived += envelope =>
+        {
+            switch (envelope.Type)
+            {
+                case "opened":
+                    Console.Error.WriteLine($"[opened] {envelope.Text}");
+                    break;
+                case "text":
+                    Console.Write(envelope.Text);
+                    break;
+                case "turn_complete":
+                    Console.WriteLine();
+                    break;
+                case "audio":
+                    Console.Error.WriteLine($"[audio] mime={envelope.MimeType} bytes={(envelope.Base64Data?.Length ?? 0)}");
+                    break;
+                case "input_transcription":
+                    Console.Error.WriteLine($"[input] {envelope.Text}");
+                    break;
+                case "output_transcription":
+                    Console.Error.WriteLine($"[output] {envelope.Text}");
+                    break;
+                case "interrupted":
+                    Console.Error.WriteLine("[interrupted]");
+                    break;
+                case "error":
+                    Console.Error.WriteLine($"[error] {envelope.Error}");
+                    break;
+            }
+        };
+        client.OnError += message => Console.Error.WriteLine($"[client-error] {message}");
+
+        await client.ConnectAsync(
+            OpenClaw.Client.OpenClawLiveClient.BuildWebSocketUri(baseUrl),
+            token,
+            new LiveSessionOpenRequest
+            {
+                Model = model,
+                SystemInstruction = system,
+                VoiceName = voice,
+                ResponseModalities = modalities.ToArray()
+            },
+            CancellationToken.None);
+
+        Console.Error.WriteLine("openclaw live — commands: /interrupt, /audio-file <path> [mime], /exit");
+
+        while (true)
+        {
+            Console.Write("live> ");
+            var line = Console.ReadLine();
+            if (line is null)
+                break;
+
+            line = line.Trim();
+            if (line.Length == 0)
+                continue;
+
+            if (string.Equals(line, "/exit", StringComparison.OrdinalIgnoreCase))
+                break;
+
+            if (string.Equals(line, "/interrupt", StringComparison.OrdinalIgnoreCase))
+            {
+                await client.InterruptAsync(CancellationToken.None);
+                continue;
+            }
+
+            if (line.StartsWith("/audio-file ", StringComparison.OrdinalIgnoreCase))
+            {
+                var tail = line["/audio-file ".Length..].Trim();
+                if (tail.Length == 0)
+                {
+                    Console.Error.WriteLine("Usage: /audio-file <path> [mime]");
+                    continue;
+                }
+
+                var parts = tail.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var path = Path.GetFullPath(parts[0]);
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine($"File not found: {path}");
+                    continue;
+                }
+
+                var mime = parts.Length > 1 ? parts[1] : "audio/pcm";
+                var base64 = Convert.ToBase64String(await File.ReadAllBytesAsync(path, CancellationToken.None));
+                await client.SendAudioAsync(base64, mime, turnComplete: true, CancellationToken.None);
+                continue;
+            }
+
+            await client.SendTextAsync(line, turnComplete: true, CancellationToken.None);
+        }
+
+        await client.CloseSessionAsync(CancellationToken.None);
     }
 
     private static IReadOnlyList<HeartbeatTaskDto> PromptTasks(HeartbeatPreviewResponse current)
@@ -757,4 +1127,44 @@ internal static class Program
     }
 
     private static string ToBoolWord(bool value) => value ? "true" : "false";
+
+    private static IEnumerable<string> CheckCommandAvailability(string command, string arg, string failureMessage)
+    {
+        try
+        {
+            using var process = new System.Diagnostics.Process
+            {
+                StartInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = command,
+                    Arguments = arg,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.WaitForExit(3000);
+            return process.ExitCode == 0 ? [] : [failureMessage];
+        }
+        catch
+        {
+            return [failureMessage];
+        }
+    }
+
+    private static string ExpandPath(string path)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(path);
+        if (!expanded.StartsWith('~'))
+            return expanded;
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            expanded[1..].TrimStart('/').TrimStart('\\'));
+    }
+
+    private static string QuoteIfNeeded(string path)
+        => path.Contains(' ', StringComparison.Ordinal) ? $"\"{path}\"" : path;
 }

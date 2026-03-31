@@ -18,11 +18,16 @@ public sealed class GatewayConfig
     public WebSocketConfig WebSocket { get; set; } = new();
     public ToolingConfig Tooling { get; set; } = new();
     public SandboxConfig Sandbox { get; set; } = new();
+    public ExecutionConfig Execution { get; set; } = new();
+    public MultimodalConfig Multimodal { get; set; } = new();
     public ChannelsConfig Channels { get; set; } = new();
     public PluginsConfig Plugins { get; set; } = new();
     public SkillsConfig Skills { get; set; } = new();
     public DelegationConfig Delegation { get; set; } = new();
     public CronConfig Cron { get; set; } = new();
+    public AutomationsConfig Automations { get; set; } = new();
+    public ProfilesConfig Profiles { get; set; } = new();
+    public LearningConfig Learning { get; set; } = new();
     public WebhooksConfig Webhooks { get; set; } = new();
     public string UsageFooter { get; set; } = "off"; // "off", "tokens", "full"
 
@@ -237,6 +242,9 @@ public sealed class ToolingConfig
     public bool AllowBrowserEvaluate { get; set; } = true;
     public bool BrowserHeadless { get; set; } = true;
     public int BrowserTimeoutSeconds { get; set; } = 30;
+    public Dictionary<string, ToolsetConfig> Toolsets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, ToolPresetConfig> Presets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> SurfaceBindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class ChannelsConfig

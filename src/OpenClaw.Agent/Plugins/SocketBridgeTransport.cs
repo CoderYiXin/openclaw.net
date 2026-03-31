@@ -45,7 +45,7 @@ public sealed class SocketBridgeTransport : BridgeTransportBase
         _pipeName = OperatingSystem.IsWindows() ? NormalizePipeName(socketPath) : null;
     }
 
-    public override Task PrepareAsync(CancellationToken ct)
+    public override async Task PrepareAsync(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -57,7 +57,7 @@ public sealed class SocketBridgeTransport : BridgeTransportBase
                 1,
                 PipeTransmissionMode.Byte,
                 PipeOptions.Asynchronous);
-            return Task.CompletedTask;
+            return;
         }
 
         var dir = Path.GetDirectoryName(_socketPath);
@@ -75,7 +75,17 @@ public sealed class SocketBridgeTransport : BridgeTransportBase
         _listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         _listener.Bind(new UnixDomainSocketEndPoint(_socketPath));
         _listener.Listen(1);
-        return Task.CompletedTask;
+
+        // Bind/listen is synchronous, but waiting briefly for the socket path to materialize
+        // avoids connection-refused races on some Unix hosts under test load.
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (File.Exists(_socketPath))
+                break;
+
+            await Task.Delay(10, ct);
+        }
     }
 
     public override async Task StartAsync(Process process, CancellationToken ct)

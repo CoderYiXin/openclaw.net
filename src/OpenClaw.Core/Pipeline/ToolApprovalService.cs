@@ -37,6 +37,9 @@ public sealed record ToolApprovalRequest
     public required string SenderId { get; init; }
     public required string ToolName { get; init; }
     public required string Arguments { get; init; }
+    public string? Action { get; init; }
+    public bool IsMutation { get; init; }
+    public string Summary { get; init; } = "";
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
@@ -54,7 +57,16 @@ public sealed class ToolApprovalService
 
     private readonly ConcurrentDictionary<string, Pending> _pending = new(StringComparer.Ordinal);
 
-    public ToolApprovalRequest Create(string sessionId, string channelId, string senderId, string toolName, string arguments, TimeSpan timeout)
+    public ToolApprovalRequest Create(
+        string sessionId,
+        string channelId,
+        string senderId,
+        string toolName,
+        string arguments,
+        TimeSpan timeout,
+        string? action = null,
+        bool isMutation = false,
+        string? summary = null)
     {
         var approvalId = $"apr_{Guid.NewGuid():N}"[..20];
         var req = new ToolApprovalRequest
@@ -64,7 +76,10 @@ public sealed class ToolApprovalService
             ChannelId = channelId,
             SenderId = senderId,
             ToolName = toolName,
-            Arguments = arguments
+            Arguments = arguments,
+            Action = string.IsNullOrWhiteSpace(action) ? null : action,
+            IsMutation = isMutation,
+            Summary = summary ?? ""
         };
 
         var p = new Pending

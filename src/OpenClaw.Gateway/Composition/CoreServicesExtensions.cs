@@ -1,8 +1,11 @@
 using Microsoft.Extensions.AI;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
+using OpenClaw.Agent.Execution;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Features;
 using OpenClaw.Core.Memory;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Pipeline;
 using OpenClaw.Core.Security;
@@ -26,6 +29,8 @@ internal static class CoreServicesExtensions
             new AllowlistManager(config.Memory.StoragePath, sp.GetRequiredService<ILogger<AllowlistManager>>()));
 
         services.AddSingleton<IMemoryStore>(_ => CreateMemoryStore(config));
+        services.AddSingleton<ISessionSearchStore>(sp => (ISessionSearchStore)sp.GetRequiredService<IMemoryStore>());
+        AddFeatureStores(services, config);
         services.AddSingleton<RuntimeMetrics>();
         services.AddSingleton<ProviderUsageTracker>();
         services.AddSingleton<ToolUsageTracker>();
@@ -38,7 +43,40 @@ internal static class CoreServicesExtensions
             new SessionMetadataStore(
                 config.Memory.StoragePath,
                 sp.GetRequiredService<ILogger<SessionMetadataStore>>()));
+        services.AddSingleton(sp => new MediaCacheStore(config.Multimodal.MediaCachePath));
+        services.AddSingleton<GeminiMultimodalService>();
+        services.AddSingleton<GeminiLiveProxyService>();
+        services.AddSingleton<ToolPresetResolver>();
+        services.AddSingleton<IToolPresetResolver>(sp => sp.GetRequiredService<ToolPresetResolver>());
+        services.AddSingleton(sp =>
+            new ToolExecutionRouter(
+                config,
+                sp.GetService<IToolSandbox>(),
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ToolExecutionRouter>()));
+        services.AddSingleton<ExecutionProcessService>(sp =>
+        {
+            var svc = new ExecutionProcessService(
+                sp.GetRequiredService<ToolExecutionRouter>(),
+                sp.GetService<ILoggerFactory>()?.CreateLogger<ExecutionProcessService>());
+            var eventStore = sp.GetService<RuntimeEventStore>();
+            if (eventStore is not null)
+            {
+                svc.OnRuntimeEvent = (component, action, summary) =>
+                    eventStore.Append(new RuntimeEventEntry
+                    {
+                        Id = $"evt_{Guid.NewGuid():N}"[..20],
+                        Component = component,
+                        Action = action,
+                        Summary = summary,
+                        Severity = action is "failed" or "timed_out" ? "warning" : "info"
+                    });
+            }
+
+            return svc;
+        });
         services.AddSingleton<HeartbeatService>();
+        services.AddSingleton<GatewayAutomationService>();
+        services.AddSingleton<LearningService>();
         services.AddSingleton<ICronJobSource, GatewayCronJobSource>();
         services.AddSingleton<ActorRateLimitService>(sp =>
             new ActorRateLimitService(
@@ -62,19 +100,41 @@ internal static class CoreServicesExtensions
         return services;
     }
 
+    private static void AddFeatureStores(IServiceCollection services, GatewayConfig config)
+    {
+        if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<SqliteFeatureStore>(_ => new SqliteFeatureStore(ResolveSqliteDbPath(config)));
+            services.AddSingleton<IAutomationStore>(sp => sp.GetRequiredService<SqliteFeatureStore>());
+            services.AddSingleton<IUserProfileStore>(sp => sp.GetRequiredService<SqliteFeatureStore>());
+            services.AddSingleton<ILearningProposalStore>(sp => sp.GetRequiredService<SqliteFeatureStore>());
+            return;
+        }
+
+        services.AddSingleton<FileFeatureStore>(_ => new FileFeatureStore(config.Memory.StoragePath));
+        services.AddSingleton<IAutomationStore>(sp => sp.GetRequiredService<FileFeatureStore>());
+        services.AddSingleton<IUserProfileStore>(sp => sp.GetRequiredService<FileFeatureStore>());
+        services.AddSingleton<ILearningProposalStore>(sp => sp.GetRequiredService<FileFeatureStore>());
+    }
+
+    private static string ResolveSqliteDbPath(GatewayConfig config)
+    {
+        var dbPath = config.Memory.Sqlite.DbPath;
+        if (!Path.IsPathRooted(dbPath))
+        {
+            if (dbPath.Contains(Path.DirectorySeparatorChar) || dbPath.Contains(Path.AltDirectorySeparatorChar))
+                dbPath = Path.Combine(Directory.GetCurrentDirectory(), dbPath);
+            else
+                dbPath = Path.Combine(config.Memory.StoragePath, dbPath);
+        }
+
+        return Path.GetFullPath(dbPath);
+    }
+
     private static IMemoryStore CreateMemoryStore(OpenClaw.Core.Models.GatewayConfig config)
     {
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
-            var dbPath = config.Memory.Sqlite.DbPath;
-            if (!Path.IsPathRooted(dbPath))
-            {
-                if (dbPath.Contains(Path.DirectorySeparatorChar) || dbPath.Contains(Path.AltDirectorySeparatorChar))
-                    dbPath = Path.Combine(Directory.GetCurrentDirectory(), dbPath);
-                else
-                    dbPath = Path.Combine(config.Memory.StoragePath, dbPath);
-            }
-
             var sqliteConfig = config.Memory.Sqlite;
             IEmbeddingGenerator<string, Embedding<float>>? embeddingGen = null;
             if (sqliteConfig.EnableVectors && !string.IsNullOrWhiteSpace(sqliteConfig.EmbeddingModel))
@@ -83,7 +143,7 @@ internal static class CoreServicesExtensions
             }
 
             var store = new SqliteMemoryStore(
-                Path.GetFullPath(dbPath),
+                ResolveSqliteDbPath(config),
                 sqliteConfig.EnableFts,
                 embeddingGenerator: embeddingGen,
                 enableVectors: sqliteConfig.EnableVectors);

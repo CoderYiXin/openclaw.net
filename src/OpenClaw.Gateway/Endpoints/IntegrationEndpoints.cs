@@ -14,8 +14,7 @@ internal static class IntegrationEndpoints
         GatewayAppRuntime runtime)
     {
         var browserSessions = app.Services.GetRequiredService<BrowserSessionAuthService>();
-        var sessionAdminStore = (ISessionAdminStore)app.Services.GetRequiredService<IMemoryStore>();
-        var facade = new IntegrationApiFacade(startup, runtime, sessionAdminStore);
+        var facade = IntegrationApiFacade.Create(startup, runtime, app.Services);
         var group = app.MapGroup("/api/integration").WithTags("OpenClaw Integration");
 
         group.MapGet("/dashboard", async (HttpContext ctx) =>
@@ -179,6 +178,171 @@ internal static class IntegrationEndpoints
             }
 
             return Results.Json(timeline, CoreJsonContext.Default.IntegrationSessionTimelineResponse);
+        });
+
+        group.MapGet("/session-search", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var text = GetOptionalQueryString(ctx, "text");
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "text is required." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            return Results.Json(
+                await facade.SearchSessionsAsync(new SessionSearchQuery
+                {
+                    Text = text,
+                    ChannelId = GetOptionalQueryString(ctx, "channelId"),
+                    SenderId = GetOptionalQueryString(ctx, "senderId"),
+                    FromUtc = GetQueryDateTimeOffset(ctx, "fromUtc"),
+                    ToUtc = GetQueryDateTimeOffset(ctx, "toUtc"),
+                    Limit = GetQueryInt(ctx, "limit", 25),
+                    SnippetLength = GetQueryInt(ctx, "snippetLength", 180)
+                }, ctx.RequestAborted),
+                CoreJsonContext.Default.IntegrationSessionSearchResponse);
+        });
+
+        group.MapGet("/profiles", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                await facade.ListProfilesAsync(ctx.RequestAborted),
+                CoreJsonContext.Default.IntegrationProfilesResponse);
+        });
+
+        group.MapGet("/tool-presets", (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                facade.ListToolPresets(),
+                CoreJsonContext.Default.IntegrationToolPresetsResponse);
+        });
+
+        group.MapGet("/profiles/{actorId}", async (HttpContext ctx, string actorId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var response = await facade.GetProfileAsync(actorId, ctx.RequestAborted);
+            if (response.Profile is null)
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "Profile not found." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+
+            return Results.Json(response, CoreJsonContext.Default.IntegrationProfileResponse);
+        });
+
+        group.MapPut("/profiles/{actorId}", async (HttpContext ctx, string actorId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            IntegrationProfileUpdateRequest? request;
+            try
+            {
+                request = await JsonSerializer.DeserializeAsync(
+                    ctx.Request.Body,
+                    CoreJsonContext.Default.IntegrationProfileUpdateRequest,
+                    ctx.RequestAborted);
+            }
+            catch
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "Invalid JSON request body." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            if (request?.Profile is null)
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "profile is required." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            return Results.Json(
+                await facade.SaveProfileAsync(actorId, request.Profile, ctx.RequestAborted),
+                CoreJsonContext.Default.IntegrationProfileResponse);
+        });
+
+        group.MapGet("/automations", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                await facade.ListAutomationsAsync(ctx.RequestAborted),
+                CoreJsonContext.Default.IntegrationAutomationsResponse);
+        });
+
+        group.MapGet("/automations/{id}", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var detail = await facade.GetAutomationAsync(id, ctx.RequestAborted);
+            if (detail.Automation is null)
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "Automation not found." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+
+            return Results.Json(detail, CoreJsonContext.Default.IntegrationAutomationDetailResponse);
+        });
+
+        group.MapPost("/automations/{id}/run", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            AutomationRunRequest? request = null;
+            if (ctx.Request.ContentLength is > 0)
+            {
+                try
+                {
+                    request = await JsonSerializer.DeserializeAsync(
+                        ctx.Request.Body,
+                        CoreJsonContext.Default.AutomationRunRequest,
+                        ctx.RequestAborted);
+                }
+                catch
+                {
+                    return Results.Json(
+                        new OperationStatusResponse { Success = false, Error = "Invalid JSON request body." },
+                        CoreJsonContext.Default.OperationStatusResponse,
+                        statusCode: StatusCodes.Status400BadRequest);
+                }
+            }
+
+            var result = await facade.RunAutomationAsync(id, request?.DryRun ?? false, ctx.RequestAborted);
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status404NotFound);
         });
 
         group.MapGet("/runtime-events", (HttpContext ctx) =>

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using Microsoft.Extensions.AI;
 using OpenClaw.Agent;
+using OpenClaw.Agent.Execution;
 using OpenClaw.Agent.Integrations;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Agent.Tools;
@@ -21,6 +22,7 @@ using OpenClaw.Gateway;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Extensions;
 using OpenClaw.Gateway.Profiles;
+using OpenClaw.Gateway.Tools;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -37,11 +39,8 @@ internal static class RuntimeInitializationExtensions
         var channelComposition = await BuildChannelCompositionAsync(app, startup, services, loggerFactory);
         var builtInTools = CreateBuiltInTools(
             config,
-            services.MemoryStore,
-            services.SessionManager,
-            services.Pipeline,
-            startup.WorkspacePath,
-            services.RuntimeMetrics);
+            services,
+            startup.WorkspacePath);
         if (config.Plugins.Mcp.Enabled)
             await services.McpRegistry.RegisterToolsAsync(services.NativeRegistry, app.Lifetime.ApplicationStopping);
 
@@ -181,8 +180,13 @@ internal static class RuntimeInitializationExtensions
             ActorRateLimits = app.Services.GetRequiredService<ActorRateLimitService>(),
             SessionMetadataStore = app.Services.GetRequiredService<SessionMetadataStore>(),
             HeartbeatService = app.Services.GetRequiredService<HeartbeatService>(),
+            AutomationService = app.Services.GetRequiredService<GatewayAutomationService>(),
             PluginHealth = app.Services.GetRequiredService<PluginHealthService>(),
             MemoryStore = app.Services.GetRequiredService<IMemoryStore>(),
+            SessionSearchStore = app.Services.GetRequiredService<ISessionSearchStore>(),
+            UserProfileStore = app.Services.GetRequiredService<IUserProfileStore>(),
+            ProcessService = app.Services.GetRequiredService<ExecutionProcessService>(),
+            GeminiMultimodalService = app.Services.GetRequiredService<GeminiMultimodalService>(),
             CronJobSource = app.Services.GetRequiredService<ICronJobSource>(),
             ContractGovernance = app.Services.GetRequiredService<ContractGovernanceService>(),
             ToolSandbox = app.Services.GetService<IToolSandbox>(),
@@ -424,11 +428,8 @@ internal static class RuntimeInitializationExtensions
 
     private static IReadOnlyList<ITool> CreateBuiltInTools(
         GatewayConfig config,
-        IMemoryStore memoryStore,
-        SessionManager sessionManager,
-        MessagePipeline pipeline,
-        string? workspacePath,
-        RuntimeMetrics runtimeMetrics)
+        RuntimeServices services,
+        string? workspacePath)
     {
         var projectId = config.Memory.ProjectId
             ?? Environment.GetEnvironmentVariable("OPENCLAW_PROJECT")
@@ -439,14 +440,21 @@ internal static class RuntimeInitializationExtensions
             new ShellTool(config.Tooling),
             new FileReadTool(config.Tooling),
             new FileWriteTool(config.Tooling),
-            new MemoryNoteTool(memoryStore),
-            new MemorySearchTool((IMemoryNoteSearch)memoryStore),
-            new ProjectMemoryTool(memoryStore, projectId),
-            new SessionsTool(sessionManager, pipeline.InboundWriter)
+            new ProcessTool(services.ProcessService, config.Tooling),
+            new MemoryNoteTool(services.MemoryStore),
+            new MemorySearchTool((IMemoryNoteSearch)services.MemoryStore),
+            new ProjectMemoryTool(services.MemoryStore, projectId),
+            new SessionsTool(services.SessionManager, services.Pipeline.InboundWriter),
+            new SessionSearchTool(services.SessionSearchStore),
+            new ProfileReadTool(services.UserProfileStore),
+            new TodoTool(services.SessionMetadataStore),
+            new AutomationTool(services.AutomationService, services.Pipeline),
+            new VisionAnalyzeTool(services.GeminiMultimodalService),
+            new TextToSpeechTool(services.GeminiMultimodalService)
         };
 
         if (config.Tooling.EnableBrowserTool)
-            tools.Add(new BrowserTool(config.Tooling, runtimeMetrics));
+            tools.Add(new BrowserTool(config.Tooling, services.RuntimeMetrics));
 
         if (string.Equals(Environment.GetEnvironmentVariable("OPENCLAW_ENABLE_STREAMING_SMOKE_TOOL"), "1", StringComparison.Ordinal))
             tools.Add(new StreamingSmokeEchoTool());
@@ -950,8 +958,13 @@ internal static class RuntimeInitializationExtensions
         public required ActorRateLimitService ActorRateLimits { get; init; }
         public required SessionMetadataStore SessionMetadataStore { get; init; }
         public required HeartbeatService HeartbeatService { get; init; }
+        public required GatewayAutomationService AutomationService { get; init; }
         public required PluginHealthService PluginHealth { get; init; }
         public required IMemoryStore MemoryStore { get; init; }
+        public required ISessionSearchStore SessionSearchStore { get; init; }
+        public required IUserProfileStore UserProfileStore { get; init; }
+        public required ExecutionProcessService ProcessService { get; init; }
+        public required GeminiMultimodalService GeminiMultimodalService { get; init; }
         public required ICronJobSource CronJobSource { get; init; }
         public required ContractGovernanceService ContractGovernance { get; init; }
         public IToolSandbox? ToolSandbox { get; init; }

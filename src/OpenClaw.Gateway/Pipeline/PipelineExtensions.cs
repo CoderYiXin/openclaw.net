@@ -1,8 +1,10 @@
 using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.DependencyInjection;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Middleware;
+using OpenClaw.Gateway;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Composition;
 using OpenClaw.Gateway.Extensions;
@@ -108,7 +110,9 @@ internal static class PipelineExtensions
             runtime.PairingManager,
             runtime.CommandProcessor,
             runtime.Operations,
-            runtime.RuntimeMetrics);
+            runtime.RuntimeMetrics,
+            app.Services.GetService<LearningService>(),
+            app.Services.GetService<GatewayAutomationService>());
     }
 
     private static void StartChannels(WebApplication app, GatewayAppRuntime runtime)
