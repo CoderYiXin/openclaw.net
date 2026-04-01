@@ -36,7 +36,7 @@ If this repo is useful to you, please star it.
 - Context compaction (`/compact` command or automatic) with LLM-powered summarization
 - Configurable reasoning effort (`/think off|low|medium|high`)
 - Delegated sub-agents with configurable profiles, tool restrictions, and depth limits
-- Multi-agent routing — route channels/senders to isolated agents with per-route model, prompt, workspace, and tool preset overrides
+- Multi-agent routing — route channels/senders with per-route model, prompt, tool preset, and tool allowlist overrides
 
 ### 48 Native Tools
 

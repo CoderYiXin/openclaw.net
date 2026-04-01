@@ -1199,15 +1199,9 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private List<ChatMessage> BuildMessages(Session session)
     {
-        string systemPrompt;
-        lock (_skillGate)
-        {
-            systemPrompt = _systemPrompt;
-        }
-
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, systemPrompt)
+            new(ChatRole.System, GetSystemPrompt(session))
         };
 
         // Add history (bounded to avoid context overflow)
@@ -1237,6 +1231,20 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         return messages;
+    }
+
+    private string GetSystemPrompt(Session session)
+    {
+        string systemPrompt;
+        lock (_skillGate)
+        {
+            systemPrompt = _systemPrompt;
+        }
+
+        if (string.IsNullOrWhiteSpace(session.SystemPromptOverride))
+            return systemPrompt;
+
+        return systemPrompt + "\n\n[Route Instructions]\n" + session.SystemPromptOverride.Trim();
     }
 
     private static IList<AIContent> BuildTurnContents(string content)

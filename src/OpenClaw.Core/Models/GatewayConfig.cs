@@ -555,8 +555,6 @@ public sealed class AgentRouteConfig
 {
     public string? ChannelId { get; set; }
     public string? SenderId { get; set; }
-    public string? ProfileName { get; set; }
-    public string? WorkspaceRoot { get; set; }
     public string? SystemPrompt { get; set; }
     public string? ModelOverride { get; set; }
     public string? PresetId { get; set; }

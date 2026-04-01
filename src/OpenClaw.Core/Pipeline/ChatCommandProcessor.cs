@@ -127,9 +127,9 @@ public sealed class ChatCommandProcessor
                 var turnsBefore = session.History.Count;
                 if (_compactCallback is not null)
                 {
-                    var kept = await _compactCallback(session, ct);
+                    var remainingTurns = await _compactCallback(session, ct);
                     await _sessionManager.PersistAsync(session, ct);
-                    return (true, $"Compacted: {turnsBefore} turns → {session.History.Count} turns ({kept} recent turns preserved).");
+                    return (true, $"Compacted: {turnsBefore} turns → {remainingTurns} turns remaining.");
                 }
 
                 // Fallback: simple trim keeping last 10 turns

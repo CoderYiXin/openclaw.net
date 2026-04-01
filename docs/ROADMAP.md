@@ -6,7 +6,7 @@
 - **Tool expansion** (34 → 48 native tools): edit_file, apply_patch, message, x_search, memory_get, sessions_history, sessions_send, sessions_spawn, session_status, sessions_yield, agents_list, cron, gateway, profile_write.
 - **Tool presets and groups**: 4 new built-in presets (full, coding, messaging, minimal) and 7 built-in tool groups (group:runtime, group:fs, group:sessions, group:memory, group:web, group:automation, group:messaging).
 - **Chat commands**: /think (reasoning effort), /compact (history compaction), /verbose (tool call/token output).
-- **Multi-agent routing**: per-channel/sender routing with model override, system prompt, workspace isolation, and tool preset config.
+- **Multi-agent routing**: per-channel/sender routing with model override, route-scoped prompt instructions, tool presets, and tool allowlist restrictions.
 - **Integrations**: Tailscale Serve/Funnel, Gmail Pub/Sub event bridge, mDNS/Bonjour service discovery.
 - **Plugin installer**: built-in `openclaw plugins install/remove/list/search` for npm/ClawHub packages.
 - Security audit closure for plugin IPC hardening, plugin-root containment, browser cancellation recovery, strict session-cap admission, and session-lock disposal.

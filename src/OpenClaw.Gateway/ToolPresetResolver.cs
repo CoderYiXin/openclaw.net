@@ -72,9 +72,11 @@ internal sealed class ToolPresetResolver : IToolPresetResolver
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var metadata = _metadataStore.Get(session.Id);
-        var requestedPresetId = metadata.ActivePresetId;
         var surface = InferSurface(session);
+        var metadata = _metadataStore.Get(session.Id);
+        var requestedPresetId = !string.IsNullOrWhiteSpace(session.RoutePresetId)
+            ? session.RoutePresetId
+            : metadata.ActivePresetId;
         var presetId = string.IsNullOrWhiteSpace(requestedPresetId)
             ? ResolvePresetIdForSurface(surface)
             : requestedPresetId!.Trim();

@@ -24,6 +24,15 @@ public sealed class Session
     /// <summary>Optional model override for this specific session (set via /model command).</summary>
     public string? ModelOverride { get; set; }
 
+    /// <summary>Optional route-scoped system prompt appended by gateway routing before runtime execution.</summary>
+    public string? SystemPromptOverride { get; set; }
+
+    /// <summary>Optional route-scoped tool preset that overrides the default preset resolution.</summary>
+    public string? RoutePresetId { get; set; }
+
+    /// <summary>Optional route-scoped tool allowlist applied in addition to preset filtering.</summary>
+    public string[] RouteAllowedTools { get; set; } = [];
+
     /// <summary>Reasoning effort level for extended thinking (null/off, low, medium, high). Set via /think command.</summary>
     public string? ReasoningEffort { get; set; }
 

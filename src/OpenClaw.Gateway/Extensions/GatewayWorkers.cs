@@ -409,8 +409,26 @@ internal static class GatewayWorkers
                             // Apply route overrides to session
                             if (resolvedRoute is not null)
                             {
-                                if (resolvedRoute.ModelOverride is not null)
-                                    session.ModelOverride = resolvedRoute.ModelOverride;
+                                session.ModelOverride = string.IsNullOrWhiteSpace(resolvedRoute.ModelOverride)
+                                    ? session.ModelOverride
+                                    : resolvedRoute.ModelOverride.Trim();
+                                session.SystemPromptOverride = string.IsNullOrWhiteSpace(resolvedRoute.SystemPrompt)
+                                    ? null
+                                    : resolvedRoute.SystemPrompt.Trim();
+                                session.RoutePresetId = string.IsNullOrWhiteSpace(resolvedRoute.PresetId)
+                                    ? null
+                                    : resolvedRoute.PresetId.Trim();
+                                session.RouteAllowedTools = resolvedRoute.AllowedTools
+                                    .Where(static item => !string.IsNullOrWhiteSpace(item))
+                                    .Select(static item => item.Trim())
+                                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                                    .ToArray();
+                            }
+                            else
+                            {
+                                session.SystemPromptOverride = null;
+                                session.RoutePresetId = null;
+                                session.RouteAllowedTools = [];
                             }
 
                             initialInputTokens = session.TotalInputTokens;
@@ -592,9 +610,16 @@ internal static class GatewayWorkers
                             {
                                 await wsChannel.SendStreamEventAsync(msg.SenderId, "typing_start", "", msg.MessageId, lifetime.ApplicationStopping);
 
+                                AgentStreamEvent? doneEvent = null;
                                 await foreach (var evt in agentRuntime.RunStreamingAsync(
                                     session, messageText, lifetime.ApplicationStopping, approvalCallback: ApprovalCallback))
                                 {
+                                    if (string.Equals(evt.EnvelopeType, "assistant_done", StringComparison.Ordinal))
+                                    {
+                                        doneEvent = evt;
+                                        continue;
+                                    }
+
                                     await wsChannel.SendStreamEventAsync(
                                         msg.SenderId, evt.EnvelopeType, evt.Content, msg.MessageId,
                                         lifetime.ApplicationStopping);
@@ -619,6 +644,16 @@ internal static class GatewayWorkers
                                     }
                                     var verboseFooter = $"\n\n---\n{streamToolCalls} tool call(s) | {streamInputDelta} in / {streamOutputDelta} out tokens (this turn)";
                                     await wsChannel.SendStreamEventAsync(msg.SenderId, "text_delta", verboseFooter, msg.MessageId, lifetime.ApplicationStopping);
+                                }
+
+                                if (doneEvent is AgentStreamEvent completedEvent)
+                                {
+                                    await wsChannel.SendStreamEventAsync(
+                                        msg.SenderId,
+                                        completedEvent.EnvelopeType,
+                                        completedEvent.Content,
+                                        msg.MessageId,
+                                        lifetime.ApplicationStopping);
                                 }
 
                                 await wsChannel.SendStreamEventAsync(msg.SenderId, "typing_stop", "", msg.MessageId, lifetime.ApplicationStopping);
