@@ -124,9 +124,10 @@ internal static class RuntimeInitializationExtensions
         {
             services.CommandProcessor.SetCompactCallback(async (session, ct) =>
             {
-                var before = session.History.Count;
+                var countBefore = session.History.Count;
                 await concreteRuntime.CompactHistoryAsync(session, ct);
-                return Math.Min(config.Memory.CompactionKeepRecent, session.History.Count);
+                var countAfter = session.History.Count;
+                return countAfter; // Return actual remaining turn count
             });
         }
 

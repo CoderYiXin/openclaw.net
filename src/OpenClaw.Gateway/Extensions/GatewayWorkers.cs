@@ -184,6 +184,10 @@ internal static class GatewayWorkers
         LearningService? learningService,
         GatewayAutomationService? automationService)
     {
+        var routeResolver = config.Routing.Enabled
+            ? new OpenClaw.Gateway.Integrations.AgentRouteResolver(config.Routing)
+            : null;
+
         for (var i = 0; i < workerCount; i++)
         {
             _ = Task.Run(async () =>
@@ -394,12 +398,7 @@ internal static class GatewayWorkers
                             }
 
                             // ── Multi-Agent Route Resolution ─────────────────
-                            OpenClaw.Core.Models.AgentRouteConfig? resolvedRoute = null;
-                            if (config.Routing.Enabled)
-                            {
-                                var routeResolver = new OpenClaw.Gateway.Integrations.AgentRouteResolver(config.Routing);
-                                resolvedRoute = routeResolver.Resolve(msg.ChannelId, msg.SenderId);
-                            }
+                            var resolvedRoute = routeResolver?.Resolve(msg.ChannelId, msg.SenderId);
 
                             session = msg.SessionId is not null
                                 ? await sessionManager.GetOrCreateByIdAsync(msg.SessionId, msg.ChannelId, conversationRecipientId, lifetime.ApplicationStopping)
@@ -411,7 +410,7 @@ internal static class GatewayWorkers
                             if (resolvedRoute is not null)
                             {
                                 if (resolvedRoute.ModelOverride is not null)
-                                    session.ModelOverride ??= resolvedRoute.ModelOverride;
+                                    session.ModelOverride = resolvedRoute.ModelOverride;
                             }
 
                             initialInputTokens = session.TotalInputTokens;
@@ -603,6 +602,25 @@ internal static class GatewayWorkers
                                 await sessionManager.PersistAsync(session, lifetime.ApplicationStopping);
                                 if (learningService is not null)
                                     await learningService.ObserveSessionAsync(session, lifetime.ApplicationStopping);
+
+                                // Send verbose footer via stream for streaming sessions
+                                if (session.VerboseMode)
+                                {
+                                    var streamInputDelta = session.TotalInputTokens - initialInputTokens;
+                                    var streamOutputDelta = session.TotalOutputTokens - initialOutputTokens;
+                                    var streamToolCalls = 0;
+                                    for (var ti = session.History.Count - 1; ti >= 0; ti--)
+                                    {
+                                        var turn = session.History[ti];
+                                        if (turn.ToolCalls is { Count: > 0 })
+                                            streamToolCalls += turn.ToolCalls.Count;
+                                        if (string.Equals(turn.Role, "user", StringComparison.Ordinal))
+                                            break;
+                                    }
+                                    var verboseFooter = $"\n\n---\n{streamToolCalls} tool call(s) | {streamInputDelta} in / {streamOutputDelta} out tokens (this turn)";
+                                    await wsChannel.SendStreamEventAsync(msg.SenderId, "text_delta", verboseFooter, msg.MessageId, lifetime.ApplicationStopping);
+                                }
+
                                 await wsChannel.SendStreamEventAsync(msg.SenderId, "typing_stop", "", msg.MessageId, lifetime.ApplicationStopping);
                             }
                             else
@@ -639,9 +657,18 @@ internal static class GatewayWorkers
                                 // Append verbose mode footer (tool calls and token delta)
                                 if (session.VerboseMode)
                                 {
-                                    var lastTurn = session.History.Count > 0 ? session.History[^1] : null;
-                                    var toolCallCount = lastTurn?.ToolCalls?.Count ?? 0;
-                                    responseText += $"\n\n---\n🔧 {toolCallCount} tool call(s) | ↑ {inputTokenDelta} in / {outputTokenDelta} out tokens (this turn)";
+                                    // Tool calls may be spread across multiple turns added during this run
+                                    var turnToolCalls = 0;
+                                    for (var ti = session.History.Count - 1; ti >= 0; ti--)
+                                    {
+                                        var turn = session.History[ti];
+                                        if (turn.ToolCalls is { Count: > 0 })
+                                            turnToolCalls += turn.ToolCalls.Count;
+                                        // Stop once we reach a user turn (start of this interaction)
+                                        if (string.Equals(turn.Role, "user", StringComparison.Ordinal))
+                                            break;
+                                    }
+                                    responseText += $"\n\n---\n{turnToolCalls} tool call(s) | {inputTokenDelta} in / {outputTokenDelta} out tokens (this turn)";
                                 }
 
                                 // Append Usage Tracking string if configured
