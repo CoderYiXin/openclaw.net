@@ -12,7 +12,7 @@
 
 > **Disclaimer**: This project is not affiliated with, endorsed by, or associated with [OpenClaw](https://github.com/openclaw/openclaw). It is an independent .NET implementation inspired by their work.
 
-Self-hosted **AI agent runtime and gateway for .NET** with 48 native tools, 9 channel adapters, multi-agent routing, built-in tool presets, NativeAOT support, and practical OpenClaw ecosystem compatibility.
+Self-hosted **AI agent runtime and gateway for .NET** with 48 native tools, 9 channel adapters, multi-agent routing, review-first self-evolving features, built-in tool presets, NativeAOT support, and practical OpenClaw ecosystem compatibility.
 
 ## Why This Project Exists
 
@@ -25,6 +25,7 @@ OpenClaw.NET takes a different path:
 - A real **tool execution layer** with approval hooks, timeout handling, usage tracking, and optional sandbox routing
 - **48 native tools** covering file ops, sessions, memory, web search, messaging, home automation, databases, email, calendar, and more
 - **9 channel adapters** (Telegram, SMS, WhatsApp, Teams, Slack, Discord, Signal, email, webhooks) with DM policy, allowlists, and signature validation
+- **Review-first self-evolving workflows** that can propose profile updates, automation drafts, and skill drafts from repeated successful sessions
 - A foundation for **production-oriented agent infrastructure in .NET**
 
 If this repo is useful to you, please star it.
@@ -37,6 +38,22 @@ If this repo is useful to you, please star it.
 - Configurable reasoning effort (`/think off|low|medium|high`)
 - Delegated sub-agents with configurable profiles, tool restrictions, and depth limits
 - Multi-agent routing — route channels/senders with per-route model, prompt, tool preset, and tool allowlist overrides
+- Persistent session search, user profiles, and session-scoped todo state available to the agent and operators
+
+### Review-First Learning
+
+- The runtime can observe completed sessions and create **pending learning proposals** instead of auto-mutating behavior
+- Proposal kinds include **`profile_update`**, **`automation_suggestion`**, and **`skill_draft`**
+- Approving a proposal can update a user profile, create a disabled automation draft, or write a managed skill draft and reload skills
+- Rejections, approvals, and source-session references are preserved so operators can audit what the system learned and why
+- Learning proposals are available over the admin API, `OpenClaw.Client`, and the TUI review flow
+
+### Memory, Profiles, and Automation
+
+- **Session search** spans persisted conversation content for recall and operator lookup
+- **User profiles** store stable facts, preferences, projects, tone, and recent intent, with native `profile_read` / `profile_write` tools
+- **Automations** support list/get/preview/create/update/pause/resume/run flows and integrate with cron-backed delivery
+- **Todos** are persisted per session and available through the native `todo` tool and operator surfaces
 
 ### 48 Native Tools
 
