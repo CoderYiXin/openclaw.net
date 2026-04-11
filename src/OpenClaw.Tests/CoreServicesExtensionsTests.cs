@@ -15,36 +15,42 @@ public sealed class CoreServicesExtensionsTests
     {
         var tempPath = Path.Combine(Path.GetTempPath(), "openclaw-core-services-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempPath);
-
-        var config = new GatewayConfig
+        try
         {
-            Memory = new MemoryConfig
+            var config = new GatewayConfig
             {
-                StoragePath = tempPath
-            }
-        };
-        var startup = new GatewayStartupContext
+                Memory = new MemoryConfig
+                {
+                    StoragePath = tempPath
+                }
+            };
+            var startup = new GatewayStartupContext
+            {
+                Config = config,
+                RuntimeState = new GatewayRuntimeState
+                {
+                    RequestedMode = "jit",
+                    EffectiveMode = GatewayRuntimeMode.Jit,
+                    DynamicCodeSupported = true
+                },
+                IsNonLoopbackBind = false
+            };
+
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddOptions();
+            services.AddOpenClawCoreServices(startup);
+
+            using var provider = services.BuildServiceProvider();
+
+            Assert.Same(config.Learning, provider.GetRequiredService<LearningConfig>());
+            Assert.NotNull(provider.GetRequiredService<LearningService>());
+            Assert.NotNull(provider.GetRequiredService<ISessionAdminStore>());
+        }
+        finally
         {
-            Config = config,
-            RuntimeState = new GatewayRuntimeState
-            {
-                RequestedMode = "jit",
-                EffectiveMode = GatewayRuntimeMode.Jit,
-                DynamicCodeSupported = true
-            },
-            IsNonLoopbackBind = false
-        };
-
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddOptions();
-        services.AddOpenClawCoreServices(startup);
-
-        using var provider = services.BuildServiceProvider();
-
-        Assert.Same(config.Learning, provider.GetRequiredService<LearningConfig>());
-        Assert.NotNull(provider.GetRequiredService<LearningService>());
-        Assert.NotNull(provider.GetRequiredService<ISessionAdminStore>());
+            DeleteDirectoryIfPresent(tempPath);
+        }
     }
 
     [Fact]
@@ -52,38 +58,59 @@ public sealed class CoreServicesExtensionsTests
     {
         var tempPath = Path.Combine(Path.GetTempPath(), "openclaw-core-services-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempPath);
-
-        var config = new GatewayConfig
+        try
         {
-            Memory = new MemoryConfig
+            var config = new GatewayConfig
             {
-                StoragePath = tempPath
-            }
-        };
-        var startup = new GatewayStartupContext
-        {
-            Config = config,
-            RuntimeState = new GatewayRuntimeState
+                Memory = new MemoryConfig
+                {
+                    StoragePath = tempPath
+                }
+            };
+            var startup = new GatewayStartupContext
             {
-                RequestedMode = "jit",
-                EffectiveMode = GatewayRuntimeMode.Jit,
-                DynamicCodeSupported = true
-            },
-            IsNonLoopbackBind = false
-        };
+                Config = config,
+                RuntimeState = new GatewayRuntimeState
+                {
+                    RequestedMode = "jit",
+                    EffectiveMode = GatewayRuntimeMode.Jit,
+                    DynamicCodeSupported = true
+                },
+                IsNonLoopbackBind = false
+            };
 
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddOptions();
-        services.AddOpenClawCoreServices(startup);
-        services.AddOpenClawSecurityServices(startup);
+            var services = new ServiceCollection();
+            services.AddLogging();
+            services.AddOptions();
+            services.AddOpenClawCoreServices(startup);
+            services.AddOpenClawSecurityServices(startup);
 
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+            {
+                ValidateOnBuild = true,
+                ValidateScopes = true
+            });
+
+            Assert.NotNull(provider.GetRequiredService<GatewayLlmExecutionService>());
+        }
+        finally
         {
-            ValidateOnBuild = true,
-            ValidateScopes = true
-        });
+            DeleteDirectoryIfPresent(tempPath);
+        }
+    }
 
-        Assert.NotNull(provider.GetRequiredService<GatewayLlmExecutionService>());
+    private static void DeleteDirectoryIfPresent(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
