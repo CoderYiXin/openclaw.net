@@ -46,4 +46,44 @@ public sealed class CoreServicesExtensionsTests
         Assert.NotNull(provider.GetRequiredService<LearningService>());
         Assert.NotNull(provider.GetRequiredService<ISessionAdminStore>());
     }
+
+    [Fact]
+    public void AddOpenClawCoreServices_WithSecurityServices_AllowsGatewayLlmExecutionServiceToResolveDuringValidation()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), "openclaw-core-services-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempPath);
+
+        var config = new GatewayConfig
+        {
+            Memory = new MemoryConfig
+            {
+                StoragePath = tempPath
+            }
+        };
+        var startup = new GatewayStartupContext
+        {
+            Config = config,
+            RuntimeState = new GatewayRuntimeState
+            {
+                RequestedMode = "jit",
+                EffectiveMode = GatewayRuntimeMode.Jit,
+                DynamicCodeSupported = true
+            },
+            IsNonLoopbackBind = false
+        };
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddOptions();
+        services.AddOpenClawCoreServices(startup);
+        services.AddOpenClawSecurityServices(startup);
+
+        using var provider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+
+        Assert.NotNull(provider.GetRequiredService<GatewayLlmExecutionService>());
+    }
 }
