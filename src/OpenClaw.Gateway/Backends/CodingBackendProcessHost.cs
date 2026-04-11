@@ -151,6 +151,8 @@ internal sealed class CodingBackendProcessHost
         private readonly ILogger _logger;
         private readonly CancellationTokenSource _stopCts = new();
         private readonly object _completionGate = new();
+        private Task _stdoutTask = Task.CompletedTask;
+        private Task _stderrTask = Task.CompletedTask;
         private string? _requestedCompletionState;
         private int? _requestedExitCode;
         private string? _requestedCompletionReason;
@@ -183,8 +185,8 @@ internal sealed class CodingBackendProcessHost
             };
             await _runtime.UpdateSessionAsync(running, ct);
 
-            _ = Task.Run(() => PumpOutputAsync(_process.StandardOutput, _stdoutParser, _stopCts.Token));
-            _ = Task.Run(() => PumpOutputAsync(_process.StandardError, _stderrParser, _stopCts.Token));
+            _stdoutTask = Task.Run(() => PumpOutputAsync(_process.StandardOutput, _stdoutParser, _stopCts.Token));
+            _stderrTask = Task.Run(() => PumpOutputAsync(_process.StandardError, _stderrParser, _stopCts.Token));
             _ = Task.Run(MonitorExitAsync);
             if (_spec.TimeoutSeconds > 0)
                 _ = Task.Run(() => MonitorTimeoutAsync(_stopCts.Token));
@@ -277,6 +279,7 @@ internal sealed class CodingBackendProcessHost
             try
             {
                 await _process.WaitForExitAsync(CancellationToken.None);
+                await Task.WhenAll(_stdoutTask, _stderrTask);
                 var completion = ResolveCompletion();
                 await CompleteAsync(completion.State, completion.ExitCode, completion.Reason, CancellationToken.None);
             }
