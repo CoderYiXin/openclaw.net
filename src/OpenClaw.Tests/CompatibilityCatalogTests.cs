@@ -36,4 +36,49 @@ public sealed class CompatibilityCatalogTests
         Assert.Equal("clawhub-skill", item.Kind);
         Assert.Equal("peekaboo", item.SkillSlug);
     }
+
+    [Fact]
+    public void CreateCatalog_NpmPluginWithoutExpectedStatus_FailsFast()
+    {
+        var manifest = new CompatibilityCatalogManifest
+        {
+            Version = 1,
+            Entries =
+            [
+                new CompatibilityCatalogManifestEntry
+                {
+                    Id = "missing-status",
+                    Category = "js-tool-plugin",
+                    Kind = "npm-plugin",
+                    Spec = "example-plugin@1.0.0",
+                    PackageName = "example-plugin",
+                    PluginId = "example-plugin"
+                }
+            ]
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => PublicCompatibilityCatalog.CreateCatalog(manifest));
+        Assert.Contains("expectedStatus", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateCatalog_SkillWithoutSlug_FailsFast()
+    {
+        var manifest = new CompatibilityCatalogManifest
+        {
+            Version = 1,
+            Entries =
+            [
+                new CompatibilityCatalogManifestEntry
+                {
+                    Id = "missing-slug",
+                    Category = "pure-skill",
+                    Kind = "clawhub-skill"
+                }
+            ]
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => PublicCompatibilityCatalog.CreateCatalog(manifest));
+        Assert.Contains("'slug'", ex.Message, StringComparison.Ordinal);
+    }
 }

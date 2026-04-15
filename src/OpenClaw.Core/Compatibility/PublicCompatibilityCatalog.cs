@@ -8,6 +8,7 @@ namespace OpenClaw.Core.Compatibility;
 public static class PublicCompatibilityCatalog
 {
     private const string ResourceName = "OpenClaw.Core.Compatibility.public-smoke.json";
+    private static readonly Assembly CatalogAssembly = typeof(PublicCompatibilityCatalog).Assembly;
     private static readonly Lazy<CompatibilityCatalogResponse> Catalog = new(LoadCatalog);
 
     public static CompatibilityCatalogResponse GetCatalog(
@@ -38,11 +39,16 @@ public static class PublicCompatibilityCatalog
 
     private static CompatibilityCatalogResponse LoadCatalog()
     {
-        using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
+        using var stream = CatalogAssembly.GetManifestResourceStream(ResourceName)
             ?? throw new InvalidOperationException($"Embedded compatibility catalog '{ResourceName}' was not found.");
         var manifest = JsonSerializer.Deserialize(stream, CompatibilityCatalogJsonContext.Default.CompatibilityCatalogManifest)
             ?? throw new InvalidOperationException("Compatibility catalog manifest could not be parsed.");
 
+        return CreateCatalog(manifest);
+    }
+
+    internal static CompatibilityCatalogResponse CreateCatalog(CompatibilityCatalogManifest manifest)
+    {
         return new CompatibilityCatalogResponse
         {
             Version = manifest.Version,
@@ -52,9 +58,7 @@ public static class PublicCompatibilityCatalog
 
     private static CompatibilityCatalogEntry MapEntry(CompatibilityCatalogManifestEntry entry)
     {
-        var compatibilityStatus = string.IsNullOrWhiteSpace(entry.ExpectedStatus)
-            ? "compatible"
-            : entry.ExpectedStatus!;
+        var compatibilityStatus = ResolveCompatibilityStatus(entry);
         var installSurface = string.Equals(entry.Kind, "clawhub-skill", StringComparison.Ordinal)
             ? "clawhub"
             : "npm";
@@ -96,13 +100,15 @@ public static class PublicCompatibilityCatalog
     {
         if (string.Equals(entry.Kind, "clawhub-skill", StringComparison.Ordinal))
         {
+            var slug = RequireField(entry.Slug, entry, "slug");
             var suffix = string.IsNullOrWhiteSpace(entry.Version)
                 ? string.Empty
                 : $" --version {entry.Version}";
-            return $"openclaw clawhub install {entry.Slug}{suffix}";
+            return $"openclaw clawhub install {slug}{suffix}";
         }
 
-        return $"openclaw plugins install {entry.Spec} --dry-run";
+        var spec = RequireField(entry.Spec, entry, "spec");
+        return $"openclaw plugins install {spec} --dry-run";
     }
 
     private static string BuildSummary(CompatibilityCatalogManifestEntry entry, string compatibilityStatus)
@@ -159,6 +165,27 @@ public static class PublicCompatibilityCatalog
 
         if (entry.ExpectedDiagnosticCodes?.Any(code => string.Equals(code, "config_one_of_mismatch", StringComparison.Ordinal)) == true)
             yield return "Adjust the plugin config to the supported JSON-schema subset; this scenario intentionally demonstrates a failing shape.";
+    }
+
+    private static string ResolveCompatibilityStatus(CompatibilityCatalogManifestEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.ExpectedStatus))
+            return entry.ExpectedStatus!;
+
+        if (string.Equals(entry.Kind, "clawhub-skill", StringComparison.Ordinal))
+            return "compatible";
+
+        throw new InvalidOperationException(
+            $"Compatibility catalog entry '{entry.Id}' of kind '{entry.Kind}' must declare expectedStatus.");
+    }
+
+    private static string RequireField(string? value, CompatibilityCatalogManifestEntry entry, string fieldName)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            return value!;
+
+        throw new InvalidOperationException(
+            $"Compatibility catalog entry '{entry.Id}' of kind '{entry.Kind}' must declare '{fieldName}'.");
     }
 }
 
