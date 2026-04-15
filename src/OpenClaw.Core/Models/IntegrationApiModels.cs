@@ -136,6 +136,7 @@ public sealed class IntegrationDashboardResponse
     public required IntegrationProvidersResponse Providers { get; init; }
     public required IntegrationPluginsResponse Plugins { get; init; }
     public required IntegrationRuntimeEventsResponse Events { get; init; }
+    public required OperatorDashboardSnapshot Operator { get; init; }
 }
 
 public sealed class IntegrationSessionSearchResponse

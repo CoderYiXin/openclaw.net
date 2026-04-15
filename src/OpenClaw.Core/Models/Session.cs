@@ -88,6 +88,12 @@ public sealed class Session
     /// <summary>Optional contract policy governing this session's execution limits.</summary>
     public ContractPolicy? ContractPolicy { get; set; }
 
+    /// <summary>Structured metadata for sessions created by delegate_agent.</summary>
+    public SessionDelegationMetadata? Delegation { get; set; }
+
+    /// <summary>Summaries of delegated child sessions spawned from this session.</summary>
+    public List<SessionDelegationChildSummary> DelegatedSessions { get; init; } = [];
+
     /// <summary>Timestamp when the current contract was attached to this session.</summary>
     public DateTimeOffset? ContractAttachedAtUtc { get; set; }
 
@@ -144,6 +150,52 @@ public sealed record ToolInvocation
     public TimeSpan Duration { get; init; }
 }
 
+public sealed class SessionDelegationMetadata
+{
+    public string? ParentSessionId { get; set; }
+    public string? ParentChannelId { get; set; }
+    public string? ParentSenderId { get; set; }
+    public string Profile { get; set; } = "";
+    public string RequestedTask { get; set; } = "";
+    public string[] AllowedTools { get; set; } = [];
+    public int Depth { get; set; }
+    public DateTimeOffset StartedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string Status { get; set; } = "running";
+    public string? FinalResponsePreview { get; set; }
+    public IReadOnlyList<SessionDelegationToolUsage> ToolUsage { get; set; } = [];
+    public IReadOnlyList<SessionDelegationChangeSummary> ProposedChanges { get; set; } = [];
+}
+
+public sealed class SessionDelegationToolUsage
+{
+    public required string ToolName { get; init; }
+    public string Action { get; init; } = "";
+    public string Summary { get; init; } = "";
+    public bool IsMutation { get; init; }
+    public int Count { get; init; }
+}
+
+public sealed class SessionDelegationChangeSummary
+{
+    public required string ToolName { get; init; }
+    public string Action { get; init; } = "";
+    public string Summary { get; init; } = "";
+}
+
+public sealed class SessionDelegationChildSummary
+{
+    public required string SessionId { get; init; }
+    public string Profile { get; set; } = "";
+    public string TaskPreview { get; set; } = "";
+    public DateTimeOffset StartedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string Status { get; set; } = "running";
+    public IReadOnlyList<SessionDelegationToolUsage> ToolUsage { get; set; } = [];
+    public IReadOnlyList<SessionDelegationChangeSummary> ProposedChanges { get; set; } = [];
+    public string? FinalResponsePreview { get; set; }
+}
+
 /// <summary>
 /// AOT-compatible JSON serialization context for all core models.
 /// </summary>
@@ -151,6 +203,13 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(ChatTurn))]
 [JsonSerializable(typeof(ToolInvocation))]
 [JsonSerializable(typeof(List<ToolInvocation>))]
+[JsonSerializable(typeof(SessionDelegationMetadata))]
+[JsonSerializable(typeof(SessionDelegationToolUsage))]
+[JsonSerializable(typeof(List<SessionDelegationToolUsage>))]
+[JsonSerializable(typeof(SessionDelegationChangeSummary))]
+[JsonSerializable(typeof(List<SessionDelegationChangeSummary>))]
+[JsonSerializable(typeof(SessionDelegationChildSummary))]
+[JsonSerializable(typeof(List<SessionDelegationChildSummary>))]
 [JsonSerializable(typeof(InboundMessage))]
 [JsonSerializable(typeof(OutboundMessage))]
 [JsonSerializable(typeof(WsClientEnvelope))]
@@ -339,6 +398,7 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(AutomationRunState))]
 [JsonSerializable(typeof(AutomationTemplate))]
 [JsonSerializable(typeof(List<AutomationTemplate>))]
+[JsonSerializable(typeof(AutomationTemplateListResponse))]
 [JsonSerializable(typeof(AutomationValidationIssue))]
 [JsonSerializable(typeof(List<AutomationValidationIssue>))]
 [JsonSerializable(typeof(AutomationPreview))]
@@ -468,6 +528,19 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(AdminSummaryRetention))]
 [JsonSerializable(typeof(AdminSummaryPlugins))]
 [JsonSerializable(typeof(AdminSummaryUsage))]
+[JsonSerializable(typeof(OperatorDashboardSnapshot))]
+[JsonSerializable(typeof(DashboardNamedMetric))]
+[JsonSerializable(typeof(List<DashboardNamedMetric>))]
+[JsonSerializable(typeof(DashboardSessionSummary))]
+[JsonSerializable(typeof(DashboardApprovalSummary))]
+[JsonSerializable(typeof(DashboardMemorySummary))]
+[JsonSerializable(typeof(DashboardAutomationItem))]
+[JsonSerializable(typeof(List<DashboardAutomationItem>))]
+[JsonSerializable(typeof(DashboardAutomationSummary))]
+[JsonSerializable(typeof(DashboardLearningSummary))]
+[JsonSerializable(typeof(DashboardDelegationSummary))]
+[JsonSerializable(typeof(DashboardChannelSummary))]
+[JsonSerializable(typeof(DashboardPluginSummary))]
 [JsonSerializable(typeof(OpenClaw.Core.Observability.ProviderUsageSnapshot))]
 [JsonSerializable(typeof(List<OpenClaw.Core.Observability.ProviderUsageSnapshot>))]
 [JsonSerializable(typeof(MutationResponse))]
@@ -556,6 +629,8 @@ public sealed record ToolInvocation
 [JsonSerializable(typeof(SessionTodoItem))]
 [JsonSerializable(typeof(List<SessionTodoItem>))]
 [JsonSerializable(typeof(SessionMetadataUpdateRequest))]
+[JsonSerializable(typeof(SessionPromotionRequest))]
+[JsonSerializable(typeof(SessionPromotionResponse))]
 [JsonSerializable(typeof(SessionDiffResponse))]
 [JsonSerializable(typeof(SessionTimelineResponse))]
 [JsonSerializable(typeof(SessionExportItem))]

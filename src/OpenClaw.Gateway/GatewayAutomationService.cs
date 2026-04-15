@@ -139,6 +139,9 @@ internal sealed class GatewayAutomationService
     public ValueTask SaveRunStateAsync(AutomationRunState runState, CancellationToken ct)
         => _store.SaveRunStateAsync(runState, ct);
 
+    public IReadOnlyCollection<string> ListRunningIds()
+        => _runningAutomations.Keys.ToArray();
+
     public async ValueTask<RunNowResult> RunNowAsync(string automationId, MessagePipeline pipeline, CancellationToken ct)
     {
         var automation = await GetAsync(automationId, ct);
@@ -242,6 +245,12 @@ internal sealed class GatewayAutomationService
                 Key = "heartbeat",
                 Label = "Heartbeat",
                 Description = "Managed heartbeat automation compatible with the existing heartbeat flow.",
+                Category = "ops",
+                SuggestedName = "Managed heartbeat",
+                Schedule = "@hourly",
+                Prompt = "Summarize operational health, active issues, and urgent follow-ups.",
+                DeliveryChannelId = "cron",
+                Tags = ["ops", "heartbeat"],
                 Available = true
             },
             new AutomationTemplate
@@ -249,6 +258,77 @@ internal sealed class GatewayAutomationService
                 Key = "custom",
                 Label = "Custom",
                 Description = "A direct scheduled prompt delivered through any supported channel.",
+                Category = "general",
+                SuggestedName = "Custom automation",
+                Schedule = "@daily",
+                Prompt = "Describe the recurring task this automation should perform.",
+                DeliveryChannelId = "cron",
+                Tags = ["custom"],
+                Available = true
+            },
+            new AutomationTemplate
+            {
+                Key = "inbox_triage",
+                Label = "Inbox Triage",
+                Description = "Review new inbox activity and surface only the messages that need an operator response.",
+                Category = "productivity",
+                SuggestedName = "Inbox triage",
+                Schedule = "0 8 * * *",
+                Prompt = "Review new inbox activity since the last run. Group urgent, blocking, and informational items separately and recommend the next operator actions.",
+                DeliveryChannelId = "cron",
+                Tags = ["inbox", "triage", "review"],
+                Available = true
+            },
+            new AutomationTemplate
+            {
+                Key = "daily_summary",
+                Label = "Daily Summary",
+                Description = "Produce a concise day-start or day-end summary of recent sessions, approvals, and notable events.",
+                Category = "ops",
+                SuggestedName = "Daily summary",
+                Schedule = "0 9 * * *",
+                Prompt = "Summarize the last 24 hours of agent activity, approvals, failed actions, and important follow-ups. Keep it concise and actionable.",
+                DeliveryChannelId = "cron",
+                Tags = ["summary", "daily", "ops"],
+                Available = true
+            },
+            new AutomationTemplate
+            {
+                Key = "channel_moderation",
+                Label = "Channel Moderation",
+                Description = "Review recent channel traffic for abuse, escalation signals, or messages that should be added to allowlist workflows.",
+                Category = "channels",
+                SuggestedName = "Channel moderation sweep",
+                Schedule = "0 */6 * * *",
+                Prompt = "Review recent channel traffic for abuse, moderation issues, escalation signals, and sender patterns that need operator action. Highlight risky senders and suggested allowlist changes.",
+                DeliveryChannelId = "cron",
+                Tags = ["channels", "moderation", "safety"],
+                Available = true
+            },
+            new AutomationTemplate
+            {
+                Key = "incident_follow_up",
+                Label = "Incident Follow-Up",
+                Description = "Track unresolved runtime failures, dead-letter items, and degraded integrations until they are cleared.",
+                Category = "ops",
+                SuggestedName = "Incident follow-up",
+                Schedule = "@hourly",
+                Prompt = "Review unresolved runtime failures, dead-letter items, approval bottlenecks, and degraded integrations. Report what changed since the last run and what still needs operator attention.",
+                DeliveryChannelId = "cron",
+                Tags = ["incident", "ops", "follow-up"],
+                Available = true
+            },
+            new AutomationTemplate
+            {
+                Key = "repo_hygiene",
+                Label = "Repo Hygiene",
+                Description = "Check codebase health tasks such as stale branches, docs drift, test failures, and compatibility gaps.",
+                Category = "engineering",
+                SuggestedName = "Repo hygiene review",
+                Schedule = "0 10 * * 1-5",
+                Prompt = "Review repository hygiene for stale work, failing tests, docs drift, or compatibility regressions. Summarize high-priority fixes and deferred cleanup separately.",
+                DeliveryChannelId = "cron",
+                Tags = ["repo", "engineering", "hygiene"],
                 Available = true
             }
         ];

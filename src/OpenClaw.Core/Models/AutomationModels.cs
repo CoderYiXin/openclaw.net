@@ -47,8 +47,20 @@ public sealed class AutomationTemplate
     public string Key { get; init; } = "";
     public string Label { get; init; } = "";
     public string Description { get; init; } = "";
+    public string Category { get; init; } = "";
+    public string SuggestedName { get; init; } = "";
+    public string Schedule { get; init; } = "@daily";
+    public string Prompt { get; init; } = "";
+    public string DeliveryChannelId { get; init; } = "cron";
+    public string? DeliverySubject { get; init; }
+    public IReadOnlyList<string> Tags { get; init; } = [];
     public bool Available { get; init; }
     public string? Reason { get; init; }
+}
+
+public sealed class AutomationTemplateListResponse
+{
+    public IReadOnlyList<AutomationTemplate> Items { get; init; } = [];
 }
 
 public sealed class AutomationValidationIssue

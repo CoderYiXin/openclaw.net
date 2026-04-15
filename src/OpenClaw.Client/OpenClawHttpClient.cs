@@ -511,8 +511,27 @@ public sealed class OpenClawHttpClient : IDisposable
         return await SendAsync(httpRequest, CoreJsonContext.Default.SessionMetadataSnapshot, cancellationToken);
     }
 
+    public async Task<SessionPromotionResponse> PromoteSessionAsync(
+        string sessionId,
+        SessionPromotionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("Session id is required.", nameof(sessionId));
+
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildAdminSessionPromotionUri(sessionId))
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.SessionPromotionRequest)
+        };
+
+        return await SendAsync(httpRequest, CoreJsonContext.Default.SessionPromotionResponse, cancellationToken);
+    }
+
     public Task<IntegrationAutomationsResponse> ListAutomationsAsync(CancellationToken cancellationToken)
         => GetAsync(_integrationAutomationsUri, CoreJsonContext.Default.IntegrationAutomationsResponse, cancellationToken);
+
+    public Task<AutomationTemplateListResponse> ListAutomationTemplatesAsync(CancellationToken cancellationToken)
+        => GetAsync(BuildAutomationTemplatesUri(admin: false), CoreJsonContext.Default.AutomationTemplateListResponse, cancellationToken);
 
     public Task<IntegrationAutomationDetailResponse> GetAutomationAsync(string automationId, CancellationToken cancellationToken)
         => GetAsync(BuildAutomationUri(automationId), CoreJsonContext.Default.IntegrationAutomationDetailResponse, cancellationToken);
@@ -524,6 +543,12 @@ public sealed class OpenClawHttpClient : IDisposable
             Content = BuildJsonContent(new AutomationRunRequest { DryRun = dryRun }, CoreJsonContext.Default.AutomationRunRequest)
         };
 
+        return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
+    }
+
+    public async Task<MutationResponse> DeleteAutomationAsync(string automationId, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Delete, BuildAutomationUri(automationId));
         return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
     }
 
@@ -549,6 +574,9 @@ public sealed class OpenClawHttpClient : IDisposable
 
     public Task<IntegrationAutomationsResponse> GetAdminAutomationsAsync(CancellationToken cancellationToken)
         => GetAsync(_adminAutomationsUri, CoreJsonContext.Default.IntegrationAutomationsResponse, cancellationToken);
+
+    public Task<AutomationTemplateListResponse> GetAdminAutomationTemplatesAsync(CancellationToken cancellationToken)
+        => GetAsync(BuildAutomationTemplatesUri(admin: true), CoreJsonContext.Default.AutomationTemplateListResponse, cancellationToken);
 
     public Task<IntegrationAutomationDetailResponse> GetAdminAutomationAsync(string automationId, CancellationToken cancellationToken)
         => GetAsync(BuildAdminAutomationUri(automationId), CoreJsonContext.Default.IntegrationAutomationDetailResponse, cancellationToken);
@@ -583,6 +611,12 @@ public sealed class OpenClawHttpClient : IDisposable
         return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
     }
 
+    public async Task<MutationResponse> DeleteAdminAutomationAsync(string automationId, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Delete, BuildAdminAutomationUri(automationId));
+        return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
+    }
+
     public async Task<IntegrationAutomationsResponse> MigrateAutomationsAsync(bool apply, CancellationToken cancellationToken)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, new Uri($"{_adminAutomationsUri.AbsoluteUri.TrimEnd('/')}/migrate?apply={apply.ToString().ToLowerInvariant()}", UriKind.Absolute));
@@ -591,6 +625,9 @@ public sealed class OpenClawHttpClient : IDisposable
 
     public Task<LearningProposalListResponse> ListLearningProposalsAsync(string? status, string? kind, CancellationToken cancellationToken)
         => GetAsync(BuildLearningProposalsUri(status, kind), CoreJsonContext.Default.LearningProposalListResponse, cancellationToken);
+
+    public Task<LearningProposalDetailResponse> GetLearningProposalDetailAsync(string proposalId, CancellationToken cancellationToken)
+        => GetAsync(BuildLearningProposalUri(proposalId), CoreJsonContext.Default.LearningProposalDetailResponse, cancellationToken);
 
     public async Task<LearningProposal> ApproveLearningProposalAsync(string proposalId, CancellationToken cancellationToken)
     {
@@ -601,6 +638,16 @@ public sealed class OpenClawHttpClient : IDisposable
     public async Task<LearningProposal> RejectLearningProposalAsync(string proposalId, string? reason, CancellationToken cancellationToken)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, BuildLearningProposalActionUri(proposalId, "reject"))
+        {
+            Content = BuildJsonContent(new LearningProposalReviewRequest { Reason = reason }, CoreJsonContext.Default.LearningProposalReviewRequest)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.LearningProposal, cancellationToken);
+    }
+
+    public async Task<LearningProposal> RollbackLearningProposalAsync(string proposalId, string? reason, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, BuildLearningProposalActionUri(proposalId, "rollback"))
         {
             Content = BuildJsonContent(new LearningProposalReviewRequest { Reason = reason }, CoreJsonContext.Default.LearningProposalReviewRequest)
         };
@@ -975,6 +1022,12 @@ public sealed class OpenClawHttpClient : IDisposable
     private Uri BuildAutomationRunUri(string automationId)
         => new($"{BuildAutomationUri(automationId).AbsoluteUri}/run", UriKind.Absolute);
 
+    private Uri BuildAutomationTemplatesUri(bool admin)
+    {
+        var baseUri = admin ? _adminAutomationsUri : _integrationAutomationsUri;
+        return new Uri($"{baseUri.AbsoluteUri.TrimEnd('/')}/templates", UriKind.Absolute);
+    }
+
     private Uri BuildAdminAutomationUri(string automationId)
     {
         if (string.IsNullOrWhiteSpace(automationId))
@@ -1004,6 +1057,17 @@ public sealed class OpenClawHttpClient : IDisposable
             throw new ArgumentException("Proposal id is required.", nameof(proposalId));
 
         return new Uri($"{_adminLearningProposalsUri.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(proposalId)}/{action}", UriKind.Absolute);
+    }
+
+    private Uri BuildAdminSessionPromotionUri(string sessionId)
+        => new($"{_baseUri.AbsoluteUri.TrimEnd('/')}/admin/sessions/{Uri.EscapeDataString(sessionId)}/promote", UriKind.Absolute);
+
+    private Uri BuildLearningProposalUri(string proposalId)
+    {
+        if (string.IsNullOrWhiteSpace(proposalId))
+            throw new ArgumentException("Proposal id is required.", nameof(proposalId));
+
+        return new Uri($"{_adminLearningProposalsUri.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(proposalId)}", UriKind.Absolute);
     }
 
     private Uri BuildMemoryNotesUri(string? prefix, string? memoryClass, string? projectId, int limit)

@@ -1573,6 +1573,114 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task SessionDetail_And_Promotion_Surface_Work()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        var session = await harness.Runtime.SessionManager.GetOrCreateByIdAsync("sess-promote", "api", "user-promote", CancellationToken.None);
+        session.History.Add(new ChatTurn
+        {
+            Role = "user",
+            Content = "Generate the daily operations recap"
+        });
+        session.History.Add(new ChatTurn
+        {
+            Role = "assistant",
+            Content = "Prepared a recap.",
+            ToolCalls =
+            [
+                new ToolInvocation
+                {
+                    ToolName = "shell",
+                    Arguments = """{"command":"git status --short"}""",
+                    Result = "ok",
+                    Duration = TimeSpan.FromMilliseconds(10)
+                }
+            ]
+        });
+        session.DelegatedSessions.Add(new SessionDelegationChildSummary
+        {
+            SessionId = "delegate:reviewer:test",
+            Profile = "reviewer",
+            TaskPreview = "Inspect the latest changes",
+            Status = "completed",
+            ToolUsage =
+            [
+                new SessionDelegationToolUsage
+                {
+                    ToolName = "shell",
+                    Summary = "Execute tool 'shell'.",
+                    IsMutation = true,
+                    Count = 1
+                }
+            ],
+            ProposedChanges =
+            [
+                new SessionDelegationChangeSummary
+                {
+                    ToolName = "shell",
+                    Summary = "Execute tool 'shell'."
+                }
+            ],
+            FinalResponsePreview = "Reviewed and summarized."
+        });
+        await harness.Runtime.SessionManager.PersistAsync(session, CancellationToken.None);
+        harness.Runtime.ProviderUsage.RecordTurn(
+            session.Id,
+            session.ChannelId,
+            providerId: "openai",
+            modelId: "gpt-5.4",
+            inputTokens: 120,
+            outputTokens: 48,
+            estimatedInputTokensByComponent: new InputTokenComponentEstimate());
+
+        using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/sessions/sess-promote");
+        detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var detailResponse = await harness.Client.SendAsync(detailRequest);
+        Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
+        using var detailPayload = await ReadJsonAsync(detailResponse);
+        Assert.Equal(1, detailPayload.RootElement.GetProperty("session").GetProperty("delegatedSessions").GetArrayLength());
+
+        using var promoteAutomation = new HttpRequestMessage(HttpMethod.Post, "/admin/sessions/sess-promote/promote")
+        {
+            Content = JsonContent("""{"target":"automation","name":"Daily recap automation"}""")
+        };
+        promoteAutomation.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var promoteAutomationResponse = await harness.Client.SendAsync(promoteAutomation);
+        Assert.Equal(HttpStatusCode.OK, promoteAutomationResponse.StatusCode);
+        using var automationPayload = await ReadJsonAsync(promoteAutomationResponse);
+        Assert.Equal("automation", automationPayload.RootElement.GetProperty("target").GetString());
+        Assert.Equal("session-promotion", automationPayload.RootElement.GetProperty("automation").GetProperty("source").GetString());
+        Assert.False(automationPayload.RootElement.GetProperty("automation").GetProperty("enabled").GetBoolean());
+
+        using var promotePolicy = new HttpRequestMessage(HttpMethod.Post, "/admin/sessions/sess-promote/promote")
+        {
+            Content = JsonContent("""{"target":"provider_policy","scope":"actor"}""")
+        };
+        promotePolicy.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var promotePolicyResponse = await harness.Client.SendAsync(promotePolicy);
+        Assert.Equal(HttpStatusCode.OK, promotePolicyResponse.StatusCode);
+        using var policyPayload = await ReadJsonAsync(promotePolicyResponse);
+        Assert.Equal("provider_policy", policyPayload.RootElement.GetProperty("target").GetString());
+        Assert.Equal("openai", policyPayload.RootElement.GetProperty("providerPolicy").GetProperty("providerId").GetString());
+        Assert.Equal("gpt-5.4", policyPayload.RootElement.GetProperty("providerPolicy").GetProperty("modelId").GetString());
+        Assert.Equal("api", policyPayload.RootElement.GetProperty("providerPolicy").GetProperty("channelId").GetString());
+        Assert.Equal("user-promote", policyPayload.RootElement.GetProperty("providerPolicy").GetProperty("senderId").GetString());
+
+        using var promoteSkill = new HttpRequestMessage(HttpMethod.Post, "/admin/sessions/sess-promote/promote")
+        {
+            Content = JsonContent("""{"target":"skill_draft","name":"ops-recap-skill"}""")
+        };
+        promoteSkill.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var promoteSkillResponse = await harness.Client.SendAsync(promoteSkill);
+        Assert.Equal(HttpStatusCode.OK, promoteSkillResponse.StatusCode);
+        using var skillPayload = await ReadJsonAsync(promoteSkillResponse);
+        Assert.Equal("skill_draft", skillPayload.RootElement.GetProperty("target").GetString());
+        Assert.Equal("skill_draft", skillPayload.RootElement.GetProperty("proposal").GetProperty("kind").GetString());
+        Assert.Equal("ops-recap-skill", skillPayload.RootElement.GetProperty("proposal").GetProperty("skillName").GetString());
+    }
+
+    [Fact]
     public async Task IntegrationApi_Dashboard_Approvals_Providers_Plugins_Audit_AndTimeline_AreServed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
@@ -1612,6 +1720,10 @@ public sealed class GatewayAdminEndpointTests
         using var dashboardPayload = await ReadJsonAsync(dashboardResponse);
         Assert.Equal("ok", dashboardPayload.RootElement.GetProperty("status").GetProperty("health").GetProperty("status").GetString());
         Assert.Equal(1, dashboardPayload.RootElement.GetProperty("approvals").GetProperty("items").GetArrayLength());
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("sessions").GetProperty("uniqueTotal").GetInt32() >= 1);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("approvals").GetProperty("pending").GetInt32() >= 1);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("automations").GetProperty("templates").GetArrayLength() >= 2);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("channels").GetProperty("items").GetArrayLength() >= 1);
 
         using var approvalsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/approvals?channelId=api&senderId=user-dashboard");
         approvalsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
@@ -1671,6 +1783,54 @@ public sealed class GatewayAdminEndpointTests
         using var timelinePayload = await ReadJsonAsync(timelineResponse);
         Assert.Equal(session.Id, timelinePayload.RootElement.GetProperty("sessionId").GetString());
         Assert.Equal(1, timelinePayload.RootElement.GetProperty("events").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task AutomationTemplateEndpoints_And_Delete_Work()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        using var templatesRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/templates");
+        templatesRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var templatesResponse = await harness.Client.SendAsync(templatesRequest);
+        Assert.Equal(HttpStatusCode.OK, templatesResponse.StatusCode);
+        using var templatesPayload = await ReadJsonAsync(templatesResponse);
+        Assert.Contains(
+            templatesPayload.RootElement.GetProperty("items").EnumerateArray(),
+            item => item.GetProperty("key").GetString() == "repo_hygiene");
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put, "/admin/automations/auto_template_delete")
+        {
+            Content = JsonContent("""
+                {
+                  "id": "auto_template_delete",
+                  "name": "Repo hygiene review",
+                  "enabled": false,
+                  "schedule": "@daily",
+                  "prompt": "Review repo hygiene and summarize urgent follow-ups.",
+                  "deliveryChannelId": "cron",
+                  "tags": ["repo", "ops"],
+                  "isDraft": true,
+                  "source": "managed",
+                  "templateKey": "repo_hygiene"
+                }
+                """)
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var saveResponse = await harness.Client.SendAsync(saveRequest);
+        Assert.Equal(HttpStatusCode.OK, saveResponse.StatusCode);
+
+        using var deleteRequest = new HttpRequestMessage(HttpMethod.Delete, "/admin/automations/auto_template_delete");
+        deleteRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var deleteResponse = await harness.Client.SendAsync(deleteRequest);
+        Assert.Equal(HttpStatusCode.OK, deleteResponse.StatusCode);
+        using var deletePayload = await ReadJsonAsync(deleteResponse);
+        Assert.True(deletePayload.RootElement.GetProperty("success").GetBoolean());
+
+        using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/auto_template_delete");
+        detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var detailResponse = await harness.Client.SendAsync(detailRequest);
+        Assert.Equal(HttpStatusCode.NotFound, detailResponse.StatusCode);
     }
 
     [Fact]
@@ -1819,6 +1979,79 @@ public sealed class GatewayAdminEndpointTests
         var toolResult = await client.CallMcpToolAsync("openclaw.get_status", emptyArguments.RootElement.Clone(), CancellationToken.None);
         Assert.False(toolResult.IsError);
         Assert.Contains("activeSessions", toolResult.Content[0].Text);
+    }
+
+    [Fact]
+    public async Task OpenClawHttpClient_AutomationAndLearningSurface_Works()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var proposalStore = new FileFeatureStore(harness.StoragePath);
+        var session = await harness.Runtime.SessionManager.GetOrCreateByIdAsync("sess-client-promotion", "api", "sdk-user", CancellationToken.None);
+        session.History.Add(new ChatTurn
+        {
+            Role = "user",
+            Content = "Summarize SDK-visible state."
+        });
+        await harness.Runtime.SessionManager.PersistAsync(session, CancellationToken.None);
+        await proposalStore.SaveProposalAsync(new LearningProposal
+        {
+            Id = "lp_client_detail",
+            Kind = LearningProposalKind.ProfileUpdate,
+            Status = LearningProposalStatus.Pending,
+            ActorId = "api:sdk-user",
+            Title = "SDK review proposal",
+            Summary = "Generated for client coverage.",
+            ProfileUpdate = new UserProfile
+            {
+                ActorId = "api:sdk-user",
+                ChannelId = "api",
+                SenderId = "sdk-user",
+                Summary = "SDK test profile",
+                Tone = "neutral"
+            },
+            SourceSessionIds = ["sess-client-proposal"],
+            Confidence = 0.61f
+        }, CancellationToken.None);
+
+        using var client = new OpenClawHttpClient(harness.Client.BaseAddress!.ToString(), harness.AuthToken, harness.Client);
+
+        var templates = await client.GetAdminAutomationTemplatesAsync(CancellationToken.None);
+        Assert.Contains(templates.Items, item => item.Key == "daily_summary");
+
+        var saved = await client.SaveAutomationAsync(
+            "auto_client_surface",
+            new AutomationDefinition
+            {
+                Id = "auto_client_surface",
+                Name = "Client automation",
+                Enabled = false,
+                Schedule = "@daily",
+                Prompt = "Summarize SDK-visible state.",
+                DeliveryChannelId = "cron",
+                IsDraft = true,
+                Source = "managed",
+                TemplateKey = "daily_summary"
+            },
+            CancellationToken.None);
+        Assert.Equal("auto_client_surface", saved.Automation!.Id);
+
+        var detail = await client.GetLearningProposalDetailAsync("lp_client_detail", CancellationToken.None);
+        Assert.Equal("lp_client_detail", detail.Proposal!.Id);
+
+        var promoted = await client.PromoteSessionAsync(
+            "sess-client-promotion",
+            new SessionPromotionRequest
+            {
+                Target = SessionPromotionTarget.Automation,
+                Name = "SDK promoted automation"
+            },
+            CancellationToken.None);
+        Assert.True(promoted.Success);
+        Assert.Equal("automation", promoted.Target);
+        Assert.NotNull(promoted.Automation);
+
+        var deleted = await client.DeleteAdminAutomationAsync("auto_client_surface", CancellationToken.None);
+        Assert.True(deleted.Success);
     }
 
     [Fact]
@@ -2399,6 +2632,10 @@ public sealed class GatewayAdminEndpointTests
             "/api/integration/sessions",
             "/api/integration/sessions/{id}",
             "/api/integration/sessions/{id}/timeline",
+            "/api/integration/automations",
+            "/api/integration/automations/templates",
+            "/api/integration/automations/{id}",
+            "/api/integration/automations/{id}/run",
             "/api/integration/runtime-events",
             "/api/integration/messages",
             "/mcp/",
@@ -2410,6 +2647,7 @@ public sealed class GatewayAdminEndpointTests
             "/admin/events",
             "/admin/sessions",
             "/admin/sessions/{id}",
+            "/admin/sessions/{id}/promote",
             "/admin/sessions/{id}/branches",
             "/admin/sessions/{id}/timeline",
             "/admin/sessions/{id}/diff",
@@ -2437,6 +2675,13 @@ public sealed class GatewayAdminEndpointTests
             "/admin/heartbeat",
             "/admin/heartbeat/preview",
             "/admin/heartbeat/status",
+            "/admin/automations",
+            "/admin/automations/templates",
+            "/admin/automations/preview",
+            "/admin/automations/{id}",
+            "/admin/automations/{id}/run",
+            "/admin/learning/proposals",
+            "/admin/learning/proposals/{id}",
             "/admin/channels/auth",
             "/admin/channels/{channelId}/auth",
             "/admin/channels/{channelId}/auth/stream",

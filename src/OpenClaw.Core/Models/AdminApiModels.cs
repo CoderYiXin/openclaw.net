@@ -153,6 +153,7 @@ public sealed class AdminSummaryResponse
     public required AdminSummaryRetention Retention { get; init; }
     public required AdminSummaryPlugins Plugins { get; init; }
     public required AdminSummaryUsage Usage { get; init; }
+    public required OperatorDashboardSnapshot Dashboard { get; init; }
 }
 
 public sealed class AdminSummaryAuth

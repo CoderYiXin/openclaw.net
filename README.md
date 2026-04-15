@@ -93,6 +93,10 @@ See [Prompt Caching](docs/PROMPT_CACHING.md) for configuration, provider behavio
 - **Memory console** in the built-in admin UI can search note memory, inspect project-scoped entries, edit/delete notes, and export/import portable bundles
 - **Profile export/import** supports portability between deployments through the admin API
 - **Automations** support list/get/preview/create/update/pause/resume/run flows and integrate with cron-backed delivery
+- **Operator dashboard** in the built-in admin UI rolls up session volume, approval queue pressure, memory activity, automation health, channel readiness, and plugin trust into one snapshot
+- **Automation center** in the built-in admin UI ships reusable templates like inbox triage, daily summary, incident follow-up, channel moderation, and repo hygiene
+- **Learning queue** in the built-in admin UI exposes proposal detail, provenance, diffs, approve/reject actions, rollback, and one-click loading of automation drafts into the automation editor
+- **Session console** in the built-in admin UI now shows delegated child sessions, delegated tool usage, proposed changes, and one-click promotion of a successful session into an automation draft, provider policy, or skill draft
 - **Todos** are persisted per session and available through the native `todo` tool and operator surfaces
 
 ### 48 Native Tools

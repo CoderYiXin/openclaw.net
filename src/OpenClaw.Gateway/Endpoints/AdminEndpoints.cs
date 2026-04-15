@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
@@ -8,6 +9,7 @@ using OpenClaw.Agent.Plugins;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Observability;
 using OpenClaw.Core.Pipeline;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
@@ -187,7 +189,8 @@ internal static class AdminEndpoints
                     Providers = runtime.ProviderUsage.Snapshot(),
                     Routes = operations.LlmExecution.SnapshotRoutes(),
                     RecentTurns = runtime.ProviderUsage.RecentTurns(limit: 20)
-                }
+                },
+                Dashboard = await facade.GetOperatorDashboardAsync(ctx.RequestAborted)
             };
 
             return Results.Json(response, CoreJsonContext.Default.AdminSummaryResponse);
@@ -325,6 +328,152 @@ internal static class AdminEndpoints
                 BranchCount = branches.Count,
                 Metadata = operations.SessionMetadata.Get(id)
             }, CoreJsonContext.Default.AdminSessionDetailResponse);
+        });
+
+        app.MapPost("/admin/sessions/{id}/promote", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.session.promote");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+            var auth = authResult.Authorization!;
+
+            var requestPayload = await ReadJsonBodyAsync(ctx, CoreJsonContext.Default.SessionPromotionRequest);
+            if (requestPayload.Failure is not null)
+                return requestPayload.Failure;
+
+            var request = requestPayload.Value;
+            if (request is null)
+            {
+                return Results.BadRequest(new SessionPromotionResponse
+                {
+                    Success = false,
+                    Target = string.Empty,
+                    Error = "Session promotion payload is required."
+                });
+            }
+
+            var session = await runtime.SessionManager.LoadAsync(id, ctx.RequestAborted);
+            if (session is null)
+            {
+                return Results.NotFound(new SessionPromotionResponse
+                {
+                    Success = false,
+                    Target = request.Target,
+                    Error = "Session not found."
+                });
+            }
+
+            try
+            {
+                SessionPromotionResponse response;
+                var normalizedTarget = NormalizeSessionPromotionTarget(request.Target);
+                switch (normalizedTarget)
+                {
+                    case SessionPromotionTarget.Automation:
+                    {
+                        var automation = await automationService.SaveAsync(
+                            BuildAutomationPromotion(session, request),
+                            ctx.RequestAborted);
+                        operations.RuntimeEvents.Append(new RuntimeEventEntry
+                        {
+                            Id = $"evt_{Guid.NewGuid():N}"[..20],
+                            TimestampUtc = DateTimeOffset.UtcNow,
+                            SessionId = session.Id,
+                            ChannelId = automation.DeliveryChannelId,
+                            SenderId = automation.DeliveryRecipientId,
+                            Component = "session-promotion",
+                            Action = "automation",
+                            Severity = "info",
+                            Summary = $"Promoted session '{session.Id}' into automation '{automation.Id}'."
+                        });
+                        response = new SessionPromotionResponse
+                        {
+                            Success = true,
+                            Target = normalizedTarget,
+                            Message = "Automation draft created.",
+                            CreatedId = automation.Id,
+                            Automation = automation
+                        };
+                        RecordOperatorAudit(ctx, operations, auth, "session_promote_automation", session.Id, $"Promoted session '{session.Id}' into automation '{automation.Id}'.", success: true, before: null, after: automation);
+                        return Results.Json(response, CoreJsonContext.Default.SessionPromotionResponse);
+                    }
+                    case SessionPromotionTarget.ProviderPolicy:
+                    {
+                        var policy = BuildProviderPolicyPromotion(session, request, runtime.ProviderUsage);
+                        var saved = operations.ProviderPolicies.AddOrUpdate(policy);
+                        operations.RuntimeEvents.Append(new RuntimeEventEntry
+                        {
+                            Id = $"evt_{Guid.NewGuid():N}"[..20],
+                            TimestampUtc = DateTimeOffset.UtcNow,
+                            SessionId = session.Id,
+                            ChannelId = session.ChannelId,
+                            SenderId = session.SenderId,
+                            Component = "session-promotion",
+                            Action = "provider-policy",
+                            Severity = "info",
+                            Summary = $"Promoted session '{session.Id}' into provider policy '{saved.Id}'."
+                        });
+                        response = new SessionPromotionResponse
+                        {
+                            Success = true,
+                            Target = normalizedTarget,
+                            Message = "Provider policy created.",
+                            CreatedId = saved.Id,
+                            ProviderPolicy = saved
+                        };
+                        RecordOperatorAudit(ctx, operations, auth, "session_promote_provider_policy", session.Id, $"Promoted session '{session.Id}' into provider policy '{saved.Id}'.", success: true, before: null, after: saved);
+                        return Results.Json(response, CoreJsonContext.Default.SessionPromotionResponse);
+                    }
+                    case SessionPromotionTarget.SkillDraft:
+                    {
+                        var proposal = BuildSkillPromotion(session, request);
+                        await proposalStore.SaveProposalAsync(proposal, ctx.RequestAborted);
+                        operations.RuntimeEvents.Append(new RuntimeEventEntry
+                        {
+                            Id = $"evt_{Guid.NewGuid():N}"[..20],
+                            TimestampUtc = DateTimeOffset.UtcNow,
+                            SessionId = session.Id,
+                            ChannelId = session.ChannelId,
+                            SenderId = session.SenderId,
+                            Component = "session-promotion",
+                            Action = "skill-draft",
+                            Severity = "info",
+                            Summary = $"Promoted session '{session.Id}' into skill draft proposal '{proposal.Id}'."
+                        });
+                        response = new SessionPromotionResponse
+                        {
+                            Success = true,
+                            Target = normalizedTarget,
+                            Message = "Skill draft proposal created.",
+                            CreatedId = proposal.Id,
+                            Proposal = proposal
+                        };
+                        RecordOperatorAudit(ctx, operations, auth, "session_promote_skill_draft", session.Id, $"Promoted session '{session.Id}' into skill draft proposal '{proposal.Id}'.", success: true, before: null, after: proposal);
+                        return Results.Json(response, CoreJsonContext.Default.SessionPromotionResponse);
+                    }
+                    default:
+                    {
+                        response = new SessionPromotionResponse
+                        {
+                            Success = false,
+                            Target = request.Target,
+                            Error = $"Unsupported session promotion target '{request.Target}'."
+                        };
+                        RecordOperatorAudit(ctx, operations, auth, "session_promote_invalid", session.Id, response.Error!, success: false, before: null, after: request);
+                        return Results.Json(response, CoreJsonContext.Default.SessionPromotionResponse, statusCode: StatusCodes.Status400BadRequest);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                RecordOperatorAudit(ctx, operations, auth, "session_promote_failed", session.Id, ex.Message, success: false, before: null, after: request);
+                return Results.Json(new SessionPromotionResponse
+                {
+                    Success = false,
+                    Target = request.Target,
+                    Error = ex.Message
+                }, CoreJsonContext.Default.SessionPromotionResponse, statusCode: StatusCodes.Status400BadRequest);
+            }
         });
 
         app.MapGet("/admin/sessions/{id}/branches", async (HttpContext ctx, string id) =>
@@ -558,6 +707,17 @@ internal static class AdminEndpoints
                 CoreJsonContext.Default.IntegrationAutomationsResponse);
         });
 
+        app.MapGet("/admin/automations/templates", (HttpContext ctx) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: false, endpointScope: "admin.automations");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+
+            return Results.Json(
+                facade.ListAutomationTemplates(),
+                CoreJsonContext.Default.AutomationTemplateListResponse);
+        });
+
         app.MapPost("/admin/automations/migrate", async (HttpContext ctx, bool apply = false) =>
         {
             var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.migrate");
@@ -686,6 +846,30 @@ internal static class AdminEndpoints
                 result,
                 CoreJsonContext.Default.MutationResponse,
                 statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status400BadRequest);
+        });
+
+        app.MapDelete("/admin/automations/{id}", async (HttpContext ctx, string id) =>
+        {
+            var authResult = AuthorizeOperator(ctx, startup, browserSessions, operations, requireCsrf: true, endpointScope: "admin.automations.mutate");
+            if (authResult.Failure is not null)
+                return authResult.Failure;
+            var auth = authResult.Authorization!;
+
+            var before = await automationService.GetAsync(id, ctx.RequestAborted);
+            var result = await facade.DeleteAutomationAsync(id, ctx.RequestAborted);
+            if (result.Success)
+            {
+                RecordOperatorAudit(ctx, operations, auth, "automation_delete", id, $"Deleted automation '{id}'.", success: true, before, after: null);
+            }
+            else
+            {
+                RecordOperatorAudit(ctx, operations, auth, "automation_delete", id, result.Error ?? "Automation delete failed.", success: false, before, after: null);
+            }
+
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status200OK : StatusCodes.Status404NotFound);
         });
 
         app.MapGet("/admin/memory/notes", async (HttpContext ctx, string? prefix = null, string? memoryClass = null, string? projectId = null, int limit = 100) =>
@@ -2564,6 +2748,271 @@ internal static class AdminEndpoints
 
         return (MemoryNoteClass.General, null, key);
     }
+
+    private static string NormalizeSessionPromotionTarget(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? SessionPromotionTarget.Automation
+            : value.Trim().ToLowerInvariant() switch
+            {
+                SessionPromotionTarget.Automation => SessionPromotionTarget.Automation,
+                SessionPromotionTarget.ProviderPolicy => SessionPromotionTarget.ProviderPolicy,
+                SessionPromotionTarget.SkillDraft => SessionPromotionTarget.SkillDraft,
+                _ => value.Trim()
+            };
+
+    private static AutomationDefinition BuildAutomationPromotion(Session session, SessionPromotionRequest request)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var name = string.IsNullOrWhiteSpace(request.Name)
+            ? BuildSessionPromotionName(session, fallbackPrefix: "Session Workflow")
+            : request.Name.Trim();
+        var slug = SlugifyValue(name, maxLength: 40);
+        var deliveryChannelId = !string.IsNullOrWhiteSpace(request.DeliveryChannelId)
+            ? request.DeliveryChannelId.Trim()
+            : string.Equals(session.ChannelId, "delegation", StringComparison.OrdinalIgnoreCase)
+                ? "cron"
+                : session.ChannelId;
+        var deliveryRecipientId = !string.IsNullOrWhiteSpace(request.DeliveryRecipientId)
+            ? request.DeliveryRecipientId.Trim()
+            : string.Equals(deliveryChannelId, "cron", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : session.SenderId;
+        var tags = (request.Tags ?? [])
+            .Where(static item => !string.IsNullOrWhiteSpace(item))
+            .Select(static item => item.Trim())
+            .Concat(["promoted", "session"])
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var automationId = TrimToMaxLength($"promoted:auto:{slug}:{Guid.NewGuid():N}", 60);
+
+        return new AutomationDefinition
+        {
+            Id = automationId,
+            Name = name,
+            Enabled = false,
+            Schedule = string.IsNullOrWhiteSpace(request.Schedule) ? "@daily" : request.Schedule.Trim(),
+            Prompt = string.IsNullOrWhiteSpace(request.Prompt) ? BuildAutomationPromptFromSession(session) : request.Prompt.Trim(),
+            SessionId = session.Id,
+            DeliveryChannelId = deliveryChannelId,
+            DeliveryRecipientId = deliveryRecipientId,
+            DeliverySubject = string.IsNullOrWhiteSpace(request.DeliverySubject) ? null : request.DeliverySubject.Trim(),
+            Tags = tags,
+            IsDraft = true,
+            Source = "session-promotion",
+            TemplateKey = "custom",
+            CreatedAtUtc = now,
+            UpdatedAtUtc = now
+        };
+    }
+
+    private static ProviderPolicyRule BuildProviderPolicyPromotion(
+        Session session,
+        SessionPromotionRequest request,
+        ProviderUsageTracker providerUsage)
+    {
+        var latestTurn = providerUsage.RecentTurns(session.Id, limit: 20)
+            .OrderByDescending(static item => item.TimestampUtc)
+            .FirstOrDefault();
+        var providerId = string.IsNullOrWhiteSpace(request.ProviderId)
+            ? latestTurn?.ProviderId
+            : request.ProviderId.Trim();
+        var modelId = string.IsNullOrWhiteSpace(request.ModelId)
+            ? latestTurn?.ModelId ?? session.ModelOverride
+            : request.ModelId.Trim();
+
+        if (string.IsNullOrWhiteSpace(providerId))
+            throw new InvalidOperationException("Provider policy promotion requires a providerId or at least one recorded provider turn for the session.");
+        if (string.IsNullOrWhiteSpace(modelId))
+            throw new InvalidOperationException("Provider policy promotion requires a modelId or at least one recorded provider turn for the session.");
+
+        var scope = NormalizeOptionalValue(request.Scope)?.ToLowerInvariant() ?? "session";
+        var (channelId, senderId, sessionId) = scope switch
+        {
+            "global" => (null, null, null),
+            "channel" => (session.ChannelId, null, null),
+            "actor" => (session.ChannelId, session.SenderId, null),
+            _ => (session.ChannelId, session.SenderId, session.Id)
+        };
+        var slug = SlugifyValue(string.IsNullOrWhiteSpace(request.Name) ? session.Id : request.Name, maxLength: 32);
+        var policyId = TrimToMaxLength($"pp_{slug}_{Guid.NewGuid():N}", 20);
+
+        return new ProviderPolicyRule
+        {
+            Id = policyId,
+            Priority = request.Priority,
+            Enabled = request.Enabled,
+            ChannelId = channelId,
+            SenderId = senderId,
+            SessionId = sessionId,
+            ProviderId = providerId!,
+            ModelId = modelId!,
+            FallbackModels = (request.FallbackModels ?? [])
+                .Where(static item => !string.IsNullOrWhiteSpace(item))
+                .Select(static item => item.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
+            CreatedAtUtc = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static LearningProposal BuildSkillPromotion(Session session, SessionPromotionRequest request)
+    {
+        var skillName = SlugifyValue(
+            string.IsNullOrWhiteSpace(request.Name) ? BuildSessionPromotionName(session, fallbackPrefix: "Session Skill") : request.Name,
+            maxLength: 48);
+        if (string.IsNullOrWhiteSpace(skillName))
+            skillName = $"session-skill-{Guid.NewGuid():N}"[..24];
+
+        var draftContent = BuildSkillDraftFromSession(session, skillName, request);
+        return new LearningProposal
+        {
+            Id = $"lp_{Guid.NewGuid():N}"[..20],
+            Kind = LearningProposalKind.SkillDraft,
+            Status = LearningProposalStatus.Pending,
+            ActorId = $"{session.ChannelId}:{session.SenderId}",
+            Title = string.IsNullOrWhiteSpace(request.Name) ? $"Skill draft from {session.Id}" : request.Name.Trim(),
+            Summary = string.IsNullOrWhiteSpace(request.Summary)
+                ? "Operator-promoted skill draft from a successful session."
+                : request.Summary.Trim(),
+            SkillName = skillName,
+            DraftContent = draftContent,
+            DraftContentHash = ComputeDraftHash(draftContent),
+            SourceSessionIds = CollectPromotionSourceSessionIds(session),
+            Confidence = 0.9f
+        };
+    }
+
+    private static string[] CollectPromotionSourceSessionIds(Session session)
+        => session.DelegatedSessions.Count == 0
+            ? [session.Id]
+            : [session.Id, .. session.DelegatedSessions.Select(static item => item.SessionId).Distinct(StringComparer.Ordinal)];
+
+    private static string BuildAutomationPromptFromSession(Session session)
+    {
+        var lastUserMessage = session.History.LastOrDefault(static item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content?.Trim();
+        if (!string.IsNullOrWhiteSpace(lastUserMessage))
+            return lastUserMessage!;
+
+        if (session.Delegation is { RequestedTask.Length: > 0 } delegation)
+            return delegation.RequestedTask;
+
+        return $"Repeat the successful workflow captured in session '{session.Id}' and report the outcome.";
+    }
+
+    private static string BuildSkillDraftFromSession(Session session, string skillName, SessionPromotionRequest request)
+    {
+        var taskSummary = string.IsNullOrWhiteSpace(request.Prompt)
+            ? BuildAutomationPromptFromSession(session)
+            : request.Prompt.Trim();
+        var localToolSequence = session.History
+            .SelectMany(static turn => turn.ToolCalls ?? [])
+            .Select(static call => call.ToolName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var delegatedProfiles = session.DelegatedSessions
+            .Select(static item => item.Profile)
+            .Where(static item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var builder = new StringBuilder();
+        builder.AppendLine("---");
+        builder.AppendLine($"name: {skillName}");
+        builder.AppendLine($"description: Operator-promoted workflow from session {session.Id}");
+        builder.AppendLine("---");
+        builder.AppendLine();
+        builder.AppendLine("Use this skill when the task resembles the following request:");
+        builder.AppendLine($"- {taskSummary}");
+        builder.AppendLine();
+        builder.AppendLine("Session provenance:");
+        builder.AppendLine($"- Source session: {session.Id}");
+        builder.AppendLine($"- Channel: {session.ChannelId}");
+        builder.AppendLine($"- Sender: {session.SenderId}");
+        builder.AppendLine();
+
+        if (localToolSequence.Length > 0)
+        {
+            builder.AppendLine("Preferred local tool usage:");
+            foreach (var toolName in localToolSequence)
+                builder.AppendLine($"- {toolName}");
+            builder.AppendLine();
+        }
+
+        if (delegatedProfiles.Length > 0)
+        {
+            builder.AppendLine("Delegated profiles involved:");
+            foreach (var profile in delegatedProfiles)
+                builder.AppendLine($"- {profile}");
+            builder.AppendLine();
+        }
+
+        if (session.DelegatedSessions.Count > 0)
+        {
+            builder.AppendLine("Delegated work summaries:");
+            foreach (var child in session.DelegatedSessions)
+            {
+                builder.AppendLine($"- {child.Profile}: {child.TaskPreview}");
+                foreach (var tool in child.ToolUsage.Take(3))
+                    builder.AppendLine($"  tool: {tool.ToolName} ({tool.Count})");
+            }
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("Expected behavior:");
+        builder.AppendLine("- Recreate the successful workflow with minimal extra steps.");
+        builder.AppendLine("- Preserve the task intent and output shape from the original session.");
+        builder.AppendLine("- Escalate when the task requires unavailable credentials, tools, or approvals.");
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string BuildSessionPromotionName(Session session, string fallbackPrefix)
+    {
+        var lastUser = session.History.LastOrDefault(static item => string.Equals(item.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content;
+        if (!string.IsNullOrWhiteSpace(lastUser))
+            return lastUser!.Length <= 60 ? lastUser : lastUser[..60];
+
+        if (session.Delegation is { Profile.Length: > 0 } delegation)
+            return $"{fallbackPrefix} {delegation.Profile}";
+
+        return $"{fallbackPrefix} {session.ChannelId}";
+    }
+
+    private static string SlugifyValue(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "session";
+
+        Span<char> buffer = stackalloc char[Math.Min(maxLength, value.Length)];
+        var length = 0;
+        var previousDash = false;
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (length >= buffer.Length)
+                break;
+
+            if (char.IsLetterOrDigit(ch))
+            {
+                buffer[length++] = ch;
+                previousDash = false;
+            }
+            else if (!previousDash && length > 0)
+            {
+                buffer[length++] = '-';
+                previousDash = true;
+            }
+        }
+
+        while (length > 0 && buffer[length - 1] == '-')
+            length--;
+
+        return length == 0 ? "session" : new string(buffer[..length]);
+    }
+
+    private static string ComputeDraftHash(string draftContent)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(draftContent)));
+
+    private static string TrimToMaxLength(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength];
 
     private static bool ProposalMatchesActor(LearningProposal proposal, string actorId)
     {

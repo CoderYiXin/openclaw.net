@@ -354,6 +354,17 @@ internal static class IntegrationEndpoints
                 CoreJsonContext.Default.IntegrationAutomationsResponse);
         });
 
+        group.MapGet("/automations/templates", (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                facade.ListAutomationTemplates(),
+                CoreJsonContext.Default.AutomationTemplateListResponse);
+        });
+
         group.MapGet("/automations/{id}", async (HttpContext ctx, string id) =>
         {
             var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: false);
@@ -402,6 +413,19 @@ internal static class IntegrationEndpoints
                 result,
                 CoreJsonContext.Default.MutationResponse,
                 statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status404NotFound);
+        });
+
+        group.MapDelete("/automations/{id}", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration_http", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            var result = await facade.DeleteAutomationAsync(id, ctx.RequestAborted);
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status200OK : StatusCodes.Status404NotFound);
         });
 
         group.MapGet("/runtime-events", (HttpContext ctx) =>

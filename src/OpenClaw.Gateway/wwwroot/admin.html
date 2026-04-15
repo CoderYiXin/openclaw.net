@@ -349,6 +349,31 @@
             padding: 0.75rem;
             border: 1px solid var(--border);
         }
+
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.75rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .metric-card {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 0.8rem;
+            background: rgba(15, 23, 42, 0.6);
+        }
+
+        .metric-card strong {
+            display: block;
+            font-size: 1.35rem;
+            margin-bottom: 0.15rem;
+        }
+
+        .stack {
+            display: grid;
+            gap: 0.8rem;
+        }
     </style>
 </head>
 <body>
@@ -371,6 +396,8 @@
     <nav class="section-nav">
         <a href="#overview-section">Overview</a>
         <a href="#heartbeat-section">Heartbeat</a>
+        <a href="#automation-section">Automations</a>
+        <a href="#learning-section">Learning</a>
         <a href="#memory-section">Memory</a>
         <a href="#integration-section">Integration</a>
         <a href="#ops-section">Ops</a>
@@ -388,6 +415,11 @@
                 <h2>Summary</h2>
                 <div id="summary-pills" class="pill-row"></div>
                 <pre id="summary-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>Operator Dashboard</h2>
+                <div id="dashboard-cards" class="metric-grid"></div>
+                <div id="operator-dashboard-output" class="stack muted">Loading…</div>
             </div>
             <div class="card">
                 <h2>Doctor</h2>
@@ -483,6 +515,106 @@
                 <pre id="heartbeat-status-output">Loading…</pre>
                 <h3 style="margin-top:1rem;">Generated HEARTBEAT.md</h3>
                 <pre id="heartbeat-preview-output">Loading…</pre>
+            </div>
+        </section>
+
+        <section id="automation-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Automation Center</h2>
+                        <div class="muted">Review saved automations, apply reusable templates, and run or delete drafts without leaving the admin UI.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="automation-refresh-button" class="secondary">Reload</button>
+                        <button id="automation-new-button">New Draft</button>
+                    </div>
+                </div>
+                <h3>Templates</h3>
+                <div id="automation-templates-output" class="pill-row muted">Loading…</div>
+                <h3 style="margin-top:1rem;">Automations</h3>
+                <div id="automation-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Automation Editor</h2>
+                        <div class="muted">Create or inspect an automation, preview the normalized definition, then save or run it.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="automation-preview-button" class="secondary">Preview</button>
+                        <button id="automation-save-button">Save</button>
+                        <button id="automation-run-button" class="secondary">Run Now</button>
+                        <button id="automation-dry-run-button" class="secondary">Dry Run</button>
+                        <button id="automation-delete-button" class="secondary">Delete</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <input id="automation-id-input" type="text" placeholder="Automation ID">
+                    <input id="automation-name-input" type="text" placeholder="Name">
+                    <input id="automation-schedule-input" type="text" placeholder="@daily or cron expression">
+                    <input id="automation-timezone-input" type="text" placeholder="Timezone (optional)">
+                    <input id="automation-model-input" type="text" placeholder="Model override (optional)">
+                    <input id="automation-session-input" type="text" placeholder="Pinned session ID (optional)">
+                    <input id="automation-channel-input" type="text" placeholder="Delivery channel">
+                    <input id="automation-recipient-input" type="text" placeholder="Delivery recipient (optional)">
+                    <input id="automation-subject-input" type="text" placeholder="Delivery subject (optional)">
+                    <input id="automation-tags-input" type="text" placeholder="Tags (comma separated)">
+                    <input id="automation-source-input" type="text" placeholder="Source">
+                    <input id="automation-template-key-input" type="text" placeholder="Template key">
+                </div>
+                <div class="actions" style="margin-bottom:0.75rem;">
+                    <label><input id="automation-enabled-input" type="checkbox"> Enabled</label>
+                    <label><input id="automation-draft-input" type="checkbox"> Draft</label>
+                    <label><input id="automation-startup-input" type="checkbox"> Run on startup</label>
+                </div>
+                <textarea id="automation-prompt-input" rows="10" placeholder="Describe the recurring task this automation should perform."></textarea>
+                <pre id="automation-preview-output">Select or create an automation.</pre>
+            </div>
+        </section>
+
+        <section id="learning-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Learning Queue</h2>
+                        <div class="muted">Review profile, automation, and skill proposals generated from repeated successful sessions.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="learning-refresh-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select id="learning-status-input">
+                        <option value="">All statuses</option>
+                        <option value="pending" selected>Pending</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="rolled_back">Rolled back</option>
+                    </select>
+                    <select id="learning-kind-input">
+                        <option value="">All proposal kinds</option>
+                        <option value="profile_update">Profile updates</option>
+                        <option value="automation_suggestion">Automation suggestions</option>
+                        <option value="skill_draft">Skill drafts</option>
+                    </select>
+                </div>
+                <div id="learning-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Proposal Detail</h2>
+                        <div class="muted">Approve, reject, or roll back proposals with an operator note.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="learning-approve-button">Approve</button>
+                        <button id="learning-reject-button" class="secondary">Reject</button>
+                        <button id="learning-rollback-button" class="secondary">Rollback</button>
+                    </div>
+                </div>
+                <textarea id="learning-reason-input" rows="4" placeholder="Optional review note or rollback reason"></textarea>
+                <div id="learning-detail-output" class="muted" style="margin-top:0.75rem;">Select a proposal.</div>
             </div>
         </section>
 
@@ -666,7 +798,29 @@
                     <input id="session-tags-input" type="text" placeholder="Tags (comma separated)">
                     <button id="session-metadata-save-button" class="secondary">Save Metadata</button>
                 </div>
-                <pre id="session-detail-output">Select a session.</pre>
+                <h3 style="margin-top:1rem;">Promotion</h3>
+                <div class="filters">
+                    <select id="session-promotion-target-input">
+                        <option value="automation">Automation draft</option>
+                        <option value="provider_policy">Provider policy</option>
+                        <option value="skill_draft">Skill draft</option>
+                    </select>
+                    <input id="session-promotion-name-input" type="text" placeholder="Name or title override">
+                    <input id="session-promotion-schedule-input" type="text" placeholder="@daily (automation)">
+                    <select id="session-promotion-scope-input">
+                        <option value="session">Session scope</option>
+                        <option value="actor">Actor scope</option>
+                        <option value="channel">Channel scope</option>
+                        <option value="global">Global scope</option>
+                    </select>
+                    <input id="session-promotion-provider-input" type="text" placeholder="Provider override">
+                    <input id="session-promotion-model-input" type="text" placeholder="Model override">
+                </div>
+                <div class="actions" style="margin-bottom:0.75rem;">
+                    <button id="session-promote-button">Promote Session</button>
+                </div>
+                <div id="session-detail-output" class="stack muted">Select a session.</div>
+                <pre id="session-promotion-output">Select a session.</pre>
                 <div id="session-branches-output" class="muted"></div>
                 <h3 style="margin-top:1rem;">Timeline</h3>
                 <pre id="session-timeline-output">Select a session.</pre>
@@ -1069,6 +1223,8 @@
         const sessionStatus = document.getElementById('session-status');
         const summaryOutput = document.getElementById('summary-output');
         const summaryPills = document.getElementById('summary-pills');
+        const dashboardCards = document.getElementById('dashboard-cards');
+        const operatorDashboardOutput = document.getElementById('operator-dashboard-output');
         const doctorOutput = document.getElementById('doctor-output');
         const integrationDashboardOutput = document.getElementById('integration-dashboard-output');
         const mcpOutput = document.getElementById('mcp-output');
@@ -1096,10 +1252,17 @@
         const sessionPageSize = document.getElementById('session-page-size');
         const sessionsPageLabel = document.getElementById('sessions-page-label');
         const sessionDetailOutput = document.getElementById('session-detail-output');
+        const sessionPromotionOutput = document.getElementById('session-promotion-output');
         const sessionBranchesOutput = document.getElementById('session-branches-output');
         const sessionTimelineOutput = document.getElementById('session-timeline-output');
         const sessionStarredInput = document.getElementById('session-starred-input');
         const sessionTagsInput = document.getElementById('session-tags-input');
+        const sessionPromotionTargetInput = document.getElementById('session-promotion-target-input');
+        const sessionPromotionNameInput = document.getElementById('session-promotion-name-input');
+        const sessionPromotionScheduleInput = document.getElementById('session-promotion-schedule-input');
+        const sessionPromotionScopeInput = document.getElementById('session-promotion-scope-input');
+        const sessionPromotionProviderInput = document.getElementById('session-promotion-provider-input');
+        const sessionPromotionModelInput = document.getElementById('session-promotion-model-input');
         const pairingOutput = document.getElementById('pairing-output');
         const allowlistsOutput = document.getElementById('allowlists-output');
         const heartbeatTemplates = document.getElementById('heartbeat-templates');
@@ -1107,6 +1270,32 @@
         const heartbeatTasks = document.getElementById('heartbeat-tasks');
         const heartbeatStatusOutput = document.getElementById('heartbeat-status-output');
         const heartbeatPreviewOutput = document.getElementById('heartbeat-preview-output');
+        const automationTemplatesOutput = document.getElementById('automation-templates-output');
+        const automationListOutput = document.getElementById('automation-list-output');
+        const automationPreviewOutput = document.getElementById('automation-preview-output');
+        const automationInputs = {
+            id: document.getElementById('automation-id-input'),
+            name: document.getElementById('automation-name-input'),
+            schedule: document.getElementById('automation-schedule-input'),
+            timezone: document.getElementById('automation-timezone-input'),
+            modelId: document.getElementById('automation-model-input'),
+            sessionId: document.getElementById('automation-session-input'),
+            deliveryChannelId: document.getElementById('automation-channel-input'),
+            deliveryRecipientId: document.getElementById('automation-recipient-input'),
+            deliverySubject: document.getElementById('automation-subject-input'),
+            tags: document.getElementById('automation-tags-input'),
+            source: document.getElementById('automation-source-input'),
+            templateKey: document.getElementById('automation-template-key-input'),
+            enabled: document.getElementById('automation-enabled-input'),
+            isDraft: document.getElementById('automation-draft-input'),
+            runOnStartup: document.getElementById('automation-startup-input'),
+            prompt: document.getElementById('automation-prompt-input')
+        };
+        const learningListOutput = document.getElementById('learning-list-output');
+        const learningDetailOutput = document.getElementById('learning-detail-output');
+        const learningStatusInput = document.getElementById('learning-status-input');
+        const learningKindInput = document.getElementById('learning-kind-input');
+        const learningReasonInput = document.getElementById('learning-reason-input');
         const memorySearchInput = document.getElementById('memory-search-input');
         const memoryPrefixInput = document.getElementById('memory-prefix-input');
         const memoryClassFilterInput = document.getElementById('memory-class-filter-input');
@@ -1221,6 +1410,14 @@
         };
         let settingsState = null;
         let heartbeatState = null;
+        let automationState = {
+            selectedId: null,
+            templates: []
+        };
+        let learningState = {
+            selectedId: null,
+            detail: null
+        };
         let memoryState = {
             selectedKey: null
         };
@@ -1312,6 +1509,29 @@
 
         function renderJson(target, value) {
             target.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        }
+
+        function formatDateTime(value) {
+            if (!value) return 'Never';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+        }
+
+        function slugifyValue(value) {
+            return String(value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-+|-+$/g, '')
+                .slice(0, 48);
+        }
+
+        function renderMetricList(items, empty = 'None.') {
+            if (!items?.length) {
+                return `<div class="muted">${escapeHtml(empty)}</div>`;
+            }
+
+            return `<ul class="list">${items.map(item => `<li>${escapeHtml(item.label)}: ${escapeHtml(item.count)}</li>`).join('')}</ul>`;
         }
 
         function authStateKey(item) {
@@ -2223,10 +2443,73 @@
             }
         }
 
+        function renderOperatorDashboard(operator) {
+            if (!operator) {
+                dashboardCards.innerHTML = '';
+                operatorDashboardOutput.innerHTML = '<div class="muted">No operator snapshot available.</div>';
+                return;
+            }
+
+            dashboardCards.innerHTML = [
+                { label: 'Sessions (24h)', value: operator.sessions?.last24Hours ?? 0, note: `${operator.sessions?.active ?? 0} active` },
+                { label: 'Pending Approvals', value: operator.approvals?.pending ?? 0, note: `${operator.approvals?.decisionsLast24Hours ?? 0} decisions / 24h` },
+                { label: 'Automations', value: operator.automations?.total ?? 0, note: `${operator.automations?.enabled ?? 0} enabled` },
+                { label: 'Learning Queue', value: operator.learning?.pending ?? 0, note: `${operator.learning?.approved ?? 0} approved` },
+                { label: 'Ready Channels', value: operator.channels?.ready ?? 0, note: `${operator.channels?.misconfigured ?? 0} misconfigured` },
+                { label: 'Needs Review', value: operator.plugins?.needsReview ?? 0, note: `${operator.plugins?.quarantined ?? 0} quarantined` }
+            ].map(item => `
+                <div class="metric-card">
+                    <div class="muted">${escapeHtml(item.label)}</div>
+                    <strong>${escapeHtml(item.value)}</strong>
+                    <div class="muted">${escapeHtml(item.note)}</div>
+                </div>
+            `).join('');
+
+            operatorDashboardOutput.innerHTML = `
+                <div class="readiness-grid">
+                    <div class="readiness-card">
+                        <strong>Top Channels</strong>
+                        ${renderMetricList(operator.sessions?.channels, 'No sessions yet.')}
+                    </div>
+                    <div class="readiness-card">
+                        <strong>Pending Approval Tools</strong>
+                        ${renderMetricList(operator.approvals?.pendingByTool, 'No pending approvals.')}
+                    </div>
+                    <div class="readiness-card">
+                        <strong>Memory Classes</strong>
+                        ${renderMetricList(operator.memory?.byClass, 'No durable notes listed.')}
+                    </div>
+                    <div class="readiness-card">
+                        <strong>Plugin Trust</strong>
+                        ${renderMetricList(operator.plugins?.trustLevels, 'No plugins loaded.')}
+                    </div>
+                    <div class="readiness-card">
+                        <strong>Automation Health</strong>
+                        <ul class="list">
+                            <li>Drafts: ${escapeHtml(operator.automations?.drafts ?? 0)}</li>
+                            <li>Failing: ${escapeHtml(operator.automations?.failing ?? 0)}</li>
+                            <li>Queued/running: ${escapeHtml(operator.automations?.queuedOrRunning ?? 0)}</li>
+                            <li>Never run: ${escapeHtml(operator.automations?.neverRun ?? 0)}</li>
+                        </ul>
+                    </div>
+                    <div class="readiness-card">
+                        <strong>Delegation</strong>
+                        <ul class="list">
+                            <li>Enabled: ${operator.delegation?.enabled ? 'yes' : 'no'}</li>
+                            <li>Profiles: ${escapeHtml((operator.delegation?.profiles || []).join(', ') || 'none')}</li>
+                            <li>24h delegated sessions: ${escapeHtml(operator.delegation?.last24Hours ?? 0)}</li>
+                        </ul>
+                    </div>
+                </div>
+            `;
+        }
+
         async function loadSummary() {
             const { resp, data } = await api('/api/integration/dashboard');
             if (!resp.ok) {
                 summaryPills.innerHTML = '';
+                dashboardCards.innerHTML = '';
+                operatorDashboardOutput.innerHTML = '<div class="muted">Dashboard unavailable.</div>';
                 renderJson(summaryOutput, `Summary request failed (${resp.status})`);
                 renderJson(integrationDashboardOutput, `Integration dashboard failed (${resp.status})`);
                 return;
@@ -2243,8 +2526,318 @@
                 `Events: ${data.events.items.length}`
             ].map(value => `<span class="pill">${value}</span>`).join('');
 
+            renderOperatorDashboard(data.operator);
             renderJson(summaryOutput, data);
             renderJson(integrationDashboardOutput, data);
+        }
+
+        function buildAutomationPayload() {
+            const id = automationInputs.id.value.trim();
+            return {
+                id: id || `auto_${slugifyValue(automationInputs.name.value)}`.replace(/-+/g, '_').replace(/^auto_$/, ''),
+                name: automationInputs.name.value.trim(),
+                enabled: automationInputs.enabled.checked,
+                schedule: automationInputs.schedule.value.trim() || '@daily',
+                timezone: automationInputs.timezone.value.trim() || null,
+                prompt: automationInputs.prompt.value,
+                modelId: automationInputs.modelId.value.trim() || null,
+                runOnStartup: automationInputs.runOnStartup.checked,
+                sessionId: automationInputs.sessionId.value.trim() || null,
+                deliveryChannelId: automationInputs.deliveryChannelId.value.trim() || 'cron',
+                deliveryRecipientId: automationInputs.deliveryRecipientId.value.trim() || null,
+                deliverySubject: automationInputs.deliverySubject.value.trim() || null,
+                tags: automationInputs.tags.value.split(',').map(value => value.trim()).filter(Boolean),
+                isDraft: automationInputs.isDraft.checked,
+                source: automationInputs.source.value.trim() || 'managed',
+                templateKey: automationInputs.templateKey.value.trim() || null
+            };
+        }
+
+        function applyAutomationDefinition(automation, runState = null) {
+            automationState.selectedId = automation?.id || null;
+            automationInputs.id.value = automation?.id || '';
+            automationInputs.name.value = automation?.name || '';
+            automationInputs.schedule.value = automation?.schedule || '@daily';
+            automationInputs.timezone.value = automation?.timezone || '';
+            automationInputs.modelId.value = automation?.modelId || '';
+            automationInputs.sessionId.value = automation?.sessionId || '';
+            automationInputs.deliveryChannelId.value = automation?.deliveryChannelId || 'cron';
+            automationInputs.deliveryRecipientId.value = automation?.deliveryRecipientId || '';
+            automationInputs.deliverySubject.value = automation?.deliverySubject || '';
+            automationInputs.tags.value = Array.isArray(automation?.tags) ? automation.tags.join(', ') : '';
+            automationInputs.source.value = automation?.source || 'managed';
+            automationInputs.templateKey.value = automation?.templateKey || '';
+            automationInputs.enabled.checked = Boolean(automation?.enabled);
+            automationInputs.isDraft.checked = Boolean(automation?.isDraft);
+            automationInputs.runOnStartup.checked = Boolean(automation?.runOnStartup);
+            automationInputs.prompt.value = automation?.prompt || '';
+            renderJson(automationPreviewOutput, runState ? { automation, runState } : automation || 'Select or create an automation.');
+        }
+
+        function applyAutomationTemplate(template) {
+            if (!template) return;
+            automationState.selectedId = null;
+            automationInputs.id.value = '';
+            automationInputs.name.value = template.suggestedName || template.label || '';
+            automationInputs.schedule.value = template.schedule || '@daily';
+            automationInputs.timezone.value = '';
+            automationInputs.modelId.value = '';
+            automationInputs.sessionId.value = '';
+            automationInputs.deliveryChannelId.value = template.deliveryChannelId || 'cron';
+            automationInputs.deliveryRecipientId.value = '';
+            automationInputs.deliverySubject.value = template.deliverySubject || '';
+            automationInputs.tags.value = Array.isArray(template.tags) ? template.tags.join(', ') : '';
+            automationInputs.source.value = 'template';
+            automationInputs.templateKey.value = template.key || '';
+            automationInputs.enabled.checked = false;
+            automationInputs.isDraft.checked = true;
+            automationInputs.runOnStartup.checked = false;
+            automationInputs.prompt.value = template.prompt || '';
+            renderJson(automationPreviewOutput, { template });
+        }
+
+        async function loadAutomationTemplates() {
+            const { resp, data } = await api('/admin/automations/templates');
+            if (!resp.ok) {
+                automationTemplatesOutput.textContent = `Automation template request failed (${resp.status})`;
+                return;
+            }
+
+            automationState.templates = data.items || [];
+            automationTemplatesOutput.innerHTML = automationState.templates.map(item => `
+                <button data-automation-template="${escapeHtml(item.key)}" class="${item.available ? '' : 'secondary'}" title="${escapeHtml(item.description || '')}">
+                    ${escapeHtml(item.label || item.key)}
+                </button>
+            `).join('');
+        }
+
+        async function loadAutomations() {
+            const { resp, data } = await api('/admin/automations');
+            if (!resp.ok) {
+                automationListOutput.textContent = `Automations request failed (${resp.status})`;
+                return;
+            }
+
+            const items = (data.items || []).slice().sort((a, b) => String(b.updatedAtUtc || '').localeCompare(String(a.updatedAtUtc || '')));
+            if (!items.length) {
+                automationListOutput.textContent = 'No automations configured.';
+                return;
+            }
+
+            automationListOutput.innerHTML = `
+                <table>
+                    <thead><tr><th>Name</th><th>Schedule</th><th>Channel</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        ${items.map(item => `
+                            <tr>
+                                <td>
+                                    <strong>${escapeHtml(item.name || item.id)}</strong>
+                                    <div class="muted">${escapeHtml(item.id)}</div>
+                                </td>
+                                <td>${escapeHtml(item.schedule || '@daily')}</td>
+                                <td>${escapeHtml(item.deliveryChannelId || 'cron')}</td>
+                                <td>${item.enabled ? 'enabled' : 'disabled'}${item.isDraft ? ' · draft' : ''}</td>
+                                <td class="actions">
+                                    <button data-automation-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                                    <button class="secondary" data-automation-run="${encodeURIComponent(item.id)}">Run</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function loadAutomationDetail(id) {
+            if (!id) return;
+            const { resp, data } = await api(`/admin/automations/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                renderJson(automationPreviewOutput, `Automation request failed (${resp.status})`);
+                return;
+            }
+
+            if (data.automation) {
+                applyAutomationDefinition(data.automation, data.runState || null);
+            }
+        }
+
+        async function previewAutomation() {
+            const payload = buildAutomationPayload();
+            if (!payload.name || !payload.prompt) {
+                showFlash('Automation name and prompt are required for preview.', 'warn');
+                return;
+            }
+
+            const { resp, data } = await mutate('/admin/automations/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            renderJson(automationPreviewOutput, resp.ok ? data : `Automation preview failed (${resp.status})`);
+            showFlash(resp.ok ? 'Automation preview generated.' : `Automation preview failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        }
+
+        async function saveAutomation() {
+            const payload = buildAutomationPayload();
+            if (!payload.id || !payload.name || !payload.prompt) {
+                showFlash('Automation ID, name, and prompt are required.', 'warn');
+                return;
+            }
+
+            const { resp, data } = await mutate(`/admin/automations/${encodeURIComponent(payload.id)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            renderJson(automationPreviewOutput, resp.ok ? data : `Automation save failed (${resp.status})`);
+            showFlash(resp.ok ? 'Automation saved.' : `Automation save failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (resp.ok && data.automation) {
+                applyAutomationDefinition(data.automation, data.runState || null);
+                await loadAutomations();
+                await loadSummary();
+            }
+        }
+
+        async function runAutomation(dryRun) {
+            const id = automationInputs.id.value.trim();
+            if (!id) {
+                showFlash('Select or save an automation first.', 'warn');
+                return;
+            }
+
+            const { resp, data } = await mutate(`/admin/automations/${encodeURIComponent(id)}/run`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dryRun })
+            });
+            renderJson(automationPreviewOutput, resp.ok ? data : `Automation run failed (${resp.status})`);
+            showFlash(resp.ok ? (dryRun ? 'Automation dry run completed.' : 'Automation queued.') : `Automation run failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (resp.ok) {
+                await loadSummary();
+                await loadAutomations();
+            }
+        }
+
+        async function deleteAutomation() {
+            const id = automationInputs.id.value.trim();
+            if (!id) {
+                showFlash('Select an automation first.', 'warn');
+                return;
+            }
+
+            if (!window.confirm(`Delete automation '${id}'?`)) {
+                return;
+            }
+
+            const { resp, data } = await mutate(`/admin/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            renderJson(automationPreviewOutput, resp.ok ? data : `Automation delete failed (${resp.status})`);
+            showFlash(resp.ok ? 'Automation deleted.' : `Automation delete failed (${resp.status}).`, resp.ok ? 'warn' : 'error');
+            if (resp.ok) {
+                applyAutomationDefinition(null);
+                await loadAutomations();
+                await loadSummary();
+            }
+        }
+
+        async function loadLearningProposals() {
+            const params = new URLSearchParams();
+            if (learningStatusInput.value) params.set('status', learningStatusInput.value);
+            if (learningKindInput.value) params.set('kind', learningKindInput.value);
+            const { resp, data } = await api(`/admin/learning/proposals?${params.toString()}`);
+            if (!resp.ok) {
+                learningListOutput.textContent = `Learning request failed (${resp.status})`;
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                learningListOutput.textContent = 'No learning proposals matched the current filters.';
+                return;
+            }
+
+            learningListOutput.innerHTML = items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${escapeHtml(item.title || item.id)}</strong>
+                    <div class="muted">${escapeHtml(item.kind)} · ${escapeHtml(item.status)} · confidence ${escapeHtml(item.confidence ?? 0)}</div>
+                    <div class="muted">${escapeHtml(item.summary || '')}</div>
+                    <div class="muted">${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="actions" style="margin-top:0.75rem;">
+                        <button data-learning-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderLearningDetail(detail) {
+            learningState.detail = detail;
+            const proposal = detail?.proposal;
+            if (!proposal) {
+                learningDetailOutput.innerHTML = '<div class="muted">Select a proposal.</div>';
+                return;
+            }
+
+            const diff = (detail.profileDiff || []).length
+                ? `<h3>Profile Diff</h3><pre>${escapeHtml(JSON.stringify(detail.profileDiff, null, 2))}</pre>`
+                : '';
+            const automationDraft = proposal.automationDraft
+                ? `<h3>Automation Draft</h3><pre>${escapeHtml(JSON.stringify(proposal.automationDraft, null, 2))}</pre><div class="actions"><button data-learning-load-automation="true">Load Draft Into Automation Editor</button></div>`
+                : '';
+            const profile = detail.currentProfile
+                ? `<h3>Current Profile</h3><pre>${escapeHtml(JSON.stringify(detail.currentProfile, null, 2))}</pre>`
+                : '';
+
+            learningDetailOutput.innerHTML = `
+                <div class="stack">
+                    <div>
+                        <strong>${escapeHtml(proposal.title || proposal.id)}</strong>
+                        <div class="muted">${escapeHtml(proposal.kind)} · ${escapeHtml(proposal.status)} · confidence ${escapeHtml(proposal.confidence ?? 0)}</div>
+                        <div class="muted">Actor: ${escapeHtml(proposal.actorId || 'unknown')} · Updated: ${escapeHtml(formatDateTime(proposal.updatedAtUtc || proposal.createdAtUtc))}</div>
+                    </div>
+                    <pre>${escapeHtml(JSON.stringify(proposal, null, 2))}</pre>
+                    ${diff}
+                    ${automationDraft}
+                    ${profile}
+                </div>
+            `;
+        }
+
+        async function loadLearningProposalDetail(id) {
+            if (!id) return;
+            learningState.selectedId = id;
+            const { resp, data } = await api(`/admin/learning/proposals/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                learningDetailOutput.innerHTML = `<div class="muted">Learning detail failed (${resp.status})</div>`;
+                return;
+            }
+
+            renderLearningDetail(data);
+        }
+
+        async function reviewLearningProposal(action) {
+            if (!learningState.selectedId) {
+                showFlash('Select a proposal first.', 'warn');
+                return;
+            }
+
+            const { resp, data } = await mutate(`/admin/learning/proposals/${encodeURIComponent(learningState.selectedId)}/${action}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason: learningReasonInput.value.trim() || null })
+            });
+
+            showFlash(resp.ok ? `Learning proposal ${action}d.` : `Learning proposal ${action} failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (!resp.ok) {
+                renderJson(learningDetailOutput, data || `Learning proposal ${action} failed (${resp.status})`);
+                return;
+            }
+
+            await loadLearningProposals();
+            await loadLearningProposalDetail(learningState.selectedId);
+            await loadSummary();
+            if (action === 'approve' || action === 'rollback') {
+                await loadAutomations();
+            }
         }
 
         async function loadDoctor() {
@@ -2462,6 +3055,120 @@
             renderJson(rateLimitsOutput, resp.ok ? data : `Rate-limit request failed (${resp.status})`);
         }
 
+        function buildSessionPromotionPayload() {
+            return {
+                target: sessionPromotionTargetInput.value,
+                name: sessionPromotionNameInput.value.trim() || null,
+                schedule: sessionPromotionScheduleInput.value.trim() || null,
+                scope: sessionPromotionScopeInput.value,
+                providerId: sessionPromotionProviderInput.value.trim() || null,
+                modelId: sessionPromotionModelInput.value.trim() || null
+            };
+        }
+
+        function applySessionPromotionDefaults(session) {
+            if (!session) {
+                sessionPromotionNameInput.value = '';
+                sessionPromotionScheduleInput.value = '@daily';
+                sessionPromotionScopeInput.value = 'session';
+                sessionPromotionProviderInput.value = '';
+                sessionPromotionModelInput.value = '';
+                return;
+            }
+
+            const lastUser = (session.history || [])
+                .filter(item => item.role === 'user')
+                .slice(-1)[0];
+            sessionPromotionNameInput.value = lastUser?.content?.slice(0, 60) || session.delegation?.profile || session.id;
+            sessionPromotionScheduleInput.value = '@daily';
+            sessionPromotionScopeInput.value = 'session';
+            sessionPromotionProviderInput.value = '';
+            sessionPromotionModelInput.value = session.modelOverride || '';
+        }
+
+        function renderDelegationUsage(items, emptyLabel) {
+            if (!items?.length) {
+                return `<div class="muted">${escapeHtml(emptyLabel)}</div>`;
+            }
+
+            return `<ul class="list">${items.map(item => `
+                <li>${escapeHtml(item.toolName)}${item.action ? ` · ${escapeHtml(item.action)}` : ''}${item.count ? ` · ${escapeHtml(item.count)}` : ''}<div class="muted">${escapeHtml(item.summary || '')}</div></li>
+            `).join('')}</ul>`;
+        }
+
+        function renderSessionDetail(detail) {
+            const session = detail?.session;
+            if (!session) {
+                sessionDetailOutput.innerHTML = '<div class="muted">Select a session.</div>';
+                applySessionPromotionDefaults(null);
+                return;
+            }
+
+            const delegation = session.delegation;
+            const delegatedSessions = session.delegatedSessions || [];
+            const historyPreview = (session.history || []).slice(-6).map(turn => `
+                <div class="card" style="margin-top:0.5rem;">
+                    <strong>${escapeHtml(turn.role)}</strong>
+                    <div class="muted">${escapeHtml(formatDateTime(turn.timestamp))}</div>
+                    <pre>${escapeHtml(turn.content || '')}</pre>
+                </div>
+            `).join('');
+
+            const metadataPills = [
+                `Session: ${session.id}`,
+                `Channel: ${session.channelId}`,
+                `Sender: ${session.senderId}`,
+                `Turns: ${(session.history || []).length}`,
+                `Branches: ${detail.branchCount ?? 0}`,
+                `Active: ${detail.isActive ? 'yes' : 'no'}`
+            ];
+            if (detail.metadata?.starred) metadataPills.push('Starred');
+            (detail.metadata?.tags || []).forEach(tag => metadataPills.push(`Tag: ${tag}`));
+
+            sessionDetailOutput.innerHTML = `
+                <div class="pill-row">${metadataPills.map(value => `<span class="pill">${escapeHtml(value)}</span>`).join('')}</div>
+                ${delegation ? `
+                    <div class="card" style="margin-top:0.75rem;">
+                        <strong>Delegated Session</strong>
+                        <div class="muted">Parent: ${escapeHtml(delegation.parentSessionId || 'n/a')} · Profile: ${escapeHtml(delegation.profile || 'unknown')} · Depth: ${escapeHtml(delegation.depth ?? 0)}</div>
+                        <div class="muted">Status: ${escapeHtml(delegation.status || 'unknown')} · Started: ${escapeHtml(formatDateTime(delegation.startedAtUtc))}</div>
+                        <pre>${escapeHtml(delegation.requestedTask || '')}</pre>
+                        <h4>Tools Used</h4>
+                        ${renderDelegationUsage(delegation.toolUsage, 'No delegated tool usage recorded.')}
+                        <h4>Proposed Changes</h4>
+                        ${renderDelegationUsage(delegation.proposedChanges, 'No mutation-capable actions recorded.')}
+                        ${delegation.finalResponsePreview ? `<h4>Result Preview</h4><pre>${escapeHtml(delegation.finalResponsePreview)}</pre>` : ''}
+                    </div>
+                ` : ''}
+                ${delegatedSessions.length ? `
+                    <div class="card" style="margin-top:0.75rem;">
+                        <strong>Delegated Children</strong>
+                        ${delegatedSessions.map(item => `
+                            <div class="card" style="margin-top:0.5rem;">
+                                <strong>${escapeHtml(item.profile || item.sessionId)}</strong>
+                                <div class="muted">${escapeHtml(item.sessionId)} · ${escapeHtml(item.status || 'unknown')}</div>
+                                <div class="muted">${escapeHtml(formatDateTime(item.startedAtUtc))}</div>
+                                <div>${escapeHtml(item.taskPreview || '')}</div>
+                                <div class="actions" style="margin-top:0.5rem;">
+                                    <button class="secondary" data-related-session="${escapeHtml(item.sessionId)}">Inspect Child</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                ` : ''}
+                <div class="card" style="margin-top:0.75rem;">
+                    <strong>Recent Turns</strong>
+                    ${historyPreview || '<div class="muted">No turns recorded.</div>'}
+                </div>
+                <details style="margin-top:0.75rem;">
+                    <summary>Raw Session JSON</summary>
+                    <pre>${escapeHtml(JSON.stringify(detail, null, 2))}</pre>
+                </details>
+            `;
+
+            applySessionPromotionDefaults(session);
+        }
+
         async function loadSessions() {
             sessionsState.pageSize = Number(sessionPageSize.value || '25');
             const params = new URLSearchParams({
@@ -2525,13 +3232,16 @@
             sessionsState.selectedSessionId = sessionId;
             const detail = await api(`/api/integration/sessions/${encodeURIComponent(sessionId)}`);
             if (detail.resp.ok) {
-                renderJson(sessionDetailOutput, detail.data);
+                renderSessionDetail(detail.data);
                 sessionStarredInput.checked = Boolean(detail.data.metadata?.starred);
                 sessionTagsInput.value = Array.isArray(detail.data.metadata?.tags) ? detail.data.metadata.tags.join(', ') : '';
+                renderJson(sessionPromotionOutput, { selectedSessionId: sessionId });
             } else {
                 renderJson(sessionDetailOutput, `Session detail failed (${detail.resp.status})`);
                 sessionStarredInput.checked = false;
                 sessionTagsInput.value = '';
+                renderJson(sessionPromotionOutput, `Session detail failed (${detail.resp.status})`);
+                applySessionPromotionDefaults(null);
             }
 
             const branches = await api(`/admin/sessions/${encodeURIComponent(sessionId)}/branches`);
@@ -2554,6 +3264,39 @@
 
             const timeline = await api(`/api/integration/sessions/${encodeURIComponent(sessionId)}/timeline`);
             renderJson(sessionTimelineOutput, timeline.resp.ok ? timeline.data : `Timeline request failed (${timeline.resp.status})`);
+        }
+
+        async function promoteSelectedSession() {
+            if (!sessionsState.selectedSessionId) {
+                showFlash('Select a session first.', 'warn');
+                return;
+            }
+
+            const payload = buildSessionPromotionPayload();
+            const { resp, data } = await mutate(`/admin/sessions/${encodeURIComponent(sessionsState.selectedSessionId)}/promote`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            renderJson(sessionPromotionOutput, resp.ok ? data : data || `Session promotion failed (${resp.status})`);
+            showFlash(resp.ok ? `Session promoted to ${payload.target}.` : `Session promotion failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (resp.ok) {
+                await loadSummary();
+                if (payload.target === 'automation') {
+                    await loadAutomations();
+                    if (data?.automation) {
+                        applyAutomationDefinition(data.automation);
+                    }
+                } else if (payload.target === 'skill_draft') {
+                    await loadLearningProposals();
+                    if (data?.proposal?.id) {
+                        await loadLearningProposalDetail(data.proposal.id);
+                    }
+                } else if (payload.target === 'provider_policy') {
+                    await loadProviders();
+                }
+            }
         }
 
         async function sendIntegrationMessage() {
@@ -2694,6 +3437,10 @@
                 approvalsOutput.textContent = 'Login required.';
                 approvalsHistoryOutput.textContent = 'Login required.';
                 sessionsOutput.textContent = 'Login required.';
+                sessionDetailOutput.textContent = 'Login required.';
+                sessionPromotionOutput.textContent = 'Login required.';
+                sessionBranchesOutput.textContent = 'Login required.';
+                sessionTimelineOutput.textContent = 'Login required.';
                 pairingOutput.textContent = 'Login required.';
                 allowlistsOutput.textContent = 'Login required.';
                 heartbeatStatusOutput.textContent = 'Login required.';
@@ -2715,6 +3462,13 @@
                 whatsAppPluginSchemaOutput.textContent = 'Login required.';
                 whatsAppPluginUiHintsOutput.textContent = 'Login required.';
                 whatsAppNotesOutput.textContent = 'Login required.';
+                dashboardCards.innerHTML = '';
+                operatorDashboardOutput.innerHTML = '<div class="muted">Login required.</div>';
+                automationTemplatesOutput.textContent = 'Login required.';
+                automationListOutput.textContent = 'Login required.';
+                automationPreviewOutput.textContent = 'Login required.';
+                learningListOutput.textContent = 'Login required.';
+                learningDetailOutput.innerHTML = '<div class="muted">Login required.</div>';
                 if (approvalsPollTimer) {
                     clearInterval(approvalsPollTimer);
                     approvalsPollTimer = null;
@@ -2740,6 +3494,9 @@
                 loadRateLimits(),
                 loadSessions(),
                 loadHeartbeat(),
+                loadAutomationTemplates(),
+                loadAutomations(),
+                loadLearningProposals(),
                 loadSettings(),
                 loadWhatsAppSetup(),
                 loadPairing(),
@@ -2774,6 +3531,33 @@
 
         refreshButton.addEventListener('click', refreshAll);
         document.getElementById('retention-status-button').addEventListener('click', loadRetention);
+        document.getElementById('automation-refresh-button').addEventListener('click', async () => {
+            await loadAutomationTemplates();
+            await loadAutomations();
+        });
+        document.getElementById('automation-new-button').addEventListener('click', () => applyAutomationDefinition({
+            id: '',
+            name: '',
+            enabled: false,
+            schedule: '@daily',
+            prompt: '',
+            deliveryChannelId: 'cron',
+            tags: [],
+            isDraft: true,
+            source: 'managed'
+        }));
+        document.getElementById('automation-preview-button').addEventListener('click', previewAutomation);
+        document.getElementById('automation-save-button').addEventListener('click', saveAutomation);
+        document.getElementById('automation-run-button').addEventListener('click', async () => runAutomation(false));
+        document.getElementById('automation-dry-run-button').addEventListener('click', async () => runAutomation(true));
+        document.getElementById('automation-delete-button').addEventListener('click', deleteAutomation);
+        document.getElementById('learning-refresh-button').addEventListener('click', loadLearningProposals);
+        document.getElementById('learning-approve-button').addEventListener('click', async () => reviewLearningProposal('approve'));
+        document.getElementById('learning-reject-button').addEventListener('click', async () => reviewLearningProposal('reject'));
+        document.getElementById('learning-rollback-button').addEventListener('click', async () => reviewLearningProposal('rollback'));
+        [learningStatusInput, learningKindInput].forEach(input => {
+            input.addEventListener('change', loadLearningProposals);
+        });
         document.getElementById('memory-refresh-button').addEventListener('click', loadMemoryNotes);
         document.getElementById('memory-search-button').addEventListener('click', loadMemoryNotes);
         document.getElementById('memory-load-button').addEventListener('click', async () => {
@@ -2834,6 +3618,7 @@
             sessionsState.page += 1;
             await loadSessions();
         });
+        document.getElementById('session-promote-button').addEventListener('click', promoteSelectedSession);
         sessionPageSize.addEventListener('change', async () => {
             sessionsState.page = 1;
             await loadSessions();
@@ -2906,6 +3691,12 @@
             const button = event.target.closest('button[data-session]');
             if (!button) return;
             await loadSessionDetail(button.getAttribute('data-session'));
+        });
+
+        sessionDetailOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-related-session]');
+            if (!button) return;
+            await loadSessionDetail(button.getAttribute('data-related-session'));
         });
 
         sessionBranchesOutput.addEventListener('click', async (event) => {
@@ -3070,6 +3861,44 @@
             const removeCondition = event.target.closest('button[data-condition-remove]');
             if (removeCondition) {
                 removeCondition.closest('.task-condition')?.remove();
+            }
+        });
+
+        automationTemplatesOutput.addEventListener('click', event => {
+            const button = event.target.closest('button[data-automation-template]');
+            if (!button) return;
+            const key = button.getAttribute('data-automation-template');
+            const template = (automationState.templates || []).find(item => item.key === key);
+            applyAutomationTemplate(template);
+        });
+
+        automationListOutput.addEventListener('click', async event => {
+            const inspect = event.target.closest('button[data-automation-inspect]');
+            if (inspect) {
+                await loadAutomationDetail(decodeURIComponent(inspect.getAttribute('data-automation-inspect') || ''));
+                return;
+            }
+
+            const run = event.target.closest('button[data-automation-run]');
+            if (run) {
+                await loadAutomationDetail(decodeURIComponent(run.getAttribute('data-automation-run') || ''));
+                await runAutomation(false);
+            }
+        });
+
+        learningListOutput.addEventListener('click', async event => {
+            const inspect = event.target.closest('button[data-learning-inspect]');
+            if (!inspect) return;
+            await loadLearningProposalDetail(decodeURIComponent(inspect.getAttribute('data-learning-inspect') || ''));
+        });
+
+        learningDetailOutput.addEventListener('click', event => {
+            const button = event.target.closest('button[data-learning-load-automation]');
+            if (!button) return;
+            const draft = learningState.detail?.proposal?.automationDraft;
+            if (draft) {
+                applyAutomationDefinition(draft);
+                window.location.hash = '#automation-section';
             }
         });
 

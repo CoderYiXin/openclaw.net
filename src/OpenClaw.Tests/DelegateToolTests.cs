@@ -6,6 +6,7 @@ using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Observability;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -80,6 +81,102 @@ public sealed class DelegateToolTests
         }
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WithContext_PersistsDelegationMetadataAndParentSummary()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-delegate-context-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var llmConfig = new LlmProviderConfig
+            {
+                Provider = "test",
+                Model = "test-model"
+            };
+            var delegation = new DelegationConfig
+            {
+                Enabled = true,
+                Profiles = new Dictionary<string, AgentProfile>(StringComparer.Ordinal)
+                {
+                    ["reviewer"] = new()
+                    {
+                        Name = "reviewer",
+                        SystemPrompt = "Review the change.",
+                        MaxHistoryTurns = 6,
+                        MaxIterations = 2
+                    }
+                }
+            };
+
+            var memoryStore = new FileMemoryStore(storagePath, 4);
+            var tool = new DelegateTool(
+                new TestChatClient(),
+                [new TestTool()],
+                memoryStore,
+                llmConfig,
+                delegation,
+                logger: NullLogger.Instance,
+                runtimeFactory: (_, _, _) => new FakeRuntime("delegated-result", static session =>
+                {
+                    session.History.Add(new ChatTurn
+                    {
+                        Role = "assistant",
+                        Content = "Delegated work completed.",
+                        ToolCalls =
+                        [
+                            new ToolInvocation
+                            {
+                                ToolName = "shell",
+                                Arguments = """{"command":"pwd"}""",
+                                Result = "/tmp",
+                                Duration = TimeSpan.FromMilliseconds(15)
+                            }
+                        ]
+                    });
+                }));
+
+            var parentSession = new Session
+            {
+                Id = "parent-session",
+                ChannelId = "api",
+                SenderId = "operator"
+            };
+            var context = new ToolExecutionContext
+            {
+                Session = parentSession,
+                TurnContext = new TurnContext
+                {
+                    SessionId = parentSession.Id,
+                    ChannelId = parentSession.ChannelId
+                }
+            };
+
+            var result = await tool.ExecuteAsync("""
+                {"profile":"reviewer","task":"Inspect the change"}
+                """, context, CancellationToken.None);
+
+            Assert.Equal("delegated-result", result);
+            var parentSummary = Assert.Single(parentSession.DelegatedSessions);
+            Assert.Equal("reviewer", parentSummary.Profile);
+            Assert.Equal("completed", parentSummary.Status);
+            Assert.Contains(parentSummary.ToolUsage, item => item.ToolName == "shell");
+
+            var persisted = await memoryStore.GetSessionAsync(parentSummary.SessionId, CancellationToken.None);
+            Assert.NotNull(persisted);
+            Assert.Equal("delegation", persisted!.ChannelId);
+            Assert.NotNull(persisted.Delegation);
+            Assert.Equal("parent-session", persisted.Delegation!.ParentSessionId);
+            Assert.Equal("reviewer", persisted.Delegation.Profile);
+            Assert.Equal("completed", persisted.Delegation.Status);
+            Assert.Contains(persisted.Delegation.ToolUsage, item => item.ToolName == "shell" && item.IsMutation);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
     private sealed class TestTool : ITool
     {
         public string Name => "test_tool";
@@ -96,7 +193,7 @@ public sealed class DelegateToolTests
         }
     }
 
-    private sealed class FakeRuntime(string response) : IAgentRuntime
+    private sealed class FakeRuntime(string response, Action<Session>? mutateSession = null) : IAgentRuntime
     {
         public CircuitState CircuitBreakerState => CircuitState.Closed;
 
@@ -109,11 +206,11 @@ public sealed class DelegateToolTests
             ToolApprovalCallback? approvalCallback = null,
             JsonElement? responseSchema = null)
         {
-            _ = session;
             _ = userMessage;
             _ = ct;
             _ = approvalCallback;
             _ = responseSchema;
+            mutateSession?.Invoke(session);
             return Task.FromResult(response);
         }
 

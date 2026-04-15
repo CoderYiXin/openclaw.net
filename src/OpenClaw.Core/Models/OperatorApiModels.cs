@@ -448,6 +448,44 @@ public sealed class SessionMetadataUpdateRequest
     public IReadOnlyList<SessionTodoItem>? TodoItems { get; init; }
 }
 
+public static class SessionPromotionTarget
+{
+    public const string Automation = "automation";
+    public const string ProviderPolicy = "provider_policy";
+    public const string SkillDraft = "skill_draft";
+}
+
+public sealed class SessionPromotionRequest
+{
+    public string Target { get; init; } = SessionPromotionTarget.Automation;
+    public string? Name { get; init; }
+    public string? Prompt { get; init; }
+    public string? Schedule { get; init; }
+    public string? DeliveryChannelId { get; init; }
+    public string? DeliveryRecipientId { get; init; }
+    public string? DeliverySubject { get; init; }
+    public string[] Tags { get; init; } = [];
+    public string Scope { get; init; } = "session";
+    public string? ProviderId { get; init; }
+    public string? ModelId { get; init; }
+    public string[] FallbackModels { get; init; } = [];
+    public int Priority { get; init; } = 100;
+    public bool Enabled { get; init; } = true;
+    public string? Summary { get; init; }
+}
+
+public sealed class SessionPromotionResponse
+{
+    public bool Success { get; init; }
+    public string Target { get; init; } = "";
+    public string Message { get; init; } = "";
+    public string? CreatedId { get; init; }
+    public AutomationDefinition? Automation { get; init; }
+    public ProviderPolicyRule? ProviderPolicy { get; init; }
+    public LearningProposal? Proposal { get; init; }
+    public string? Error { get; init; }
+}
+
 public sealed class SessionTodoItem
 {
     public required string Id { get; init; }
