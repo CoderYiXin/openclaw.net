@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Agent.Execution;
@@ -17,7 +18,6 @@ using OpenClaw.Gateway.Models;
 using OpenClaw.Gateway.Pipeline;
 using OpenClaw.Gateway.PromptCaching;
 using TickerQ.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -27,6 +27,9 @@ internal static class CoreServicesExtensions
     {
         var config = startup.Config;
 
+        // TickerQ requires IConfiguration. WebApplicationBuilder already registers one,
+        // so this is a no-op in production (TryAddSingleton respects existing registrations).
+        // Tests that compose services from a bare ServiceCollection rely on this fallback.
         services.TryAddSingleton<IConfiguration>(_ => new ConfigurationBuilder().Build());
         services.AddSingleton(config);
         services.AddSingleton(config.Learning);
