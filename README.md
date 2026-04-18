@@ -14,6 +14,8 @@
 
 Self-hosted **AI agent runtime and gateway for .NET** with 48 native tools, 9 channel adapters, multi-agent routing, review-first self-evolving features, built-in OpenAI/Claude/Gemini provider support, built-in tool presets, NativeAOT support, and practical OpenClaw ecosystem compatibility.
 
+> **New here?** Start with [Getting Started](docs/GETTING_STARTED.md) for the project shape, repository map, and first-run debugging flow. Then run the [Quickstart](docs/QUICKSTART.md). The full doc index is at [docs/README.md](docs/README.md).
+
 ## Why This Project Exists
 
 Most agent stacks assume Python- or Node-first runtimes. That works until you want to keep the rest of your system in .NET, publish lean self-contained binaries, or reuse existing tools and plugins without rebuilding your runtime around another language stack.

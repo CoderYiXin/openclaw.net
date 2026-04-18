@@ -312,6 +312,23 @@ When debugging, prefer `setup launch` over manually starting several processes. 
 5. [COMPATIBILITY.md](COMPATIBILITY.md)
 6. [SECURITY.md](../SECURITY.md) before any public deployment
 
+Keep [GLOSSARY.md](GLOSSARY.md) and the [docs index](README.md) open alongside these. The glossary covers terms that show up across docs (*gateway*, *runtime*, *bridge*, *skill*, *plugin*, *posture*, `aot` / `jit` / `auto`); the index groups every doc by purpose.
+
 ## If You Are Contributing Code
 
 Use [CONTRIBUTING.md](../CONTRIBUTING.md) for build, test, and PR expectations. The contributor guide now includes a current project map, but this page is still the better first stop when you need to understand the runtime shape before changing code.
+
+## Getting Help
+
+If you have run the diagnostics above and are still stuck, use these in order:
+
+1. Check [GLOSSARY.md](GLOSSARY.md) if a term in another doc is the blocker. Terms like *posture*, *bridge*, *bootstrap token*, or `aot` / `jit` are defined there in one place.
+2. Skim the [docs index](README.md) — the doc you need may exist under a heading you did not expect (channel setup, sandboxing, model profiles, prompt caching, etc.).
+3. Search existing GitHub issues, including closed ones. Onboarding problems often repeat.
+4. Open a new issue with:
+   - the commands you ran (especially the exact `openclaw setup` invocation),
+   - the relevant output of `--doctor`, `openclaw admin posture`, and `openclaw setup status`,
+   - which doc you were following and the step it stopped working at,
+   - your OS, .NET SDK version, and whether you are running from source or a container.
+
+"I followed the Getting Started guide and got stuck at step X" is useful. "I still have tons of questions" is not — it leaves us guessing. The more specific the question, the faster it turns into a doc fix.
