@@ -1,6 +1,20 @@
 # Optional Sandbox Execution
 
-OpenClaw.NET can route high-risk native tools through an external sandbox service instead of executing them on the gateway host.
+> **Stop. You almost certainly do not need this page.**
+>
+> OpenSandbox is an optional, advanced integration. If you are setting up OpenClaw.NET for the first time, trying to get the gateway running locally, or working through the [QUICKSTART](QUICKSTART.md), **close this page and go back**. Sandboxing is not part of the first-run path.
+>
+> The checked-in config mentions `OpenSandbox`, but the default gateway build does **not** include the integration. It only becomes active when you intentionally build with `-p:OpenClawEnableOpenSandbox=true`. You can ignore every sandbox-related setting until you decide you need isolated execution for the `shell`, `code_exec`, or `browser` tools.
+>
+> If you are running from a raw config and the mere presence of sandbox settings is confusing you, set this and move on:
+>
+> ```json
+> { "OpenClaw": { "Sandbox": { "Provider": "None" } } }
+> ```
+
+---
+
+The rest of this page documents the advanced optional path. Read it only when you specifically want to route high-risk native tools through an external sandbox service instead of executing them on the gateway host.
 
 The current optional backend is [OpenSandbox](https://github.com/AIDotNet/OpenSandbox), integrated through a separate `OpenClawNet.Sandbox.OpenSandbox` assembly so the standard runtime artifact stays lightweight and NativeAOT-friendly.
 
@@ -52,6 +66,8 @@ Or run tests for the sandbox-enabled build:
 dotnet test -c Release -p:OpenClawEnableOpenSandbox=true src/OpenClaw.Tests
 ```
 
+If you are using Visual Studio or a direct `dotnet run` on `OpenClaw.Gateway` without this build flag, do not expect OpenSandbox to be available even if a checked-in config mentions it.
+
 ## Configuration
 
 Shipped gateway default:
@@ -97,6 +113,12 @@ Force local execution everywhere:
   }
 }
 ```
+
+This is the recommended setting when:
+
+- you are doing a first local run
+- you are debugging the core runtime rather than sandboxing
+- you are starting from a raw source config and want predictable local behavior
 
 Example stricter public-bind shell deployment:
 

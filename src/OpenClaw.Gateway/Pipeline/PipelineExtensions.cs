@@ -255,5 +255,37 @@ internal static class PipelineExtensions
             startup.Config.Llm.Model,
             startup.RuntimeState.EffectiveModeName,
             isAot ? "Yes" : "No");
+
+        var host = ResolveBannerHost(startup.Config.BindAddress);
+        var baseUrl = $"http://{host}:{startup.Config.Port}";
+        app.Logger.LogInformation(
+            """
+            Gateway ready. Open one of:
+              Chat UI            {ChatUrl}
+              Admin UI           {AdminUrl}
+              Doctor (text)      {DoctorUrl}
+              Health             {HealthUrl}
+              MCP endpoint       {McpUrl}
+              Integration API    {IntegrationUrl}
+            Note: the root URL (/) redirects to /chat — it is not the UI itself.
+            """,
+            $"{baseUrl}/chat",
+            $"{baseUrl}/admin",
+            $"{baseUrl}/doctor/text",
+            $"{baseUrl}/health",
+            $"{baseUrl}/mcp",
+            $"{baseUrl}/api/integration/status");
+    }
+
+    private static string ResolveBannerHost(string bindAddress)
+    {
+        if (string.IsNullOrWhiteSpace(bindAddress))
+            return "127.0.0.1";
+
+        return bindAddress switch
+        {
+            "0.0.0.0" or "*" or "+" or "::" => "127.0.0.1",
+            _ => bindAddress,
+        };
     }
 }

@@ -10,6 +10,9 @@ internal static class WebUiEndpoints
         GatewayStartupContext startup,
         GatewayAppRuntime runtime)
     {
+        app.MapGet("/", (HttpContext ctx) =>
+            Results.Redirect("/chat", permanent: false));
+
         app.MapGet("/admin", async (HttpContext ctx) =>
         {
             var htmlPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "admin.html");
