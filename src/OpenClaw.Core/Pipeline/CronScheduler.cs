@@ -30,10 +30,13 @@ public sealed class CronScheduler
         var initialJobs = _jobSource.GetJobs();
         if (initialJobs.Count == 0)
         {
-            _logger.LogInformation("Cron Scheduler started with no jobs. Waiting for live cron registrations.");
+            _logger.LogInformation("Cron scheduler startup dispatch found no initial jobs.");
+            return;
         }
 
-        _logger.LogInformation("Cron Scheduler started. Monitoring {Count} initial jobs.", initialJobs.Count);
+        _logger.LogInformation(
+            "Cron scheduler startup dispatch inspecting {Count} initial jobs for RunOnStartup execution.",
+            initialJobs.Count);
 
         foreach (var job in initialJobs)
         {
@@ -168,7 +171,8 @@ public sealed class CronScheduler
             IncludingSeconds = true
         });
 
-        var localTime = DateTime.SpecifyKind(time.DateTime, DateTimeKind.Unspecified);
+        var truncatedTime = time.AddTicks(-(time.Ticks % TimeSpan.TicksPerSecond));
+        var localTime = DateTime.SpecifyKind(truncatedTime.DateTime, DateTimeKind.Unspecified);
         var previousSecond = localTime.AddSeconds(-1);
         var nextOccurrence = schedule.GetNextOccurrence(previousSecond);
 

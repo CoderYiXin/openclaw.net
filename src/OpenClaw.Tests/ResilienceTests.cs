@@ -169,6 +169,13 @@ public sealed class ResilienceTests
         Assert.Equal(expected, CronScheduler.IsTime(expression, time));
     }
 
+    [Fact]
+    public void CronScheduler_IsTime_IgnoresSubSecondPrecision()
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, 30, 0, 250, TimeSpan.Zero);
+        Assert.True(CronScheduler.IsTime("30 12 * * *", time));
+    }
+
     [Theory]
     [InlineData("0 9-17 * * 1-5", 0, 10, DayOfWeek.Monday, true)]
     [InlineData("0 9-17 * * 1-5", 0, 8, DayOfWeek.Monday, false)]

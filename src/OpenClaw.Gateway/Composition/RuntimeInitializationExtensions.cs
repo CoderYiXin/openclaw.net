@@ -159,7 +159,7 @@ internal static class RuntimeInitializationExtensions
         skillWatcher.Start(app.Lifetime.ApplicationStopping);
 
         await services.AutomationService.RefreshCacheAsync(app.Lifetime.ApplicationStopping);
-        var cronTask = app.Services.GetRequiredService<CronScheduler>();
+        var cronScheduler = app.Services.GetRequiredService<CronScheduler>();
         StartNativeEventBridges(config, loggerFactory, services.Pipeline, app.Lifetime.ApplicationStopping);
 
         var profile = app.Services.GetRequiredService<IRuntimeProfile>();
@@ -176,7 +176,7 @@ internal static class RuntimeInitializationExtensions
             orchestratorId,
             tools,
             skills,
-            cronTask);
+            cronScheduler);
 
         services.PluginHealth.SetRuntimeReports(
             runtime.PluginReports,
@@ -430,7 +430,7 @@ internal static class RuntimeInitializationExtensions
         string orchestratorId,
         IReadOnlyList<ITool> tools,
         IReadOnlyList<SkillDefinition> skills,
-        CronScheduler? cronTask)
+        CronScheduler? cronScheduler)
     {
         var operations = new RuntimeOperationsState
         {
@@ -484,7 +484,7 @@ internal static class RuntimeInitializationExtensions
                 : null,
             DynamicProviderOwners = pluginComposition.DynamicProviderOwners,
             EstimatedSkillPromptChars = SkillPromptBuilder.EstimateCharacterCost(skills),
-            CronTask = cronTask,
+            CronTask = cronScheduler,
             TwilioSmsWebhookHandler = channelComposition.TwilioSmsWebhookHandler,
             PluginHost = pluginComposition.PluginHost,
             NativeDynamicPluginHost = pluginComposition.NativeDynamicPluginHost,

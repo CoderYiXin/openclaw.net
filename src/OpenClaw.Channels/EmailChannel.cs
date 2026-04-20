@@ -161,7 +161,8 @@ public sealed class EmailChannel : IChannelAdapter
     private async Task<IMailFolder> GetInboundFolderAsync(ImapClient client, CancellationToken ct)
     {
         if (string.Equals(_config.InboundFolder, "INBOX", StringComparison.OrdinalIgnoreCase))
-            return client.Inbox;
+            return client.Inbox
+                ?? throw new InvalidOperationException("IMAP server did not expose an INBOX folder.");
 
         return await client.GetFolderAsync(_config.InboundFolder, ct);
     }
