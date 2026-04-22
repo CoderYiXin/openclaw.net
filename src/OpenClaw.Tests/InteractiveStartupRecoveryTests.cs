@@ -62,6 +62,7 @@ public sealed class InteractiveStartupRecoveryTests
             Environment.SetEnvironmentVariable("OpenClaw__Memory__Provider", previousMemoryProvider);
             Environment.SetEnvironmentVariable("OpenClaw__Memory__StoragePath", previousMemoryPath);
             Environment.SetEnvironmentVariable("OpenClaw__Memory__Retention__Enabled", previousRetention);
+            DeleteDirectoryBestEffort(root);
         }
     }
 
@@ -104,6 +105,21 @@ public sealed class InteractiveStartupRecoveryTests
         {
             Environment.SetEnvironmentVariable("MODEL_PROVIDER_KEY", previousModelProviderKey);
             Environment.SetEnvironmentVariable("OPENAI_API_KEY", previousOpenAiApiKey);
+            DeleteDirectoryBestEffort(root);
+        }
+    }
+
+    private static void DeleteDirectoryBestEffort(string path)
+    {
+        if (!Directory.Exists(path))
+            return;
+
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch
+        {
         }
     }
 

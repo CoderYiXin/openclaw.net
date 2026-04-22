@@ -57,7 +57,7 @@ while (true)
         builder.Services.AddOpenSandboxIntegration(builder.Configuration);
 #endif
 
-        var app = builder.Build();
+        await using var app = builder.Build();
         app.Lifetime.ApplicationStarted.Register(() => started = true);
         app.UseTickerQ();
         var runtime = await app.InitializeOpenClawRuntimeAsync(startup);
@@ -76,7 +76,7 @@ while (true)
         app.MapOpenClawA2AEndpoints(startup, runtime);
 #endif
 
-        app.Run($"http://{startup.Config.BindAddress}:{startup.Config.Port}");
+        await app.RunAsync($"http://{startup.Config.BindAddress}:{startup.Config.Port}");
         return;
     }
     catch (Exception ex) when (!started)

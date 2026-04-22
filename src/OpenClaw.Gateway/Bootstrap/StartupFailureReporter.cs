@@ -13,6 +13,7 @@ internal static class StartupFailureReporter
     {
         var writer = error ?? Console.Error;
         writer.WriteLine(Render(ex, startup, environmentName, isDoctorMode));
+        writer.Flush();
     }
 
     internal static string Render(
