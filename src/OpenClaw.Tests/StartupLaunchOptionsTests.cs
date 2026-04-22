@@ -30,6 +30,22 @@ public sealed class StartupLaunchOptionsTests
     }
 
     [Fact]
+    public void ValidateQuickstart_RejectsConfigFlagWithoutValue()
+    {
+        var options = StartupLaunchOptions.Parse(["--quickstart", "--config"]);
+
+        Assert.Equal("--quickstart cannot be combined with --config.", options.ValidateQuickstart());
+    }
+
+    [Fact]
+    public void ValidateQuickstart_RejectsEmptyConfigAssignment()
+    {
+        var options = StartupLaunchOptions.Parse(["--quickstart", "--config="]);
+
+        Assert.Equal("--quickstart cannot be combined with --config.", options.ValidateQuickstart());
+    }
+
+    [Fact]
     public void ValidateQuickstart_RejectsEnvironmentConfigOverride()
     {
         var previous = Environment.GetEnvironmentVariable("OPENCLAW_CONFIG_PATH");

@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using OpenClaw.Core.Observability;
 
 namespace OpenClaw.Gateway.Pipeline;

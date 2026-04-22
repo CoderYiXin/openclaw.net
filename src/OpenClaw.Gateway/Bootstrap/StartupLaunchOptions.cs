@@ -10,6 +10,7 @@ internal sealed class StartupLaunchOptions
         bool isDoctorMode,
         bool isHealthCheckMode,
         bool isQuickstartRequested,
+        bool hasConfigFlag,
         string? configPathFromArgs,
         string? configPathFromEnvironment,
         bool canPrompt)
@@ -19,6 +20,7 @@ internal sealed class StartupLaunchOptions
         IsDoctorMode = isDoctorMode;
         IsHealthCheckMode = isHealthCheckMode;
         IsQuickstartRequested = isQuickstartRequested;
+        HasConfigFlag = hasConfigFlag;
         ConfigPathFromArgs = configPathFromArgs;
         ConfigPathFromEnvironment = configPathFromEnvironment;
         CanPrompt = canPrompt;
@@ -35,6 +37,8 @@ internal sealed class StartupLaunchOptions
     public bool IsQuickstartRequested { get; }
 
     public bool CanPrompt { get; }
+
+    public bool HasConfigFlag { get; }
 
     public string? ConfigPathFromArgs { get; }
 
@@ -60,6 +64,7 @@ internal sealed class StartupLaunchOptions
             isDoctorMode: args.Any(static a => string.Equals(a, "--doctor", StringComparison.Ordinal)),
             isHealthCheckMode: args.Any(static a => string.Equals(a, "--health-check", StringComparison.Ordinal)),
             isQuickstartRequested: args.Any(static a => string.Equals(a, "--quickstart", StringComparison.Ordinal)),
+            hasConfigFlag: HasArg(args, "--config"),
             configPathFromArgs: string.IsNullOrWhiteSpace(configArg) ? null : System.IO.Path.GetFullPath(GatewaySetupPaths.ExpandPath(configArg)),
             configPathFromEnvironment: string.IsNullOrWhiteSpace(envConfigPath) ? null : System.IO.Path.GetFullPath(GatewaySetupPaths.ExpandPath(envConfigPath)),
             canPrompt: TerminalPrompts.IsInteractiveConsole());
@@ -73,13 +78,29 @@ internal sealed class StartupLaunchOptions
             return "--quickstart cannot be combined with --doctor.";
         if (IsHealthCheckMode)
             return "--quickstart cannot be combined with --health-check.";
-        if (HasConfigArgument)
+        if (HasConfigFlag)
             return "--quickstart cannot be combined with --config.";
         if (!string.IsNullOrWhiteSpace(ConfigPathFromEnvironment))
             return "--quickstart cannot be used while OPENCLAW_CONFIG_PATH is set.";
         if (!CanPrompt)
             return "--quickstart requires an interactive terminal.";
         return null;
+    }
+
+    private static bool HasArg(string[] argv, string name)
+    {
+        for (var i = 0; i < argv.Length; i++)
+        {
+            var arg = argv[i];
+            if (arg.Equals(name, StringComparison.Ordinal))
+                return true;
+
+            var prefix = name + "=";
+            if (arg.StartsWith(prefix, StringComparison.Ordinal))
+                return true;
+        }
+
+        return false;
     }
 
     private static string? FindArgValue(string[] argv, string name)
