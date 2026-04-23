@@ -327,7 +327,8 @@ internal sealed class AutomationRunCoordinator : IAutomationRunDispatcher
             await _store.PruneRunRecordsAsync(automation.Id, RunHistoryRetention, ct);
         }
 
-        if (session?.ContractPolicy is not null)
+        if (session?.ContractPolicy is not null
+            && GatewayAutomationService.IsAutomationRunContract(session.ContractPolicy.Id, automation.Id, message.AutomationRunId))
         {
             _contractGovernance.AppendSnapshot(
                 session,

@@ -487,9 +487,6 @@ public sealed class GatewayAdminEndpointTests
         {
             AutomationId = "auto-observability-fail",
             Outcome = AutomationVerificationStatuses.Failed,
-            LifecycleState = AutomationLifecycleStates.Completed,
-            VerificationStatus = AutomationVerificationStatuses.Failed,
-            HealthState = AutomationHealthStates.Degraded,
             LastRunAtUtc = now.AddMinutes(-8),
             LastCompletedAtUtc = now.AddMinutes(-8),
             LastRunId = "run-observe-1",
@@ -2602,6 +2599,7 @@ public sealed class GatewayAdminEndpointTests
     public async Task IntegrationApi_Dashboard_Approvals_Providers_Plugins_Audit_AndTimeline_AreServed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var store = new FileFeatureStore(harness.StoragePath);
 
         var session = await harness.Runtime.SessionManager.GetOrCreateByIdAsync("sess-dashboard", "api", "user-dashboard", CancellationToken.None);
         session.History.Add(new ChatTurn { Role = "user", Content = "inspect me" });
@@ -2630,6 +2628,24 @@ public sealed class GatewayAdminEndpointTests
             Severity = "info",
             Summary = "seeded"
         });
+        await store.SaveAutomationAsync(new AutomationDefinition
+        {
+            Id = "auto-dashboard-legacy",
+            Name = "Legacy failing automation",
+            Enabled = true,
+            Schedule = "@daily",
+            Prompt = "Fail",
+            DeliveryChannelId = "cron",
+            RetryPolicy = new AutomationRetryPolicy()
+        }, CancellationToken.None);
+        await store.SaveRunStateAsync(new AutomationRunState
+        {
+            AutomationId = "auto-dashboard-legacy",
+            Outcome = AutomationVerificationStatuses.Failed,
+            LastRunAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            LastRunId = "legacy-run-1",
+            FailureStreak = 1
+        }, CancellationToken.None);
 
         using var dashboardRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/dashboard");
         dashboardRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
@@ -2640,6 +2656,7 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal(1, dashboardPayload.RootElement.GetProperty("approvals").GetProperty("items").GetArrayLength());
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("sessions").GetProperty("uniqueTotal").GetInt32() >= 1);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("approvals").GetProperty("pending").GetInt32() >= 1);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("automations").GetProperty("failing").GetInt32() >= 1);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("automations").GetProperty("templates").GetArrayLength() >= 2);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("channels").GetProperty("items").GetArrayLength() >= 1);
 

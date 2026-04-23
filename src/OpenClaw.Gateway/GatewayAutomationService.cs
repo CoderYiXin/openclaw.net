@@ -126,7 +126,7 @@ internal sealed class GatewayAutomationService
     {
         if (string.Equals(automationId, HeartbeatAutomationId, StringComparison.OrdinalIgnoreCase))
         {
-            var overlay = await _store.GetRunStateAsync(automationId, ct);
+            var overlay = AutomationRunStatusMapper.NormalizeState(automationId, await _store.GetRunStateAsync(automationId, ct));
             var status = _heartbeat.LoadStatus();
             if (status is null)
                 return overlay;
@@ -134,7 +134,7 @@ internal sealed class GatewayAutomationService
             return AutomationRunStatusMapper.MapHeartbeatState(status, overlay);
         }
 
-        return await _store.GetRunStateAsync(automationId, ct);
+        return AutomationRunStatusMapper.NormalizeState(automationId, await _store.GetRunStateAsync(automationId, ct));
     }
 
     public ValueTask SaveRunStateAsync(AutomationRunState runState, CancellationToken ct)
@@ -274,25 +274,35 @@ internal sealed class GatewayAutomationService
     public void AttachRunContract(Session session, AutomationDefinition automation, string? runId, ContractGovernanceService governance)
     {
         if (session.ContractPolicy is not null
+            || string.IsNullOrWhiteSpace(runId)
             || string.Equals(automation.Id, HeartbeatAutomationId, StringComparison.OrdinalIgnoreCase))
         {
             return;
         }
 
-        var seed = string.IsNullOrWhiteSpace(runId) ? Guid.NewGuid().ToString("N") : runId!;
-        var contractId = $"ctr_{automation.Id}_{seed}".Replace(':', '_');
-        if (contractId.Length > 20)
-            contractId = contractId[..20];
-
         governance.AttachToSession(session, new ContractPolicy
         {
-            Id = contractId,
+            Id = BuildAutomationRunContractId(automation.Id, runId!),
             Name = $"Automation run: {automation.Name}",
             CreatedBy = automation.Source,
             Verification = automation.Verification,
             CreatedAtUtc = DateTimeOffset.UtcNow
         });
     }
+
+    internal static string BuildAutomationRunContractId(string automationId, string runId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(automationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runId);
+
+        var contractId = $"ctr_{automationId}_{runId}".Replace(':', '_');
+        return contractId.Length > 20 ? contractId[..20] : contractId;
+    }
+
+    internal static bool IsAutomationRunContract(string? contractId, string automationId, string? runId)
+        => !string.IsNullOrWhiteSpace(contractId)
+           && !string.IsNullOrWhiteSpace(runId)
+           && string.Equals(contractId, BuildAutomationRunContractId(automationId, runId!), StringComparison.Ordinal);
 
     public async ValueTask<IReadOnlyList<AutomationDefinition>> MigrateLegacyAsync(bool apply, CancellationToken ct)
     {

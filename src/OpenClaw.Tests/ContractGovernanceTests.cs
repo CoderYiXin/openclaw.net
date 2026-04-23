@@ -204,6 +204,23 @@ public sealed class ContractGovernanceTests
     }
 
     [Fact]
+    public void ValidatePreFlight_VerificationChecksNull_DoesNotThrow()
+    {
+        var service = CreateService();
+        var verification = JsonSerializer.Deserialize("""{"checks":null}""", CoreJsonContext.Default.VerificationPolicy);
+        var policy = new ContractPolicy
+        {
+            Id = "ctr_test",
+            Verification = verification
+        };
+
+        var result = service.ValidatePreFlight(policy, new HashSet<string>());
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
     public async Task EvaluateVerificationAsync_NoPolicy_ReturnsNotVerified()
     {
         var service = CreateService();
@@ -268,6 +285,54 @@ public sealed class ContractGovernanceTests
         Assert.Equal(AutomationVerificationStatuses.Blocked, result.VerificationStatus);
         Assert.Single(result.Checks);
         Assert.Equal(AutomationVerificationStatuses.Blocked, result.Checks[0].Status);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_HttpStatus_BlocksLoopbackTargets()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+        {
+            Checks =
+            [
+                new VerificationCheckDefinition
+                {
+                    Id = "http-check",
+                    Kind = VerificationKinds.HttpStatus,
+                    Url = "http://127.0.0.1:8080/health",
+                    ExpectedStatusCode = 200
+                }
+            ]
+        }, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.Failed, result.VerificationStatus);
+        Assert.Single(result.Checks);
+        Assert.Contains("blocked", result.Checks[0].Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_HttpBodyContains_BlocksLoopbackTargets()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+        {
+            Checks =
+            [
+                new VerificationCheckDefinition
+                {
+                    Id = "body-check",
+                    Kind = VerificationKinds.HttpBodyContains,
+                    Url = "http://localhost/internal",
+                    Contains = "ok"
+                }
+            ]
+        }, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.Failed, result.VerificationStatus);
+        Assert.Single(result.Checks);
+        Assert.Contains("localhost", result.Checks[0].Summary, StringComparison.OrdinalIgnoreCase);
     }
 
     // === Cost Computation ===

@@ -4,6 +4,79 @@ namespace OpenClaw.Gateway;
 
 internal static class AutomationRunStatusMapper
 {
+    public static AutomationRunState? NormalizeState(string automationId, AutomationRunState? state)
+    {
+        if (state is null)
+            return null;
+
+        var lifecycleState = string.IsNullOrWhiteSpace(state.LifecycleState)
+            ? DeriveLifecycleState(state.Outcome)
+            : state.LifecycleState;
+        if (string.Equals(lifecycleState, AutomationLifecycleStates.Never, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(state.Outcome)
+            && !string.Equals(state.Outcome, AutomationLifecycleStates.Never, StringComparison.OrdinalIgnoreCase))
+        {
+            lifecycleState = DeriveLifecycleState(state.Outcome);
+        }
+
+        var verificationStatus = string.IsNullOrWhiteSpace(state.VerificationStatus)
+            ? DeriveVerificationStatus(automationId, state.Outcome)
+            : state.VerificationStatus;
+        if (string.Equals(verificationStatus, AutomationVerificationStatuses.NotRun, StringComparison.OrdinalIgnoreCase)
+            && !string.IsNullOrWhiteSpace(state.Outcome)
+            && state.Outcome is not AutomationLifecycleStates.Never and not AutomationLifecycleStates.Queued and not AutomationLifecycleStates.Running and not AutomationLifecycleStates.Stuck)
+        {
+            verificationStatus = DeriveVerificationStatus(automationId, state.Outcome);
+        }
+
+        var signalSeverity = string.IsNullOrWhiteSpace(state.SignalSeverity)
+            ? DeriveSignalSeverity(automationId, state.Outcome)
+            : state.SignalSeverity;
+        var healthState = string.IsNullOrWhiteSpace(state.HealthState) || string.Equals(state.HealthState, AutomationHealthStates.Unknown, StringComparison.OrdinalIgnoreCase)
+            ? DeriveHealthState(lifecycleState, verificationStatus, state.QuarantinedAtUtc)
+            : state.HealthState;
+
+        var derivedOutcome = string.IsNullOrWhiteSpace(state.Outcome)
+            ? DeriveOutcome(automationId, lifecycleState, verificationStatus, signalSeverity)
+            : state.Outcome;
+
+        if (string.Equals(derivedOutcome, state.Outcome, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(lifecycleState, state.LifecycleState, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(verificationStatus, state.VerificationStatus, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(signalSeverity, state.SignalSeverity, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(healthState, state.HealthState, StringComparison.OrdinalIgnoreCase))
+        {
+            return state;
+        }
+
+        return new AutomationRunState
+        {
+            AutomationId = state.AutomationId,
+            Outcome = derivedOutcome,
+            LifecycleState = lifecycleState,
+            VerificationStatus = verificationStatus,
+            HealthState = healthState,
+            LastRunAtUtc = state.LastRunAtUtc,
+            LastCompletedAtUtc = state.LastCompletedAtUtc,
+            LastDeliveredAtUtc = state.LastDeliveredAtUtc,
+            LastVerifiedSuccessAtUtc = state.LastVerifiedSuccessAtUtc,
+            QuarantinedAtUtc = state.QuarantinedAtUtc,
+            NextRetryAtUtc = state.NextRetryAtUtc,
+            DeliverySuppressed = state.DeliverySuppressed,
+            InputTokens = state.InputTokens,
+            OutputTokens = state.OutputTokens,
+            FailureStreak = state.FailureStreak,
+            UnverifiedStreak = state.UnverifiedStreak,
+            NextRetryAttempt = state.NextRetryAttempt,
+            LastRunId = state.LastRunId,
+            SessionId = state.SessionId,
+            MessagePreview = state.MessagePreview,
+            VerificationSummary = state.VerificationSummary,
+            QuarantineReason = state.QuarantineReason,
+            SignalSeverity = signalSeverity
+        };
+    }
+
     public static string DeriveOutcome(string automationId, string lifecycleState, string verificationStatus, string? signalSeverity = null)
     {
         if (string.Equals(lifecycleState, AutomationLifecycleStates.Queued, StringComparison.OrdinalIgnoreCase))
@@ -113,6 +186,55 @@ internal static class AutomationRunStatusMapper
             VerificationSummary = overlay?.VerificationSummary,
             QuarantineReason = overlay?.QuarantineReason,
             SignalSeverity = signalSeverity
+        };
+    }
+
+    private static string DeriveLifecycleState(string? outcome)
+        => outcome switch
+        {
+            AutomationLifecycleStates.Queued => AutomationLifecycleStates.Queued,
+            AutomationLifecycleStates.Running => AutomationLifecycleStates.Running,
+            AutomationLifecycleStates.Stuck => AutomationLifecycleStates.Stuck,
+            null or "" or AutomationLifecycleStates.Never => AutomationLifecycleStates.Never,
+            _ => AutomationLifecycleStates.Completed
+        };
+
+    private static string DeriveVerificationStatus(string automationId, string? outcome)
+    {
+        if (string.IsNullOrWhiteSpace(outcome))
+            return AutomationVerificationStatuses.NotRun;
+
+        if (string.Equals(automationId, GatewayAutomationService.HeartbeatAutomationId, StringComparison.OrdinalIgnoreCase))
+        {
+            return outcome switch
+            {
+                "ok" or "alert" => AutomationVerificationStatuses.Verified,
+                "error" => AutomationVerificationStatuses.Failed,
+                _ => AutomationVerificationStatuses.NotRun
+            };
+        }
+
+        return outcome switch
+        {
+            "success" => AutomationVerificationStatuses.Verified,
+            AutomationVerificationStatuses.NotVerified => AutomationVerificationStatuses.NotVerified,
+            AutomationVerificationStatuses.Failed => AutomationVerificationStatuses.Failed,
+            "error" => AutomationVerificationStatuses.Failed,
+            AutomationVerificationStatuses.Blocked => AutomationVerificationStatuses.Blocked,
+            _ => AutomationVerificationStatuses.NotRun
+        };
+    }
+
+    private static string? DeriveSignalSeverity(string automationId, string? outcome)
+    {
+        if (!string.Equals(automationId, GatewayAutomationService.HeartbeatAutomationId, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return outcome switch
+        {
+            "alert" => AutomationSignalSeverities.Alert,
+            "error" => AutomationSignalSeverities.Error,
+            _ => null
         };
     }
 }

@@ -130,6 +130,95 @@ public sealed class AutomationRunCoordinatorTests
     }
 
     [Fact]
+    public async Task FinalizeRun_DoesNotDetachUnrelatedContractPolicy()
+    {
+        using var harness = CreateHarness();
+        var automation = new AutomationDefinition
+        {
+            Id = "auto.contract",
+            Name = "Contract automation",
+            Prompt = "Run"
+        };
+
+        var message = await harness.Coordinator.PrepareDispatchAsync(new AutomationDispatchRequest
+        {
+            AutomationId = automation.Id,
+            TriggerSource = AutomationRunTriggerSources.Schedule,
+            SessionId = "automation:auto.contract",
+            ChannelId = "cron",
+            SenderId = "automation:auto.contract",
+            Prompt = automation.Prompt
+        }, CancellationToken.None);
+
+        Assert.NotNull(message);
+        await harness.Coordinator.MarkRunningAsync(automation, message!, CancellationToken.None);
+
+        var session = new Session
+        {
+            Id = "automation:auto.contract",
+            ChannelId = "cron",
+            SenderId = "automation:auto.contract"
+        };
+        harness.Contracts.AttachToSession(session, new ContractPolicy
+        {
+            Id = "ctr_existing",
+            Verification = automation.Verification
+        });
+
+        await harness.Coordinator.FinalizeRunAsync(automation, message!, session, new AutomationRunCompletion
+        {
+            VerificationStatus = AutomationVerificationStatuses.Verified
+        }, CancellationToken.None);
+
+        Assert.NotNull(session.ContractPolicy);
+        Assert.Equal("ctr_existing", session.ContractPolicy!.Id);
+    }
+
+    [Fact]
+    public async Task FinalizeRun_DetachesMatchingAutomationRunContract()
+    {
+        using var harness = CreateHarness();
+        var automation = new AutomationDefinition
+        {
+            Id = "auto.matching",
+            Name = "Matching automation",
+            Prompt = "Run"
+        };
+
+        var message = await harness.Coordinator.PrepareDispatchAsync(new AutomationDispatchRequest
+        {
+            AutomationId = automation.Id,
+            TriggerSource = AutomationRunTriggerSources.Schedule,
+            SessionId = "automation:auto.matching",
+            ChannelId = "cron",
+            SenderId = "automation:auto.matching",
+            Prompt = automation.Prompt
+        }, CancellationToken.None);
+
+        Assert.NotNull(message);
+        await harness.Coordinator.MarkRunningAsync(automation, message!, CancellationToken.None);
+
+        var session = new Session
+        {
+            Id = "automation:auto.matching",
+            ChannelId = "cron",
+            SenderId = "automation:auto.matching"
+        };
+        harness.Contracts.AttachToSession(session, new ContractPolicy
+        {
+            Id = GatewayAutomationService.BuildAutomationRunContractId(automation.Id, message.AutomationRunId!),
+            Verification = automation.Verification
+        });
+
+        await harness.Coordinator.FinalizeRunAsync(automation, message!, session, new AutomationRunCompletion
+        {
+            VerificationStatus = AutomationVerificationStatuses.Verified
+        }, CancellationToken.None);
+
+        Assert.Null(session.ContractPolicy);
+    }
+
+    [Fact]
     public async Task MarkRunStuckAsync_TransitionsRunningStateToStuck()
     {
         using var harness = CreateHarness();

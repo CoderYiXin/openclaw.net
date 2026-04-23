@@ -1,4 +1,8 @@
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using Microsoft.Extensions.Logging;
+using OpenClaw.Core.Http;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Sessions;
@@ -13,6 +17,8 @@ namespace OpenClaw.Gateway;
 internal sealed class ContractGovernanceService
 {
     private static readonly TimeSpan VerificationHttpTimeout = TimeSpan.FromSeconds(15);
+    private const int VerificationHttpMaxBodyBytes = 64 * 1024;
+    private static readonly HttpClient VerificationHttpClient = CreateVerificationHttpClient();
 
     private readonly GatewayStartupContext _startup;
     private readonly ContractStore _contractStore;
@@ -335,14 +341,10 @@ internal sealed class ContractGovernanceService
         }
 
         var checks = new List<VerificationCheckResult>(policy.Checks.Length);
-        using var httpClient = new HttpClient
-        {
-            Timeout = VerificationHttpTimeout
-        };
 
         foreach (var check in policy.Checks)
         {
-            checks.Add(await EvaluateCheckAsync(check, httpClient, ct));
+            checks.Add(await EvaluateCheckAsync(check, VerificationHttpClient, ct));
         }
 
         var failed = checks.Where(static item => string.Equals(item.Status, AutomationVerificationStatuses.Failed, StringComparison.OrdinalIgnoreCase)).ToArray();
@@ -496,6 +498,9 @@ internal sealed class ContractGovernanceService
         if (policy is null)
             return;
 
+        if (policy.Checks is not { Length: > 0 })
+            return;
+
         var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < policy.Checks.Length; index++)
         {
@@ -528,12 +533,16 @@ internal sealed class ContractGovernanceService
                 case VerificationKinds.HttpStatus:
                     if (string.IsNullOrWhiteSpace(check.Url))
                         errors.Add($"{label} requires Url.");
+                    else if (!TryParseVerificationUri(check.Url, out _, out var urlError))
+                        errors.Add($"{label} {urlError}");
                     if (check.ExpectedStatusCode is null)
                         errors.Add($"{label} requires ExpectedStatusCode.");
                     break;
                 case VerificationKinds.HttpBodyContains:
                     if (string.IsNullOrWhiteSpace(check.Url))
                         errors.Add($"{label} requires Url.");
+                    else if (!TryParseVerificationUri(check.Url, out _, out var urlError))
+                        errors.Add($"{label} {urlError}");
                     if (string.IsNullOrWhiteSpace(check.Contains))
                         errors.Add($"{label} requires Contains.");
                     break;
@@ -591,28 +600,63 @@ internal sealed class ContractGovernanceService
                 }
                 case VerificationKinds.HttpStatus:
                 {
-                    using var response = await httpClient.GetAsync(check.Url!, ct);
+                    if (!TryParseVerificationUri(check.Url!, out var uri, out var uriError))
+                        return BuildCheckResult(checkId, kind, AutomationVerificationStatuses.Failed, $"Verification URL is invalid: {uriError}");
+
+                    var targetError = await GetVerificationTargetErrorAsync(uri!, ct);
+                    if (targetError is not null)
+                        return BuildCheckResult(checkId, kind, AutomationVerificationStatuses.Failed, targetError);
+
+                    using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                    using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
                     var matches = (int)response.StatusCode == check.ExpectedStatusCode;
                     return BuildCheckResult(
                         checkId,
                         kind,
                         matches ? AutomationVerificationStatuses.Verified : AutomationVerificationStatuses.NotVerified,
                         matches
-                            ? $"Verified {check.Url} returned HTTP {check.ExpectedStatusCode}."
-                            : $"Expected HTTP {check.ExpectedStatusCode} from {check.Url}, got {(int)response.StatusCode}.");
+                            ? $"Verified {uri} returned HTTP {check.ExpectedStatusCode}."
+                            : $"Expected HTTP {check.ExpectedStatusCode} from {uri}, got {(int)response.StatusCode}.");
                 }
                 case VerificationKinds.HttpBodyContains:
                 {
-                    using var response = await httpClient.GetAsync(check.Url!, ct);
-                    var body = await response.Content.ReadAsStringAsync(ct);
+                    if (!TryParseVerificationUri(check.Url!, out var uri, out var uriError))
+                        return BuildCheckResult(checkId, kind, AutomationVerificationStatuses.Failed, $"Verification URL is invalid: {uriError}");
+
+                    var targetError = await GetVerificationTargetErrorAsync(uri!, ct);
+                    if (targetError is not null)
+                        return BuildCheckResult(checkId, kind, AutomationVerificationStatuses.Failed, targetError);
+
+                    using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                    using var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        return BuildCheckResult(
+                            checkId,
+                            kind,
+                            AutomationVerificationStatuses.NotVerified,
+                            $"Expected a successful HTTP response from {uri}, got {(int)response.StatusCode}.");
+                    }
+
+                    await using var stream = await response.Content.ReadAsStreamAsync(ct);
+                    var body = await ReadResponseBodyAsync(stream, ct);
+                    if (body is null)
+                    {
+                        return BuildCheckResult(
+                            checkId,
+                            kind,
+                            AutomationVerificationStatuses.Failed,
+                            $"Response body from {uri} exceeded the {VerificationHttpMaxBodyBytes}-byte verification limit.");
+                    }
+
                     var contains = body.Contains(check.Contains!, StringComparison.Ordinal);
                     return BuildCheckResult(
                         checkId,
                         kind,
                         contains ? AutomationVerificationStatuses.Verified : AutomationVerificationStatuses.NotVerified,
                         contains
-                            ? $"Verified {check.Url} response body contains the expected text."
-                            : $"Response body from {check.Url} did not contain the expected text.");
+                            ? $"Verified {uri} response body contains the expected text."
+                            : $"Response body from {uri} did not contain the expected text.");
                 }
                 case VerificationKinds.OperatorConfirm:
                     return BuildCheckResult(
@@ -658,4 +702,124 @@ internal sealed class ContractGovernanceService
         => session.History
             .Where(static turn => turn.ToolCalls is { Count: > 0 })
             .Sum(static turn => turn.ToolCalls!.Count);
+
+    private static HttpClient CreateVerificationHttpClient()
+    {
+        var client = HttpClientFactory.Create(allowAutoRedirect: false);
+        client.Timeout = VerificationHttpTimeout;
+        return client;
+    }
+
+    private static bool TryParseVerificationUri(string url, out Uri? uri, out string? error)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out uri))
+        {
+            error = "must be an absolute http or https URL.";
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            error = "must use http or https.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(uri.Host))
+        {
+            error = "must include a host.";
+            return false;
+        }
+
+        error = null;
+        return true;
+    }
+
+    private static async Task<string?> GetVerificationTargetErrorAsync(Uri uri, CancellationToken ct)
+    {
+        if (string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return $"Verification URL '{uri}' targets localhost, which is blocked for HTTP verification checks.";
+
+        if (IPAddress.TryParse(uri.Host, out var ipAddress))
+        {
+            return IsDisallowedVerificationAddress(ipAddress)
+                ? $"Verification URL '{uri}' targets a non-public address, which is blocked for HTTP verification checks."
+                : null;
+        }
+
+        IPAddress[] resolved;
+        try
+        {
+            resolved = await Dns.GetHostAddressesAsync(uri.Host, ct);
+        }
+        catch (Exception ex) when (ex is SocketException or ArgumentException)
+        {
+            return $"Verification host '{uri.Host}' could not be resolved safely: {ex.Message}";
+        }
+
+        if (resolved.Length == 0)
+            return $"Verification host '{uri.Host}' did not resolve to any IP addresses.";
+
+        if (resolved.Any(IsDisallowedVerificationAddress))
+            return $"Verification URL '{uri}' resolved to a non-public address, which is blocked for HTTP verification checks.";
+
+        return null;
+    }
+
+    private static bool IsDisallowedVerificationAddress(IPAddress address)
+    {
+        if (address.IsIPv4MappedToIPv6)
+            return IsDisallowedVerificationAddress(address.MapToIPv4());
+
+        if (IPAddress.IsLoopback(address)
+            || IPAddress.Any.Equals(address)
+            || IPAddress.IPv6Any.Equals(address)
+            || IPAddress.None.Equals(address)
+            || IPAddress.IPv6None.Equals(address)
+            || address.IsIPv6LinkLocal
+            || address.IsIPv6Multicast
+            || address.IsIPv6SiteLocal)
+        {
+            return true;
+        }
+
+        if (address.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            var bytes = address.GetAddressBytes();
+            return (bytes[0] & 0xFE) == 0xFC;
+        }
+
+        if (address.AddressFamily != AddressFamily.InterNetwork)
+            return true;
+
+        var octets = address.GetAddressBytes();
+        return octets[0] switch
+        {
+            10 => true,
+            127 => true,
+            169 when octets[1] == 254 => true,
+            172 when octets[1] is >= 16 and <= 31 => true,
+            192 when octets[1] == 168 => true,
+            _ => false
+        };
+    }
+
+    private static async Task<string?> ReadResponseBodyAsync(Stream stream, CancellationToken ct)
+    {
+        var buffer = new byte[8192];
+        using var ms = new MemoryStream();
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+            if (read == 0)
+                break;
+
+            if (ms.Length + read > VerificationHttpMaxBodyBytes)
+                return null;
+
+            ms.Write(buffer, 0, read);
+        }
+
+        return Encoding.UTF8.GetString(ms.ToArray());
+    }
 }

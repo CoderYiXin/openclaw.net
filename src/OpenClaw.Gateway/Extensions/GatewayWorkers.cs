@@ -203,6 +203,22 @@ internal static class GatewayWorkers
                             var conversationRecipientId = ResolveConversationRecipientId(msg);
                             using var processingCts = CreateProcessingCts(msg.RequestCancellation, lifetime.ApplicationStopping);
                             var processingCt = processingCts?.Token ?? lifetime.ApplicationStopping;
+
+                            async Task FinalizeAutomationRunAsync(AutomationRunCompletion completion, CancellationToken finalizeCt)
+                            {
+                                if (automation is null || automationService is null)
+                                    return;
+
+                                var contractIdBeforeFinalize = session?.ContractPolicy?.Id;
+                                await automationService.FinalizeRunAsync(automation, msg, session, completion, finalizeCt);
+
+                                if (session is not null &&
+                                    !string.Equals(contractIdBeforeFinalize, session.ContractPolicy?.Id, StringComparison.Ordinal))
+                                {
+                                    await sessionManager.PersistAsync(session, finalizeCt, sessionLockHeld: true);
+                                }
+                            }
+
                             try
                             {
                                 if (!msg.IsSystem)
@@ -494,7 +510,7 @@ internal static class GatewayWorkers
 
                                 if (automation is not null && automationService is not null)
                                 {
-                                    await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                     {
                                         VerificationStatus = AutomationVerificationStatuses.Blocked,
                                         VerificationSummary = "Automation execution was intercepted by a chat command.",
@@ -542,7 +558,7 @@ internal static class GatewayWorkers
 
                                 if (automation is not null && automationService is not null)
                                 {
-                                    await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                     {
                                         VerificationStatus = AutomationVerificationStatuses.Blocked,
                                         VerificationSummary = shortCircuitText,
@@ -660,7 +676,7 @@ internal static class GatewayWorkers
 
                                 if (automation is not null && automationService is not null)
                                 {
-                                    await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                     {
                                         LastDeliveredAtUtc = DateTimeOffset.UtcNow,
                                         InputTokens = session.TotalInputTokens - initialInputTokens,
@@ -750,7 +766,7 @@ internal static class GatewayWorkers
                                             : AutomationSignalSeverities.Alert
                                         : null;
 
-                                    await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                     {
                                         DeliverySuppressed = suppressHeartbeatDelivery,
                                         LastDeliveredAtUtc = suppressHeartbeatDelivery ? null : DateTimeOffset.UtcNow,
@@ -775,7 +791,7 @@ internal static class GatewayWorkers
 
                             if (automation is not null && automationService is not null)
                             {
-                                await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                 {
                                     ContractStatus = "cancelled",
                                     VerificationStatus = AutomationVerificationStatuses.Blocked,
@@ -784,6 +800,10 @@ internal static class GatewayWorkers
                                     OutputTokens = session is null ? 0 : session.TotalOutputTokens - initialOutputTokens,
                                     RetryAttempt = automationRetryAttempt
                                 }, CancellationToken.None);
+                            }
+                            else if (session?.ContractPolicy is not null && contractGovernance is not null)
+                            {
+                                contractGovernance.AppendSnapshot(session, "cancelled");
                             }
                         }
                         catch (Exception ex)
@@ -806,7 +826,7 @@ internal static class GatewayWorkers
                                     ? AutomationSignalSeverities.Error
                                     : null;
 
-                                await automationService.FinalizeRunAsync(automation, msg, session, new AutomationRunCompletion
+                                await FinalizeAutomationRunAsync(new AutomationRunCompletion
                                 {
                                     VerificationStatus = AutomationVerificationStatuses.Failed,
                                     VerificationSummary = $"Automation run failed: {ex.Message}",
