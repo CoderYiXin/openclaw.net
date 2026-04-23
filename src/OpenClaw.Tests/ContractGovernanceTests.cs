@@ -177,6 +177,164 @@ public sealed class ContractGovernanceTests
         Assert.Contains(result.Errors, e => e.Contains("invalid"));
     }
 
+    [Fact]
+    public void ValidatePreFlight_InvalidVerificationPolicy_ReturnsErrors()
+    {
+        var service = CreateService();
+        var policy = new ContractPolicy
+        {
+            Id = "ctr_test",
+            Verification = new VerificationPolicy
+            {
+                Checks =
+                [
+                    new VerificationCheckDefinition
+                    {
+                        Id = "missing-path",
+                        Kind = VerificationKinds.FileExists
+                    }
+                ]
+            }
+        };
+
+        var result = service.ValidatePreFlight(policy, new HashSet<string>());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("requires Path", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ValidatePreFlight_VerificationChecksNull_DoesNotThrow()
+    {
+        var service = CreateService();
+        var verification = JsonSerializer.Deserialize("""{"checks":null}""", CoreJsonContext.Default.VerificationPolicy);
+        var policy = new ContractPolicy
+        {
+            Id = "ctr_test",
+            Verification = verification
+        };
+
+        var result = service.ValidatePreFlight(policy, new HashSet<string>());
+
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_NoPolicy_ReturnsNotVerified()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(policy: null, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.NotVerified, result.VerificationStatus);
+        Assert.Contains("no verification policy", result.VerificationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Checks);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_FileExists_ReturnsVerified()
+    {
+        var service = CreateService();
+        var path = Path.Combine(Path.GetTempPath(), $"openclaw-contract-check-{Guid.NewGuid():N}.txt");
+        await File.WriteAllTextAsync(path, "ok");
+
+        try
+        {
+            var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+            {
+                Checks =
+                [
+                    new VerificationCheckDefinition
+                    {
+                        Id = "file-check",
+                        Kind = VerificationKinds.FileExists,
+                        Path = path
+                    }
+                ]
+            }, CancellationToken.None);
+
+            Assert.Equal(AutomationVerificationStatuses.Verified, result.VerificationStatus);
+            Assert.Single(result.Checks);
+            Assert.Equal(AutomationVerificationStatuses.Verified, result.Checks[0].Status);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_OperatorConfirm_ReturnsBlocked()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+        {
+            Checks =
+            [
+                new VerificationCheckDefinition
+                {
+                    Id = "operator-check",
+                    Kind = VerificationKinds.OperatorConfirm,
+                    Prompt = "Confirm that the downstream system applied the change."
+                }
+            ]
+        }, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.Blocked, result.VerificationStatus);
+        Assert.Single(result.Checks);
+        Assert.Equal(AutomationVerificationStatuses.Blocked, result.Checks[0].Status);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_HttpStatus_BlocksLoopbackTargets()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+        {
+            Checks =
+            [
+                new VerificationCheckDefinition
+                {
+                    Id = "http-check",
+                    Kind = VerificationKinds.HttpStatus,
+                    Url = "http://127.0.0.1:8080/health",
+                    ExpectedStatusCode = 200
+                }
+            ]
+        }, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.Failed, result.VerificationStatus);
+        Assert.Single(result.Checks);
+        Assert.Contains("blocked", result.Checks[0].Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task EvaluateVerificationAsync_HttpBodyContains_BlocksLoopbackTargets()
+    {
+        var service = CreateService();
+
+        var result = await service.EvaluateVerificationAsync(new VerificationPolicy
+        {
+            Checks =
+            [
+                new VerificationCheckDefinition
+                {
+                    Id = "body-check",
+                    Kind = VerificationKinds.HttpBodyContains,
+                    Url = "http://localhost/internal",
+                    Contains = "ok"
+                }
+            ]
+        }, CancellationToken.None);
+
+        Assert.Equal(AutomationVerificationStatuses.Failed, result.VerificationStatus);
+        Assert.Single(result.Checks);
+        Assert.Contains("localhost", result.Checks[0].Summary, StringComparison.OrdinalIgnoreCase);
+    }
+
     // === Cost Computation ===
 
     [Fact]

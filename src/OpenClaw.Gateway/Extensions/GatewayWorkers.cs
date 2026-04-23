@@ -193,14 +193,32 @@ internal static class GatewayWorkers
                         while (pipeline.InboundReader.TryRead(out var msg))
                         {
                             Session? session = null;
+                            AutomationDefinition? automation = null;
                             IAsyncDisposable? sessionLock = null;
                             IBridgedChannelControl? bridgedAdapter = null;
                             var bridgedTypingStarted = false;
                             long initialInputTokens = 0;
                             long initialOutputTokens = 0;
+                            var automationRetryAttempt = 0;
                             var conversationRecipientId = ResolveConversationRecipientId(msg);
                             using var processingCts = CreateProcessingCts(msg.RequestCancellation, lifetime.ApplicationStopping);
                             var processingCt = processingCts?.Token ?? lifetime.ApplicationStopping;
+
+                            async Task FinalizeAutomationRunAsync(AutomationRunCompletion completion, CancellationToken finalizeCt)
+                            {
+                                if (automation is null || automationService is null)
+                                    return;
+
+                                var contractIdBeforeFinalize = session?.ContractPolicy?.Id;
+                                await automationService.FinalizeRunAsync(automation, msg, session, completion, finalizeCt);
+
+                                if (session is not null &&
+                                    !string.Equals(contractIdBeforeFinalize, session.ContractPolicy?.Id, StringComparison.Ordinal))
+                                {
+                                    await sessionManager.PersistAsync(session, finalizeCt, sessionLockHeld: true);
+                                }
+                            }
+
                             try
                             {
                                 if (!msg.IsSystem)
@@ -456,6 +474,23 @@ internal static class GatewayWorkers
 
                             sessionLock = await sessionManager.AcquireSessionLockAsync(session.Id, processingCt);
 
+                            if (automationService is not null && !string.IsNullOrWhiteSpace(msg.CronJobName))
+                            {
+                                automation = await automationService.GetAsync(msg.CronJobName, processingCt);
+                                if (automation is not null)
+                                {
+                                    await automationService.MarkRunRunningAsync(automation, msg, processingCt);
+                                    if (!string.IsNullOrWhiteSpace(msg.AutomationRunId))
+                                    {
+                                        var runRecord = await automationService.GetRunRecordAsync(automation.Id, msg.AutomationRunId!, processingCt);
+                                        automationRetryAttempt = runRecord?.RetryAttempt ?? 0;
+                                    }
+
+                                    if (contractGovernance is not null)
+                                        automationService.AttachRunContract(session, automation, msg.AutomationRunId, contractGovernance);
+                                }
+                            }
+
                             // ── Chat Command Processing ──────────────────────
                             var (handled, cmdResponse) = await commandProcessor.TryProcessCommandAsync(session, msg.Text, processingCt);
                             if (handled)
@@ -470,6 +505,18 @@ internal static class GatewayWorkers
                                         Text = cmdResponse,
                                         Subject = msg.Subject,
                                         ReplyToMessageId = msg.MessageId
+                                    }, processingCt);
+                                }
+
+                                if (automation is not null && automationService is not null)
+                                {
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                    {
+                                        VerificationStatus = AutomationVerificationStatuses.Blocked,
+                                        VerificationSummary = "Automation execution was intercepted by a chat command.",
+                                        InputTokens = session.TotalInputTokens - initialInputTokens,
+                                        OutputTokens = session.TotalOutputTokens - initialOutputTokens,
+                                        RetryAttempt = automationRetryAttempt
                                     }, processingCt);
                                 }
                                 continue; // Skip LLM completely
@@ -506,6 +553,18 @@ internal static class GatewayWorkers
                                         Text = shortCircuitText,
                                         Subject = msg.Subject,
                                         ReplyToMessageId = msg.MessageId
+                                    }, processingCt);
+                                }
+
+                                if (automation is not null && automationService is not null)
+                                {
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                    {
+                                        VerificationStatus = AutomationVerificationStatuses.Blocked,
+                                        VerificationSummary = shortCircuitText,
+                                        InputTokens = session.TotalInputTokens - initialInputTokens,
+                                        OutputTokens = session.TotalOutputTokens - initialOutputTokens,
+                                        RetryAttempt = automationRetryAttempt
                                     }, processingCt);
                                 }
                                 continue;
@@ -614,6 +673,17 @@ internal static class GatewayWorkers
                                 }
 
                                 await wsChannel.SendStreamEventAsync(msg.SenderId, "typing_stop", "", msg.MessageId, processingCt);
+
+                                if (automation is not null && automationService is not null)
+                                {
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                    {
+                                        LastDeliveredAtUtc = DateTimeOffset.UtcNow,
+                                        InputTokens = session.TotalInputTokens - initialInputTokens,
+                                        OutputTokens = session.TotalOutputTokens - initialOutputTokens,
+                                        RetryAttempt = automationRetryAttempt
+                                    }, processingCt);
+                                }
                             }
                             else
                             {
@@ -687,6 +757,25 @@ internal static class GatewayWorkers
                                         ReplyToMessageId = msg.MessageId
                                     }, processingCt);
                                 }
+
+                                if (automation is not null && automationService is not null)
+                                {
+                                    var signalSeverity = heartbeatService.IsManagedHeartbeatJob(msg.CronJobName)
+                                        ? responseText.Trim() == "HEARTBEAT_OK"
+                                            ? null
+                                            : AutomationSignalSeverities.Alert
+                                        : null;
+
+                                    await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                    {
+                                        DeliverySuppressed = suppressHeartbeatDelivery,
+                                        LastDeliveredAtUtc = suppressHeartbeatDelivery ? null : DateTimeOffset.UtcNow,
+                                        InputTokens = inputTokenDelta,
+                                        OutputTokens = outputTokenDelta,
+                                        RetryAttempt = automationRetryAttempt,
+                                        SignalSeverity = signalSeverity
+                                    }, processingCt);
+                                }
                             }
                         }
                         catch (OperationCanceledException) when (lifetime.ApplicationStopping.IsCancellationRequested)
@@ -695,13 +784,27 @@ internal static class GatewayWorkers
                         }
                         catch (OperationCanceledException)
                         {
-                            if (session?.ContractPolicy is not null)
-                                contractGovernance?.AppendSnapshot(session, "cancelled");
-
                             if (session is not null)
                                 logger.LogWarning("Request canceled for session {SessionId}", session.Id);
                             else
                                 logger.LogWarning("Request canceled for channel {ChannelId} sender {SenderId}", msg.ChannelId, msg.SenderId);
+
+                            if (automation is not null && automationService is not null)
+                            {
+                                await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                {
+                                    ContractStatus = "cancelled",
+                                    VerificationStatus = AutomationVerificationStatuses.Blocked,
+                                    VerificationSummary = "Automation run was cancelled before completion.",
+                                    InputTokens = session is null ? 0 : session.TotalInputTokens - initialInputTokens,
+                                    OutputTokens = session is null ? 0 : session.TotalOutputTokens - initialOutputTokens,
+                                    RetryAttempt = automationRetryAttempt
+                                }, CancellationToken.None);
+                            }
+                            else if (session?.ContractPolicy is not null && contractGovernance is not null)
+                            {
+                                contractGovernance.AppendSnapshot(session, "cancelled");
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -716,6 +819,23 @@ internal static class GatewayWorkers
                                 logger.LogError(ex, "Internal error processing message for session {SessionId}", session.Id);
                             else
                                 logger.LogError(ex, "Internal error processing message for channel {ChannelId} sender {SenderId}", msg.ChannelId, msg.SenderId);
+
+                            if (automation is not null && automationService is not null)
+                            {
+                                var signalSeverity = heartbeatService.IsManagedHeartbeatJob(msg.CronJobName)
+                                    ? AutomationSignalSeverities.Error
+                                    : null;
+
+                                await FinalizeAutomationRunAsync(new AutomationRunCompletion
+                                {
+                                    VerificationStatus = AutomationVerificationStatuses.Failed,
+                                    VerificationSummary = $"Automation run failed: {ex.Message}",
+                                    InputTokens = session is null ? 0 : session.TotalInputTokens - initialInputTokens,
+                                    OutputTokens = session is null ? 0 : session.TotalOutputTokens - initialOutputTokens,
+                                    RetryAttempt = automationRetryAttempt,
+                                    SignalSeverity = signalSeverity
+                                }, CancellationToken.None);
+                            }
 
                             if (heartbeatService.IsManagedHeartbeatJob(msg.CronJobName))
                                 continue;
