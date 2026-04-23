@@ -177,13 +177,6 @@ internal sealed class DefaultModelSelectionPolicy : IModelSelectionPolicy
             combined.SupportsAudioInput = true;
 
         var reservedOutputTokens = request.ReservedOutputTokens ?? 0;
-        if (reservedOutputTokens > 0)
-        {
-            combined.MinOutputTokens = combined.MinOutputTokens.HasValue
-                ? Math.Max(combined.MinOutputTokens.Value, reservedOutputTokens)
-                : reservedOutputTokens;
-        }
-
         var estimatedInputTokens = request.EstimatedInputTokens ?? 0;
         var requiredContextTokens = estimatedInputTokens + reservedOutputTokens;
         if (requiredContextTokens > 0)

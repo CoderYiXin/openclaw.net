@@ -155,6 +155,68 @@ public sealed class MaintenanceCoordinatorTests
         }
     }
 
+    [Fact]
+    public async Task FixAsync_ContinuesWhenMetadataPruningFails()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "openclaw-maintenance-tests", Guid.NewGuid().ToString("N"));
+        var memoryRoot = Path.Combine(root, "memory");
+        var metadataPath = Path.Combine(memoryRoot, "admin", "session-metadata.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(metadataPath)!);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                metadataPath,
+                JsonSerializer.Serialize(
+                    new List<SessionMetadataSnapshot> { new() { SessionId = "missing-session" } },
+                    CoreJsonContext.Default.ListSessionMetadataSnapshot));
+            SetReadOnly(metadataPath, readOnly: true);
+
+            var config = new GatewayConfig
+            {
+                Memory = new MemoryConfig
+                {
+                    StoragePath = memoryRoot
+                }
+            };
+
+            var result = await MaintenanceCoordinator.FixAsync(
+                config,
+                new MaintenanceFixRequest
+                {
+                    DryRun = false,
+                    Apply = "metadata"
+                },
+                new MaintenanceScanInputs(),
+                CancellationToken.None);
+
+            Assert.False(result.Success);
+            Assert.Contains(result.Warnings, warning => warning.Contains("Metadata pruning could not run", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (File.Exists(metadataPath))
+                SetReadOnly(metadataPath, readOnly: false);
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static void SetReadOnly(string path, bool readOnly)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            File.SetAttributes(path, readOnly ? FileAttributes.ReadOnly : FileAttributes.Normal);
+            return;
+        }
+
+        File.SetUnixFileMode(
+            path,
+            readOnly
+                ? UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead
+                : UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+    }
+
     private static ProviderTurnUsageEntry BuildTurn(string sessionId, long inputTokens)
         => new()
         {

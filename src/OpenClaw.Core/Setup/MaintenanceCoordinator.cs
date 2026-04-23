@@ -127,16 +127,38 @@ public static class MaintenanceCoordinator
 
         if (applyMode is "all" or "metadata")
         {
-            var metadataAction = await PruneOrphanedMetadataAsync(config, request.DryRun, ct);
-            actions.Add(metadataAction);
+            try
+            {
+                var metadataAction = await PruneOrphanedMetadataAsync(config, request.DryRun, ct);
+                actions.Add(metadataAction);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Metadata pruning could not run: {ex.Message}");
+            }
         }
 
         if (applyMode is "all" or "artifacts")
         {
-            actions.Add(PruneModelEvaluationArtifacts(config, request.DryRun));
-            var traceAction = PrunePromptCacheTraceArtifacts(config, request.DryRun);
-            if (traceAction is not null)
-                actions.Add(traceAction);
+            try
+            {
+                actions.Add(PruneModelEvaluationArtifacts(config, request.DryRun));
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Model evaluation artifact pruning could not run: {ex.Message}");
+            }
+
+            try
+            {
+                var traceAction = PrunePromptCacheTraceArtifacts(config, request.DryRun);
+                if (traceAction is not null)
+                    actions.Add(traceAction);
+            }
+            catch (Exception ex)
+            {
+                warnings.Add($"Prompt cache trace artifact pruning could not run: {ex.Message}");
+            }
         }
 
         var report = await ScanAsync(config, inputs, ct);

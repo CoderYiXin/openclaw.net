@@ -214,8 +214,6 @@ internal sealed class ConfiguredModelProfileRegistry : IModelProfileRegistry
             yield return "Provider is required.";
         if (string.IsNullOrWhiteSpace(profile.ModelId))
             yield return "Model is required.";
-        if (profile.ProviderId.Equals("ollama", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(profile.PresetId))
-            yield return "PresetId is recommended for Ollama profiles so doctor and setup can apply local-model guidance.";
         if ((profile.ProviderId.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) ||
              profile.ProviderId.Equals("groq", StringComparison.OrdinalIgnoreCase) ||
              profile.ProviderId.Equals("together", StringComparison.OrdinalIgnoreCase) ||
@@ -244,12 +242,6 @@ internal sealed class ConfiguredModelProfileRegistry : IModelProfileRegistry
             string.IsNullOrWhiteSpace(config.Llm.ApiKey))
         {
             yield return "ApiKey is required for remote provider profiles unless inherited from OpenClaw:Llm:ApiKey.";
-        }
-
-        if (profile.ProviderId.Equals("ollama", StringComparison.OrdinalIgnoreCase) &&
-            OllamaEndpointNormalizer.UsesCompatibilityEndpoint(profile.BaseUrl ?? config.Llm.Endpoint))
-        {
-            yield return "This Ollama profile is using the legacy /v1 compatibility endpoint. Prefer the native Ollama base URL without /v1.";
         }
     }
 
@@ -342,6 +334,8 @@ internal sealed class ConfiguredModelProfileRegistry : IModelProfileRegistry
         var notes = new List<string>();
         if (profile.ProviderId.Equals("ollama", StringComparison.OrdinalIgnoreCase) && ProfileUsesCompatibilityTransport(profile))
             notes.Add("Using legacy /v1 compatibility endpoint; migrate to the native Ollama base URL.");
+        if (profile.ProviderId.Equals("ollama", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(profile.PresetId))
+            notes.Add("No local preset is configured; setup and doctor guidance will be more limited until a PresetId is added.");
 
         if (LocalModelPresetCatalog.TryGet(profile.PresetId, out var preset) && preset is not null)
             notes.AddRange(preset.CompatibilityNotes);

@@ -168,12 +168,6 @@ public static class ModelDoctorEvaluator
         {
             yield return "ApiKey is required for this provider unless inherited from OpenClaw:Llm:ApiKey.";
         }
-
-        if (providerId == "ollama" &&
-            OllamaEndpointNormalizer.UsesCompatibilityEndpoint(ResolveSecretValue(profile.BaseUrl) ?? ResolveSecretValue(config.Llm.Endpoint)))
-        {
-            yield return "This Ollama profile is using the legacy /v1 compatibility endpoint. Prefer the native Ollama base URL without /v1.";
-        }
     }
 
     private static bool RequiresEndpoint(string providerId)
@@ -267,6 +261,11 @@ public static class ModelDoctorEvaluator
             OllamaEndpointNormalizer.UsesCompatibilityEndpoint(ResolveSecretValue(profile.BaseUrl) ?? ResolveSecretValue(config.Llm.Endpoint)))
         {
             notes.Add("Using legacy /v1 compatibility endpoint; migrate to the native Ollama base URL.");
+        }
+        if ((Normalize(profile.Provider) ?? Normalize(config.Llm.Provider) ?? string.Empty) == "ollama" &&
+            string.IsNullOrWhiteSpace(profile.PresetId))
+        {
+            notes.Add("No local preset is configured; setup and doctor guidance will be more limited until a PresetId is added.");
         }
 
         if (LocalModelPresetCatalog.TryGet(profile.PresetId, out var preset) && preset is not null)

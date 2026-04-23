@@ -234,6 +234,9 @@ internal sealed class IntegrationApiFacade
     }
 
     public async Task<OperatorDashboardSnapshot> GetOperatorDashboardAsync(CancellationToken cancellationToken)
+        => await GetOperatorDashboardAsync(reliability: null, cancellationToken);
+
+    public async Task<OperatorDashboardSnapshot> GetOperatorDashboardAsync(ReliabilitySnapshot? reliability, CancellationToken cancellationToken)
     {
         var metadataById = _runtime.Operations.SessionMetadata.GetAll();
         var persistedSessions = await SessionAdminPersistedListing.ListAllMatchingSummariesAsync(
@@ -456,11 +459,20 @@ internal sealed class IntegrationApiFacade
             }
         };
 
+        if (reliability is not null)
+            return CloneWithReliability(snapshot, reliability);
+
         if (_maintenanceService is null)
             return snapshot;
 
         var maintenance = await _maintenanceService.ScanAsync(setupStatus: null, cancellationToken);
-        return new OperatorDashboardSnapshot
+        return CloneWithReliability(snapshot, maintenance.Reliability);
+    }
+
+    private static OperatorDashboardSnapshot CloneWithReliability(
+        OperatorDashboardSnapshot snapshot,
+        ReliabilitySnapshot reliability)
+        => new()
         {
             Sessions = snapshot.Sessions,
             Approvals = snapshot.Approvals,
@@ -470,9 +482,8 @@ internal sealed class IntegrationApiFacade
             Delegation = snapshot.Delegation,
             Channels = snapshot.Channels,
             Plugins = snapshot.Plugins,
-            Reliability = maintenance.Reliability
+            Reliability = reliability
         };
-    }
 
     public async Task<IntegrationSessionSearchResponse> SearchSessionsAsync(SessionSearchQuery query, CancellationToken cancellationToken)
         => new()

@@ -540,7 +540,11 @@ internal sealed class GatewayAutomationService
             DeliveryChannelId = string.IsNullOrWhiteSpace(automation.DeliveryChannelId) ? "cron" : automation.DeliveryChannelId.Trim(),
             DeliveryRecipientId = string.IsNullOrWhiteSpace(automation.DeliveryRecipientId) ? null : automation.DeliveryRecipientId.Trim(),
             DeliverySubject = string.IsNullOrWhiteSpace(automation.DeliverySubject) ? null : automation.DeliverySubject.Trim(),
-            Tags = automation.Tags.Where(static item => !string.IsNullOrWhiteSpace(item)).Select(static item => item.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Tags = (automation.Tags ?? [])
+                .Where(static item => !string.IsNullOrWhiteSpace(item))
+                .Select(static item => item.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
             IsDraft = automation.IsDraft,
             Source = string.IsNullOrWhiteSpace(automation.Source) ? "managed" : automation.Source.Trim(),
             TemplateKey = string.IsNullOrWhiteSpace(automation.TemplateKey) ? null : automation.TemplateKey.Trim(),
@@ -658,9 +662,10 @@ internal sealed class GatewayAutomationService
         var normalized = responseMode?.Trim().ToLowerInvariant();
         return normalized switch
         {
+            SessionResponseModes.Default => SessionResponseModes.Default,
             SessionResponseModes.ConciseOps => SessionResponseModes.ConciseOps,
             SessionResponseModes.Full => SessionResponseModes.Full,
-            _ => SessionResponseModes.ConciseOps
+            _ => SessionResponseModes.Default
         };
     }
 }

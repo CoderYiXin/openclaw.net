@@ -449,6 +449,7 @@ internal static class AdminEndpoints
                 providerSmokeRegistry,
                 setupVerificationSnapshots,
                 maintenance,
+                includeReliability: true,
                 ctx.RequestAborted);
 
             var response = new AdminSummaryResponse
@@ -499,7 +500,7 @@ internal static class AdminEndpoints
                     Routes = operations.LlmExecution.SnapshotRoutes(),
                     RecentTurns = runtime.ProviderUsage.RecentTurns(limit: 20)
                 },
-                Dashboard = await facade.GetOperatorDashboardAsync(ctx.RequestAborted),
+                Dashboard = await facade.GetOperatorDashboardAsync(setupStatus.Reliability, ctx.RequestAborted),
                 Reliability = setupStatus.Reliability
             };
 
@@ -521,6 +522,7 @@ internal static class AdminEndpoints
                     providerSmokeRegistry,
                     setupVerificationSnapshots,
                     maintenance,
+                    includeReliability: true,
                     ctx.RequestAborted),
                 CoreJsonContext.Default.SetupStatusResponse);
         });
@@ -539,6 +541,7 @@ internal static class AdminEndpoints
                 providerSmokeRegistry,
                 setupVerificationSnapshots,
                 maintenance,
+                includeReliability: false,
                 ctx.RequestAborted);
             var report = await maintenance.ScanAsync(setupStatus, ctx.RequestAborted);
             return Results.Json(report, CoreJsonContext.Default.MaintenanceReportResponse);
@@ -562,6 +565,7 @@ internal static class AdminEndpoints
                 providerSmokeRegistry,
                 setupVerificationSnapshots,
                 maintenance,
+                includeReliability: false,
                 ctx.RequestAborted);
             var result = await maintenance.FixAsync(requestPayload.Value ?? new MaintenanceFixRequest(), setupStatus, ctx.RequestAborted);
             return Results.Json(result, CoreJsonContext.Default.MaintenanceFixResponse);
@@ -3381,6 +3385,7 @@ internal static class AdminEndpoints
         ProviderSmokeRegistry providerSmokeRegistry,
         SetupVerificationSnapshotStore setupVerificationSnapshots,
         GatewayMaintenanceRuntimeService maintenance,
+        bool includeReliability,
         CancellationToken ct)
     {
         var policy = organizationPolicy.GetSnapshot();
@@ -3440,6 +3445,9 @@ internal static class AdminEndpoints
             Artifacts = BuildSetupArtifacts(deployDirectory),
             Warnings = warnings
         };
+
+        if (!includeReliability)
+            return status;
 
         var maintenanceReport = await maintenance.ScanAsync(status, ct);
         return new SetupStatusResponse

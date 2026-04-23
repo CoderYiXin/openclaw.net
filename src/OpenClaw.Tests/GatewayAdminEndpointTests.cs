@@ -351,6 +351,38 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task AdminSummary_WritesSingleMaintenanceSnapshotPerRequest()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/admin/summary");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var history = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(Path.Combine(harness.StoragePath, "admin", "maintenance-history.json")),
+            CoreJsonContext.Default.ListMaintenanceHistorySnapshot);
+        Assert.Single(history ?? []);
+    }
+
+    [Fact]
+    public async Task AdminMaintenance_WritesSingleMaintenanceSnapshotPerRequest()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/admin/maintenance");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var history = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(Path.Combine(harness.StoragePath, "admin", "maintenance-history.json")),
+            CoreJsonContext.Default.ListMaintenanceHistorySnapshot);
+        Assert.Single(history ?? []);
+    }
+
+    [Fact]
     public async Task AdminSetupVerify_ReturnsStructuredChecks()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
@@ -2818,6 +2850,41 @@ public sealed class GatewayAdminEndpointTests
         detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
         var detailResponse = await harness.Client.SendAsync(detailRequest);
         Assert.Equal(HttpStatusCode.NotFound, detailResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task AutomationEndpoints_PreserveExplicitDefaultResponseMode()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put, "/admin/automations/auto_default_response_mode")
+        {
+            Content = JsonContent("""
+                {
+                  "id": "auto_default_response_mode",
+                  "name": "Default response mode automation",
+                  "enabled": true,
+                  "schedule": "@daily",
+                  "prompt": "Ping once a day.",
+                  "deliveryChannelId": "cron",
+                  "responseMode": "default",
+                  "source": "managed"
+                }
+                """)
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var saveResponse = await harness.Client.SendAsync(saveRequest);
+        saveResponse.EnsureSuccessStatusCode();
+
+        using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/auto_default_response_mode");
+        detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var detailResponse = await harness.Client.SendAsync(detailRequest);
+        detailResponse.EnsureSuccessStatusCode();
+        using var detailPayload = await ReadJsonAsync(detailResponse);
+
+        Assert.Equal(
+            SessionResponseModes.Default,
+            detailPayload.RootElement.GetProperty("automation").GetProperty("responseMode").GetString());
     }
 
     [Fact]
