@@ -1,4 +1,6 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Agent.Execution;
@@ -13,7 +15,10 @@ using OpenClaw.Core.Sessions;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Extensions;
 using OpenClaw.Gateway.Models;
+using OpenClaw.Gateway.Pipeline;
 using OpenClaw.Gateway.PromptCaching;
+using OpenClaw.Core.Validation;
+using TickerQ.DependencyInjection;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -23,6 +28,11 @@ internal static class CoreServicesExtensions
     {
         var config = startup.Config;
 
+        // TickerQ requires IConfiguration. WebApplicationBuilder already registers one,
+        // so this is a no-op in production (TryAddSingleton respects existing registrations).
+        // Tests that compose services from a bare ServiceCollection rely on this fallback.
+        services.TryAddSingleton<IConfiguration>(_ => new ConfigurationBuilder().Build());
+        services.AddSingleton(startup);
         services.AddSingleton(config);
         services.AddSingleton(config.Learning);
         services.AddSingleton(typeof(AllowlistSemantics), AllowlistPolicy.ParseSemantics(config.Channels.AllowlistSemantics));
@@ -32,7 +42,10 @@ internal static class CoreServicesExtensions
             new AllowlistManager(config.Memory.StoragePath, sp.GetRequiredService<ILogger<AllowlistManager>>()));
 
         services.AddSingleton<RuntimeMetrics>();
-        services.AddSingleton<IMemoryStore>(sp => CreateMemoryStore(config, sp.GetRequiredService<RuntimeMetrics>()));
+        services.AddSingleton<IMemoryStore>(sp => CreateMemoryStore(
+            config,
+            sp.GetRequiredService<RuntimeMetrics>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore")));
         services.AddSingleton<ISessionAdminStore>(sp =>
         {
             var memory = sp.GetRequiredService<IMemoryStore>();
@@ -43,6 +56,13 @@ internal static class CoreServicesExtensions
         AddFeatureStores(services, config);
         services.AddSingleton<ProviderUsageTracker>();
         services.AddSingleton<ToolUsageTracker>();
+        services.AddSingleton<ProviderSmokeRegistry>();
+        services.AddSingleton<StartupNoticeCollector>();
+        services.AddSingleton<IStartupNoticeSink>(sp => sp.GetRequiredService<StartupNoticeCollector>());
+        services.AddSingleton(sp => new SetupVerificationSnapshotStore(config.Memory.StoragePath));
+        services.AddSingleton(sp => new ToolAuditLog(
+            Path.Combine(Path.GetFullPath(config.Memory.StoragePath), "audit", "tool-audit.jsonl"),
+            sp.GetRequiredService<ILogger<ToolAuditLog>>()));
         services.AddSingleton<LlmProviderRegistry>();
         services.AddSingleton<ConfiguredModelProfileRegistry>();
         services.AddSingleton<IModelProfileRegistry>(sp => sp.GetRequiredService<ConfiguredModelProfileRegistry>());
@@ -80,7 +100,8 @@ internal static class CoreServicesExtensions
         {
             var svc = new ExecutionProcessService(
                 sp.GetRequiredService<ToolExecutionRouter>(),
-                sp.GetService<ILoggerFactory>()?.CreateLogger<ExecutionProcessService>());
+                sp.GetService<ILoggerFactory>()?.CreateLogger<ExecutionProcessService>(),
+                sp.GetService<RuntimeMetrics>());
             var eventStore = sp.GetService<RuntimeEventStore>();
             if (eventStore is not null)
             {
@@ -98,6 +119,10 @@ internal static class CoreServicesExtensions
             return svc;
         });
         services.AddSingleton<HeartbeatService>();
+        services.AddTickerQ();
+        services.AddSingleton<CronSchedulerTickerFunction>();
+        services.AddSingleton<AutomationRunCoordinator>();
+        services.AddSingleton<IAutomationRunDispatcher>(sp => sp.GetRequiredService<AutomationRunCoordinator>());
         services.AddSingleton<GatewayAutomationService>();
         services.AddSingleton<LearningService>();
         services.AddSingleton<ICronJobSource, GatewayCronJobSource>();
@@ -121,11 +146,24 @@ internal static class CoreServicesExtensions
         services.AddSingleton<IMemoryRetentionCoordinator>(sp => sp.GetRequiredService<MemoryRetentionSweeperService>());
         services.AddHostedService(sp => sp.GetRequiredService<MemoryRetentionSweeperService>());
         services.AddSingleton<MessagePipeline>();
+        services.AddSingleton(sp =>
+            new CronScheduler(
+                sp.GetRequiredService<ICronJobSource>(),
+                sp.GetRequiredService<ILogger<CronScheduler>>(),
+                sp.GetRequiredService<IStartupNoticeSink>(),
+                sp.GetRequiredService<MessagePipeline>().InboundWriter,
+                sp.GetRequiredService<IAutomationRunDispatcher>()));
+        services.AddSingleton<CronSchedulerStartupService>();
+        services.AddHostedService(sp => sp.GetRequiredService<CronSchedulerStartupService>());
         services.AddSingleton(new WebSocketChannel(config.WebSocket));
+        services.AddSingleton<GatewayRuntimeShutdownCoordinator>();
+        services.AddHostedService(sp => sp.GetRequiredService<GatewayRuntimeShutdownCoordinator>());
         services.AddSingleton<ChatCommandProcessor>();
         services.AddSingleton<GatewayLlmExecutionService>();
         services.AddSingleton<PromptCacheWarmService>();
         services.AddHostedService(sp => sp.GetRequiredService<PromptCacheWarmService>());
+        services.AddSingleton<SqliteEmbeddingBackfillService>();
+        services.AddHostedService(sp => sp.GetRequiredService<SqliteEmbeddingBackfillService>());
         services.AddSingleton<IAgentRuntimeFactory, NativeAgentRuntimeFactory>();
 
         return services;
@@ -166,7 +204,7 @@ internal static class CoreServicesExtensions
         return Path.GetFullPath(dbPath);
     }
 
-    private static IMemoryStore CreateMemoryStore(OpenClaw.Core.Models.GatewayConfig config, RuntimeMetrics metrics)
+    private static IMemoryStore CreateMemoryStore(OpenClaw.Core.Models.GatewayConfig config, RuntimeMetrics metrics, ILogger logger)
     {
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
@@ -182,15 +220,6 @@ internal static class CoreServicesExtensions
                 sqliteConfig.EnableFts,
                 embeddingGenerator: embeddingGen,
                 enableVectors: sqliteConfig.EnableVectors);
-
-            if (embeddingGen is not null)
-            {
-                _ = Task.Run(async () =>
-                {
-                    try { await store.BackfillEmbeddingsAsync(); }
-                    catch { /* fire-and-forget */ }
-                });
-            }
 
             return store;
         }

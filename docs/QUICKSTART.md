@@ -2,6 +2,55 @@
 
 This guide gets OpenClaw.NET to a first working agent with the supported setup path.
 
+If you want the broader overview first, start with [GETTING_STARTED.md](GETTING_STARTED.md). That guide explains what each project is, how the runtime layers fit together, and which parts most contributors actually need.
+
+## First 10 Minutes
+
+Follow this path end-to-end before branching into anything else. Ignore every "optional" section, every channel, and anything involving Docker or sandboxing until this works.
+
+**1. Install prerequisites.** .NET 10 SDK and Git. Nothing else is required for the first run.
+
+**2. Set a provider key and run the primary start path.**
+
+```bash
+export MODEL_PROVIDER_KEY="sk-..."
+dotnet run --project src/OpenClaw.Cli -c Release -- start
+```
+
+Accept the defaults. If the config does not exist yet, `openclaw start` runs setup first, writes `~/.openclaw/config/openclaw.settings.json`, and then launches.
+
+**3. Open the browser UI.**
+
+**Expected:** startup phase lines (`Loading configuration`, `Building services`, `Initializing runtime`, `Starting listener`) followed by an `OpenClaw gateway ready.` block listing the working URLs. If you see `Started with notices:`, the gateway is still up; those are non-fatal startup advisories. If you do not see the ready block, the gateway is not ready yet.
+
+Go to `http://127.0.0.1:18789/chat` (not `/`, not the root URL). You should see the chat interface. Send a message; you should get a reply.
+
+**4. If anything is wrong, run the doctor.**
+
+```bash
+dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/config/openclaw.settings.json --doctor
+```
+
+That's the whole first run. Skip everything below until this works.
+
+If you intentionally skip the CLI flow and start the gateway process directly, use:
+
+```bash
+dotnet run --project src/OpenClaw.Gateway -c Release -- --quickstart
+```
+
+`--quickstart` is the direct terminal fallback. It keeps the gateway on `127.0.0.1`, prompts for missing provider values, retries in-process on the common local startup failures, and after a successful start can save the resulting config to the standard `~/.openclaw/config/openclaw.settings.json`.
+
+You explicitly do **not** need any of these to get started:
+
+- Docker
+- OpenSandbox (see [sandboxing.md](sandboxing.md) only if you are certain you need it)
+- Channel setup (Telegram, Slack, Discord, Teams, WhatsApp)
+- A public / reverse-proxy deployment
+- Runtime mode tuning (`aot` / `jit`)
+
+---
+
 ## Prerequisites
 
 - .NET 10 SDK
@@ -9,11 +58,15 @@ This guide gets OpenClaw.NET to a first working agent with the supported setup p
 
 Examples below use `openclaw ...`. From a source checkout, replace that with `dotnet run --project src/OpenClaw.Cli -c Release -- ...`.
 
+For a first run from source, prefer the generated external config from `openclaw setup`. Do not start by relying on the checked-in `src/OpenClaw.Gateway/appsettings.json` unless you intentionally want to debug raw repo defaults.
+
 ## Choose The Right Entrypoint
 
 | Command | Use when |
 | --- | --- |
+| `openclaw start` | You want the one-command local path that uses an existing config if present or runs setup first and then launches. |
 | `openclaw setup` | You want the guided onboarding flow that writes config, prints launch commands, and gives you `--doctor` plus `admin posture` follow-ups. |
+| `dotnet run --project src/OpenClaw.Gateway -c Release -- --quickstart` | You want to start the gateway directly from a repo checkout and let the gateway recover into a safe local profile instead of preparing config first. |
 | `openclaw init` | You want raw bootstrap files to edit manually before running the gateway. |
 | Direct config editing | You already know the runtime shape you want and do not need the guided path. |
 
@@ -24,14 +77,15 @@ Examples below use `openclaw ...`. From a source checkout, replace that with `do
 1. Run the guided setup flow:
 
 ```bash
-openclaw setup
+openclaw start
 ```
 
-2. Accept the local defaults or supply your preferred provider, model, API key reference, workspace path, and optional execution backend.
+2. Accept the local defaults or supply your preferred provider, model, API key reference, workspace path, and optional execution backend. If a config already exists, `openclaw start` skips setup and launches directly.
 
-3. Start the supported local launch runner for that config:
+3. If you want the explicit split flow instead of the one-command path, use:
 
 ```bash
+openclaw setup
 openclaw setup launch --config ~/.openclaw/config/openclaw.settings.json
 ```
 
@@ -40,6 +94,8 @@ If you prefer to run the gateway process directly, use the printed command, for 
 ```bash
 dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/config/openclaw.settings.json
 ```
+
+If that direct launch fails before the listener comes up and you are in an interactive terminal, the gateway now prints actionable guidance and offers a minimal local recovery flow instead of dropping straight to an unhandled exception. For the shortest direct path, prefer `--quickstart`.
 
 4. Run the printed verification commands after the gateway is up:
 
@@ -51,13 +107,54 @@ dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/con
 OPENCLAW_BASE_URL=http://127.0.0.1:18789 OPENCLAW_AUTH_TOKEN=... openclaw admin posture
 ```
 
+```bash
+openclaw upgrade check --config ~/.openclaw/config/openclaw.settings.json
+```
+
+That preflight now also captures a last-known-good snapshot of the generated config, env example, and deploy artifacts. If an upgrade regresses the setup, restore it with:
+
+```bash
+openclaw upgrade rollback --config ~/.openclaw/config/openclaw.settings.json --offline
+```
+
+For a local Ollama-first setup, keep the native root endpoint and choose an explicit preset instead of the legacy `/v1` shim:
+
+```bash
+openclaw setup --non-interactive \
+  --profile local \
+  --workspace ./workspace \
+  --provider ollama \
+  --model llama3.2 \
+  --model-preset ollama-general
+
+openclaw models presets
+openclaw models doctor
+```
+
+The doctor now warns when an Ollama profile still points at `/v1` or when a local agentic profile is missing a deterministic fallback.
+
+After the first successful run, use the maintenance surface to keep the install healthy without touching user-authored prompt files:
+
+```bash
+openclaw maintenance scan --config ~/.openclaw/config/openclaw.settings.json
+openclaw maintenance fix --config ~/.openclaw/config/openclaw.settings.json --dry-run
+```
+
 Default local endpoints:
 
 - Web UI: `http://127.0.0.1:18789/chat`
+- Root redirect: `http://127.0.0.1:18789/` -> `/chat`
 - WebSocket: `ws://127.0.0.1:18789/ws`
 - Integration API: `http://127.0.0.1:18789/api/integration/status`
 - MCP endpoint: `http://127.0.0.1:18789/mcp`
 - Health: `http://127.0.0.1:18789/health`
+
+Important:
+
+- the browser chat UI is `/chat`, not the root URL
+- the admin UI is `http://127.0.0.1:18789/admin`
+- the ready banner also prints `Ctrl-C to stop`, startup notices, and follow-up commands
+- operational sessions can use `/concise on|off|auto` to control terse repair and automation-style responses
 
 ## Public / Reverse Proxy Start
 
@@ -102,6 +199,8 @@ That writes:
 
 Use `init` when you want to hand-edit the generated files before your first launch. Use `setup` when you want the supported guided path.
 
+For the simplest local source run, `openclaw init --preset local` gives you a starter config without forcing you through the optional sandbox path.
+
 ## Channel Setup
 
 After the base config exists, configure common channels with the channel wizard:
@@ -127,6 +226,8 @@ http://127.0.0.1:18789/chat
 ```
 
 For operator workflows, use the admin UI at `http://127.0.0.1:18789/admin`.
+
+If you browse to `http://127.0.0.1:18789/`, you are at the wrong URL for chat. Use `/chat`.
 
 Recommended auth flow:
 
@@ -220,8 +321,67 @@ Additional support here includes:
 6. Switch to `jit` only when you actually need expanded plugin compatibility
 7. On any non-loopback deployment, also check `openclaw admin posture` after the real proxy and TLS settings are in place
 
+## Debugging First-Run Problems
+
+If your first launch feels unclear, use this sequence:
+
+1. Watch the logs through the supported launch helper:
+
+```bash
+openclaw setup launch --config ~/.openclaw/config/openclaw.settings.json
+```
+
+2. Run the gateway doctor command for the generated config:
+
+```bash
+dotnet run --project src/OpenClaw.Gateway -c Release -- --config ~/.openclaw/config/openclaw.settings.json --doctor
+```
+
+3. Check the summarized setup posture:
+
+```bash
+openclaw setup status --config ~/.openclaw/config/openclaw.settings.json
+```
+
+4. Validate the security posture that the running gateway sees:
+
+```bash
+OPENCLAW_BASE_URL=http://127.0.0.1:18789 OPENCLAW_AUTH_TOKEN=... openclaw admin posture
+```
+
+5. Use the browser UI Doctor view or fetch `/doctor/text` after the gateway is up for a readable report.
+
+When in doubt, do not skip back and forth between several manual entrypoints. `setup`, `setup launch`, `--doctor`, and `admin posture` are the intended onboarding loop.
+
+### Sandbox confusion on local/source builds
+
+If you are running from Visual Studio or directly starting `OpenClaw.Gateway`, sandboxing is the most common source of documentation confusion.
+
+What is true in the current codebase:
+
+- OpenSandbox support is optional
+- the default gateway configs start with `OpenClaw:Sandbox:Provider=None`
+- the default gateway build does not include the OpenSandbox integration unless you compile with `-p:OpenClawEnableOpenSandbox=true`
+- `shell`, `code_exec`, and `browser` are the sandbox-capable native tools
+- the easiest local path is to ignore sandboxing entirely
+
+If you do not want sandboxing on a local run, use:
+
+```json
+{
+  "OpenClaw": {
+    "Sandbox": {
+      "Provider": "None"
+    }
+  }
+}
+```
+
+Use [sandboxing.md](sandboxing.md) only when you intentionally want isolated execution.
+
 ## Next Docs
 
+- [GETTING_STARTED.md](GETTING_STARTED.md) for the mental model, repository map, and debugging flow
 - [README.md](../README.md) for the high-level overview
 - [COMPATIBILITY.md](COMPATIBILITY.md) for the supported upstream skill/plugin/channel surface
 - [USER_GUIDE.md](USER_GUIDE.md) for provider, tools, skills, and channels

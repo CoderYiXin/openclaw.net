@@ -57,6 +57,11 @@ public sealed class ToolApprovalService
 
     private readonly ConcurrentDictionary<string, Pending> _pending = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Current number of pending approval requests. Used by observability (openclaw.approval.queue.depth gauge).
+    /// </summary>
+    public int PendingCount => _pending.Count;
+
     public ToolApprovalRequest Create(
         string sessionId,
         string channelId,
@@ -184,6 +189,18 @@ public sealed class ToolApprovalService
 
             // Timeout => deny by default and drain the pending request.
             _pending.TryRemove(approvalId, out _);
+            p.Tcs.TrySetCanceled();
+
+            // Re-check: TrySetDecision may have won the race before TrySetCanceled
+            if (p.Tcs.Task.IsCompletedSuccessfully)
+            {
+                return new ToolApprovalWaitOutcome
+                {
+                    Result = p.Tcs.Task.Result ? ToolApprovalWaitResult.Approved : ToolApprovalWaitResult.Denied,
+                    Request = p.Request
+                };
+            }
+
             return new ToolApprovalWaitOutcome
             {
                 Result = ToolApprovalWaitResult.TimedOut,

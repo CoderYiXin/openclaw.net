@@ -157,6 +157,55 @@ public sealed class ResilienceTests
         Assert.False(CronScheduler.IsTime("0 0 L * *", notMatching));
     }
 
+    [Theory]
+    [InlineData("0,15,30,45 * * * *", 15, true)]
+    [InlineData("0,15,30,45 * * * *", 14, false)]
+    [InlineData("*/10 * * * *", 0, true)]
+    [InlineData("*/10 * * * *", 20, true)]
+    [InlineData("*/10 * * * *", 5, false)]
+    public void CronScheduler_IsTime_SupportsListsAndStepWildcards(string expression, int minute, bool expected)
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, minute, 0, TimeSpan.Zero);
+        Assert.Equal(expected, CronScheduler.IsTime(expression, time));
+    }
+
+    [Fact]
+    public void CronScheduler_IsTime_IgnoresSubSecondPrecision()
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, 30, 0, 250, TimeSpan.Zero);
+        Assert.True(CronScheduler.IsTime("30 12 * * *", time));
+    }
+
+    [Theory]
+    [InlineData("0 9-17 * * 1-5", 0, 10, DayOfWeek.Monday, true)]
+    [InlineData("0 9-17 * * 1-5", 0, 8, DayOfWeek.Monday, false)]
+    [InlineData("0 9-17 * * 1-5", 0, 10, DayOfWeek.Saturday, false)]
+    public void CronScheduler_IsTime_SupportsDayOfWeekRanges(string expression, int minute, int hour, DayOfWeek dow, bool expected)
+    {
+        // Find a date in 2026 matching the given day of week
+        var baseDate = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        while (baseDate.DayOfWeek != dow)
+            baseDate = baseDate.AddDays(1);
+        var time = new DateTimeOffset(baseDate.Year, baseDate.Month, baseDate.Day, hour, minute, 0, TimeSpan.Zero);
+        Assert.Equal(expected, CronScheduler.IsTime(expression, time));
+    }
+
+    [Fact]
+    public void CronScheduler_IsTime_EmptyExpression_ReturnsFalse()
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        Assert.False(CronScheduler.IsTime("", time));
+        Assert.False(CronScheduler.IsTime("   ", time));
+    }
+
+    [Fact]
+    public void CronScheduler_IsTime_InvalidExpression_ReturnsFalse()
+    {
+        var time = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero);
+        Assert.False(CronScheduler.IsTime("not a cron", time));
+        Assert.False(CronScheduler.IsTime("60 * * * *", time)); // minute out of range
+    }
+
     [Fact]
     public async Task CircuitBreaker_ThreadSafety_ConcurrentCalls()
     {

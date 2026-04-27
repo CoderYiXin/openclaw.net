@@ -2,29 +2,53 @@
 
 Welcome to the **OpenClaw.NET** User Guide! This document will walk you through the core concepts, configuring your preferred AI provider via API keys, and deploying your first agent.
 
+> Upgrading from an earlier release? See [Breaking Changes](#breaking-changes) at the end of this guide.
+
 ## Recommended First Run
 
 Start with the guided setup path:
 
 ```bash
-openclaw setup
+openclaw start
 ```
 
 From a source checkout, use:
 
 ```bash
-dotnet run --project src/OpenClaw.Cli -c Release -- setup
+dotnet run --project src/OpenClaw.Cli -c Release -- start
 ```
 
-Use `--profile public` when you are preparing a reverse-proxy or internet-facing deployment. The setup flow writes an external config file, a matching env example, and prints the exact gateway launch, `--doctor`, and `openclaw admin posture` commands for that config.
+Use `--profile public` when you are preparing a reverse-proxy or internet-facing deployment. If `openclaw start` finds an existing config, it reuses it; if it needs to run setup, the flow writes an external config file, a matching env example, and prints the exact gateway launch, `--doctor`, and `openclaw admin posture` commands for that config.
 
 Continue the supported bootstrap flow with:
 
 ```bash
+openclaw start
 openclaw setup launch --config ~/.openclaw/config/openclaw.settings.json
 openclaw setup service --config ~/.openclaw/config/openclaw.settings.json --platform all
 openclaw setup status --config ~/.openclaw/config/openclaw.settings.json
+openclaw upgrade check --config ~/.openclaw/config/openclaw.settings.json
+openclaw upgrade rollback --config ~/.openclaw/config/openclaw.settings.json --offline
 ```
+
+For local-model installs, the supported path is now:
+
+```bash
+openclaw setup --non-interactive --profile local --workspace ./workspace --provider ollama --model llama3.2 --model-preset ollama-general
+openclaw models presets
+openclaw models doctor
+openclaw maintenance scan --config ~/.openclaw/config/openclaw.settings.json
+```
+
+That gives you an explicit local preset, native Ollama routing, doctor guidance for compatibility or fallback gaps, and a maintenance scan that reports storage drift, prompt budget pressure, and top operator actions.
+
+If you start the gateway directly from a local terminal instead of using `setup launch`, the direct fallback is:
+
+```bash
+dotnet run --project src/OpenClaw.Gateway -c Release -- --quickstart
+```
+
+That flow is interactive-only. It applies a minimal local loopback profile, prompts for missing provider inputs, retries on the common startup failures, and after a successful start can save the working config to `~/.openclaw/config/openclaw.settings.json`.
 
 If you want raw starter files instead of the guided flow, use `openclaw init`. For the supported upstream skill, plugin, and channel compatibility surface, treat the [Compatibility Guide](COMPATIBILITY.md) as the source of truth.
 
@@ -40,13 +64,12 @@ openclaw setup channel whatsapp --config ~/.openclaw/config/openclaw.settings.js
 
 These wizards update the existing external config and keep the readiness and admin surfaces aligned with what the CLI generated.
 
-## Breaking Changes
+Important distinction:
 
-- `OPENCLAW_AUTH_TOKEN` is now the bootstrap and breakglass credential, not the recommended day-to-day operator login.
-- Browser admin usage is now account/session-first.
-- Companion, CLI, API, and websocket clients should use operator account tokens instead of the shared bootstrap token.
-- Mutation access is role-gated. A read-only `viewer` account can no longer rely on the old “any authenticated operator can mutate” assumption.
-- Bare `openclaw migrate` remains the legacy automation migration alias in this release. Upstream translation now lives under `openclaw migrate upstream`.
+- `openclaw start` is the primary one-command local entrypoint
+- `openclaw setup` and `openclaw init` generate the supported onboarding configs
+- directly editing `src/OpenClaw.Gateway/appsettings.json` is a lower-level path and can expose optional features that are not part of the easiest first run
+- direct gateway startup now prints explicit startup phases and a ready banner with `/chat`, `/admin`, `/doctor/text`, `/health`, `/mcp`, and `/ws`
 
 ## Operator Auth Model
 
@@ -136,8 +159,9 @@ OpenClaw supports native routing for several providers out-of-the-box. Change th
 #### 3. Ollama (Local AI)
 - **Provider**: `"ollama"`
 - **Required**: `Model` (e.g., `"llama3"` or `"mistral"`)
-- **Default Endpoint**: `http://localhost:11434/v1`
-- **Notes**: OpenClaw connects to Ollama's OpenAI-compatible endpoint automatically.
+- **Default Endpoint**: `http://127.0.0.1:11434`
+- **Recommended Setup**: choose an explicit preset such as `ollama-general`, `ollama-agentic`, or `ollama-vision`
+- **Notes**: OpenClaw uses Ollama's native `/api/chat` and `/api/embed` endpoints. Legacy `/v1` compatibility URLs still load, but `openclaw models doctor` warns so you can migrate to the native base URL.
 
 #### 4. Claude / Anthropic
 - **Provider**: `"anthropic"` or `"claude"`
@@ -161,6 +185,45 @@ OpenClaw supports native routing for several providers out-of-the-box. Change th
 ## Tooling & Sandbox
 
 OpenClaw gives the AI extreme power. By default, it can run bash commands (`ShellTool`), navigate dynamic websites (`BrowserTool`), and read/write to your local machine.
+
+### What most local users should do first
+
+If you are just trying to get the project running locally from source:
+
+- use the config generated by `openclaw setup`
+- open `http://127.0.0.1:18789/chat` for chat
+- open `http://127.0.0.1:18789/admin` for operator/admin work
+- or visit `http://127.0.0.1:18789/`, which redirects to `/chat`
+- ignore sandboxing unless you explicitly want isolated execution
+
+If you are running the gateway directly from Visual Studio and want the simplest behavior, set:
+
+```json
+{
+  "OpenClaw": {
+    "Sandbox": {
+      "Provider": "None"
+    }
+  }
+}
+```
+
+This disables optional sandbox routing for sandbox-capable native tools and keeps execution local.
+
+### Why the sandbox story is confusing
+
+The current codebase supports OpenSandbox, but it is optional:
+
+- the checked-in gateway config files now default to `OpenClaw:Sandbox:Provider=None`
+- the default gateway build does not include the OpenSandbox integration unless you compile with `OpenClawEnableOpenSandbox=true`
+- the supported onboarding flow does not require OpenSandbox
+
+So if you are new to the project, the right interpretation is:
+
+- sandboxing is an advanced deployment/runtime option
+- it is not required for a normal local first run
+
+For the full optional path, see [sandboxing.md](sandboxing.md).
 
 ### Security Configurations
 You can lock down the agent via the `Tooling` config block:
@@ -250,11 +313,15 @@ This repo ships a bundled set of powerful personas and capabilities out-of-the-b
 
 ## Interacting With Your Agent
 
+> For operator account management (`openclaw accounts`) and external coding backend configuration (`openclaw backends`), see [External Coding Backends](external-coding-backends.md).
+
 ### WebChat UI (Built-In)
 The easiest way to interact with OpenClaw locally is via the embedded frontend:
 1. Start the Gateway: `dotnet run --project src/OpenClaw.Gateway`
 2. Open your browser to `http://127.0.0.1:18789/chat`
 3. For chat-only local usage, load the token the UI asks for. For operator/admin workflows, use `/admin` and sign in with an operator account.
+
+The root URL (`http://127.0.0.1:18789/`) is not the main browser chat entrypoint. Use `/chat`.
 
 WebChat token details:
 - The browser client authenticates WebSocket using `?token=<value>` on the `/ws` URL.
@@ -262,6 +329,39 @@ WebChat token details:
 - Tokens are stored in `sessionStorage` by default.
 - Enable the **Remember** checkbox to also store `openclaw_token` in `localStorage`.
 WebChat includes a **Doctor** button which fetches `GET /doctor/text` and prints a diagnostics report (helpful for onboarding and debugging).
+
+### Concise Operational Responses
+
+Operational runs such as automations, heartbeat-style workflows, and contract-governed repair/status flows default to a terse operator format. The runtime keeps ordinary chat unchanged, but for the current session you can override the behavior with:
+
+```text
+/concise on
+/concise off
+/concise auto
+```
+
+- `on` forces the concise operational format
+- `off` disables it for the current session
+- `auto` restores the default behavior, where only operational workflows become concise
+
+This is separate from `/verbose on|off`, which only controls the extra token and tool-call footer.
+
+### Maintenance And Reliability
+
+Use the maintenance surface to understand long-run drift and remove only safe generated artifacts:
+
+```bash
+openclaw maintenance scan --config ~/.openclaw/config/openclaw.settings.json
+openclaw maintenance fix --config ~/.openclaw/config/openclaw.settings.json --dry-run
+```
+
+The report now includes:
+
+- storage cleanup candidates such as orphaned session metadata, model evaluation artifacts, and managed prompt-cache traces
+- prompt budget pressure from recent turns plus large `AGENTS.md` or `SOUL.md` files
+- a reliability score with concrete next commands such as `openclaw models doctor` or `openclaw setup verify --require-provider`
+
+The gateway also exposes the same data in `/admin/maintenance`, `/admin/setup/status`, and the integration dashboard.
 
 ### Admin operator surfaces
 
@@ -330,6 +430,7 @@ For memory and learning operations, the admin API now also supports:
 - browsing the currently loaded skills with trust level, required env/config/bin dependencies, and command dispatch metadata
 - browsing the pinned public compatibility catalog with pass/fail scenarios, install guidance, config examples, and expected diagnostics
 - using the built-in operator dashboard to inspect session volume, approval pressure, automation health, memory activity, delegation usage, channel readiness, and plugin trust in one view
+- inspecting automation run history with separate lifecycle, verification, and health states, then replaying a past run or clearing automation quarantine from the operator surface
 - inspecting a session's delegated child agents, delegated tool usage, and proposed changes directly from the session detail pane
 - promoting a successful session into a disabled automation draft, a scoped provider policy, or a pending skill draft proposal without leaving the admin UI
 - using the built-in automation center to apply reusable templates such as inbox triage, daily summary, incident follow-up, channel moderation, and repo hygiene
@@ -379,8 +480,10 @@ Current integration API coverage includes:
 - status and dashboard snapshots
 - pending approvals and approval history
 - provider and plugin health snapshots
+- machine-readable compatibility export for CI (`GET /api/integration/compatibility/export`)
 - operator audit events
 - session lists, session detail, and session timelines
+- automation definitions, latest run state, per-run history, replay, and quarantine clearing
 - runtime event queries
 - message enqueueing
 
@@ -410,6 +513,14 @@ var status = await client.CallMcpToolAsync("openclaw.get_status", emptyArguments
 ```
 
 On non-loopback/public binds, authenticate these surfaces with `Authorization: Bearer <operator-account-token>` for normal automation, or the bootstrap token only for first-run recovery flows.
+
+### OpenAI-compatible stable sessions
+
+`X-OpenClaw-Session-Id` remains the external header for stable OpenAI-compatible conversations, but the gateway now scopes the internal session key by requester identity.
+
+- The same stable session id can be reused safely by different callers without sharing history.
+- Admin session listings and session detail now expose `stableSessionId`, `stableSessionNamespace`, and `stableSessionOwnerKey` so operators can audit the binding.
+- Unsafe stable session ids (path separators, traversal patterns, overlong ids) are rejected at the HTTP edge.
 
 ## Upstream Migration
 
@@ -609,29 +720,17 @@ If `OpenClaw:Plugins:Native:Email:Enabled=true`, the gateway also enables an `em
 
 OpenClaw.NET supports scheduled prompts via `OpenClaw:Cron`. Each cron job enqueues an internal system message; the agent runs it and sends the response back through the specified channel.
 
-Recommended fields per job:
-- `SessionId`: stable session for that job (e.g. `cron:daily-news`)
-- `ChannelId`: `email`, `telegram`, `sms`, etc.
-- `RecipientId`: channel recipient (email address, Telegram chat id, E.164 number)
-- `Subject`: used by the `email` channel (optional)
-
 ### Cron time + syntax notes
 - Cron expressions are currently evaluated in **UTC**.
 - Supported cron format is **5 fields**: minute hour day-of-month month day-of-week.
 - Supported forms per field: `*`, `*/n`, `a,b,c`, `a-b`, or a single integer.
 
-### Automation Recipes
+### Example recipe
 **Daily news (delivered to email)**
 - Use the example job in `src/OpenClaw.Gateway/appsettings.json` as a starting point.
 - Prompt idea: “Summarize today’s top AI + security news. Include links and 5 bullet takeaways.”
 
-**Inbox triage (daily digest)**
-- Enable `OpenClaw:Plugins:Native:Email` and `OpenClaw:Plugins:Native:InboxZero`.
-- Cron prompt idea: “Run inbox triage on the last 50 emails (dry-run). Summarize what you would archive, what needs replies, and any urgent items. Then email me the report.”
-
-**Home status report**
-- Enable `OpenClaw:Plugins:Native:HomeAssistant`.
-- Cron prompt idea: “Check if any doors/windows are open, list any lights left on, and summarize any energy-usage sensors. Email me the results.”
+For the full per-job field reference (`SessionId`, `ChannelId`, `RecipientId`, `Subject`) and additional recipes, see the **Scheduled Tasks** section of the [Tool Guide](TOOLS_GUIDE.md).
 
 ---
 
@@ -699,32 +798,14 @@ Minimal config example:
 
 OpenClaw.NET is designed to be compatible with the original [OpenClaw](https://github.com/openclaw/openclaw) TypeScript/JavaScript plugin ecosystem. This allows you to leverage hundreds of community plugins without rewriting them.
 
-For a detailed breakdown of supported features and implementation details, see the **[Compatibility Guide](COMPATIBILITY.md)**.
+OpenClaw.NET spawns a Node.js bridge process to run upstream plugins over JSON-RPC. For runtime requirements, the compatibility matrix, and install paths, see the **Bridged Tools** section of the [Tool Guide](TOOLS_GUIDE.md). For the full supported-feature breakdown, see the [Compatibility Guide](COMPATIBILITY.md).
 
-### How it works
+---
 
-When you enable the plugin system, OpenClaw.NET spawns a optimized Node.js "Bridge" process for each plugin. This bridge loads the TypeScript or JavaScript files, registers the exported tools, and communicates with the .NET Gateway via a high-performance JSON-RPC protocol over local pipes.
+## Breaking Changes
 
-### Requirements
-
-- **Node.js 18+**: The bridge requires a modern Node.js runtime.
-- **Enabled Config**: Set `OpenClaw:Plugins:Enabled=true` in `appsettings.json`.
-
-### Compatibility Levels
-
-| Feature | Support | Note |
-| --- | --- | --- |
-| **Tools** | ✅ Full | Bridged tools appear natively to the AI. |
-| **Background Services** | ✅ Full | Lifecycle methods `start()` and `stop()` are supported. |
-| **Logging** | ✅ Full | Plugin console output is captured and routed to .NET logs. |
-| **Channels** | ⚠️ Partial | Registered but not yet active in the .NET gateway. |
-| **Model Providers** | ❌ No | Auth flows for third-party providers must be native. |
-
-### Installing Plugins
-
-You can install plugins by placing them in:
-1. Your workspace: `.openclaw/extensions/`
-2. Your home directory: `~/.openclaw/extensions/`
-3. Custom paths: configure them in `Plugins:Load:Paths`.
-
-The agent will automatically choose the `email` tool and perform the requested actions!
+- `OPENCLAW_AUTH_TOKEN` is now the bootstrap and breakglass credential, not the recommended day-to-day operator login.
+- Browser admin usage is now account/session-first.
+- Companion, CLI, API, and websocket clients should use operator account tokens instead of the shared bootstrap token.
+- Mutation access is role-gated. A read-only `viewer` account can no longer rely on the old "any authenticated operator can mutate" assumption.
+- Bare `openclaw migrate` remains the legacy automation migration alias in this release. Upstream translation now lives under `openclaw migrate upstream`.

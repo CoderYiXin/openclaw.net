@@ -1,44 +1,54 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Threading.Channels;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NCrontab;
+using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Observability;
+using TickerQ.Utilities;
 
 namespace OpenClaw.Core.Pipeline;
 
 /// <summary>
-/// A simple background service that checks registered cron jobs every minute
-/// and publishes an InboundMessage to the pipeline.
+/// Dispatches configured cron jobs when invoked by the host scheduler.
 /// </summary>
-public sealed class CronScheduler : BackgroundService
+public sealed class CronScheduler
 {
     private static readonly TimeSpan MaxRunningDuration = TimeSpan.FromHours(6);
 
     private readonly ICronJobSource _jobSource;
     private readonly ILogger<CronScheduler> _logger;
+    private readonly IStartupNoticeSink _startupNoticeSink;
     private readonly ChannelWriter<InboundMessage> _pipelineChannel;
+    private readonly IAutomationRunDispatcher? _runDispatcher;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTimeOffset> _runningJobs = new(StringComparer.OrdinalIgnoreCase);
 
-    public CronScheduler(ICronJobSource jobSource, ILogger<CronScheduler> logger, ChannelWriter<InboundMessage> pipelineChannel)
+    public CronScheduler(
+        ICronJobSource jobSource,
+        ILogger<CronScheduler> logger,
+        IStartupNoticeSink startupNoticeSink,
+        ChannelWriter<InboundMessage> pipelineChannel,
+        IAutomationRunDispatcher? runDispatcher = null)
     {
         _jobSource = jobSource;
         _logger = logger;
+        _startupNoticeSink = startupNoticeSink;
         _pipelineChannel = pipelineChannel;
+        _runDispatcher = runDispatcher;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    public async Task RunStartupJobsAsync(CancellationToken stoppingToken)
     {
         var initialJobs = _jobSource.GetJobs();
         if (initialJobs.Count == 0)
         {
-            _logger.LogInformation("Cron Scheduler started with no jobs. Waiting for live cron registrations.");
+            _logger.LogInformation("Cron scheduler startup dispatch found no initial jobs.");
+            return;
         }
 
-        using var timer = new PeriodicTimer(TimeSpan.FromMinutes(1));
-        _logger.LogInformation("Cron Scheduler started. Monitoring {Count} initial jobs.", initialJobs.Count);
+        _logger.LogInformation(
+            "Cron scheduler startup dispatch inspecting {Count} initial jobs for RunOnStartup execution.",
+            initialJobs.Count);
 
-        // Optional: run selected jobs immediately once on startup (useful for testing / boot-time reports)
         foreach (var job in initialJobs)
         {
             if (!job.RunOnStartup)
@@ -55,41 +65,39 @@ public sealed class CronScheduler : BackgroundService
                 _logger.LogWarning(ex, "Failed to run cron job '{JobName}' on startup", job.Name);
             }
         }
+    }
 
-        while (await timer.WaitForNextTickAsync(stoppingToken))
+    public async Task RunTickAsync(CancellationToken stoppingToken)
+    {
+        CleanupStaleRunningJobs(DateTimeOffset.UtcNow);
+        var jobs = _jobSource.GetJobs();
+        if (jobs.Count == 0)
+            return;
+
+        var utcNow = DateTimeOffset.UtcNow;
+
+        foreach (var job in jobs)
         {
-            CleanupStaleRunningJobs(DateTimeOffset.UtcNow);
-            var jobs = _jobSource.GetJobs();
-            if (jobs.Count == 0)
-                continue;
-
-            var utcNow = DateTimeOffset.UtcNow;
-
-            // Re-evaluate jobs at the top of the minute
-            foreach (var job in jobs)
+            var now = utcNow;
+            if (!string.IsNullOrWhiteSpace(job.Timezone))
             {
-                // Convert to job-specific timezone if configured, otherwise use UTC
-                var now = utcNow;
-                if (!string.IsNullOrWhiteSpace(job.Timezone))
+                try
                 {
-                    try
-                    {
-                        var tz = TimeZoneInfo.FindSystemTimeZoneById(job.Timezone);
-                        now = TimeZoneInfo.ConvertTime(utcNow, tz);
-                    }
-                    catch (TimeZoneNotFoundException)
-                    {
-                        _logger.LogWarning("Cron job '{JobName}' has invalid timezone '{Timezone}', falling back to UTC.",
-                            job.Name, job.Timezone);
-                    }
+                    var tz = TimeZoneInfo.FindSystemTimeZoneById(job.Timezone);
+                    now = TimeZoneInfo.ConvertTime(utcNow, tz);
                 }
-
-                if (IsTime(job.CronExpression, now))
+                catch (TimeZoneNotFoundException)
                 {
-                    _logger.LogInformation("Triggering cron job '{JobName}' at {Time}", job.Name, now);
-                    await EnqueueJobIfNotRunningAsync(job, stoppingToken);
+                    _logger.LogWarning("Cron job '{JobName}' has invalid timezone '{Timezone}', falling back to UTC.",
+                        job.Name, job.Timezone);
                 }
             }
+
+            if (!IsTime(job.CronExpression, now))
+                continue;
+
+            _logger.LogInformation("Triggering cron job '{JobName}' at {Time}", job.Name, now);
+            await EnqueueJobIfNotRunningAsync(job, stoppingToken);
         }
     }
 
@@ -109,7 +117,7 @@ public sealed class CronScheduler : BackgroundService
         {
             if ((now - runningSince) <= MaxRunningDuration)
             {
-                _logger.LogWarning("Skipping cron job '{JobName}' because a previous invocation is still running.", jobName);
+                LogOverlap(jobName);
                 return;
             }
 
@@ -119,13 +127,15 @@ public sealed class CronScheduler : BackgroundService
 
         if (!_runningJobs.TryAdd(jobName, now))
         {
-            _logger.LogWarning("Skipping cron job '{JobName}' because a previous invocation is still running.", jobName);
+            LogOverlap(jobName);
             return;
         }
 
         try
         {
-            await EnqueueJobAsync(job, ct);
+            var queued = await EnqueueJobAsync(job, ct);
+            if (!queued)
+                _runningJobs.TryRemove(jobName, out _);
         }
         catch
         {
@@ -134,16 +144,38 @@ public sealed class CronScheduler : BackgroundService
         }
     }
 
-    private async ValueTask EnqueueJobAsync(CronJobConfig job, CancellationToken ct)
+    private async ValueTask<bool> EnqueueJobAsync(CronJobConfig job, CancellationToken ct)
     {
-        var sessionId = job.SessionId ?? $"cron:{job.Name}";
+        var sessionId = string.IsNullOrWhiteSpace(job.SessionId)
+            ? $"cron:{(string.IsNullOrWhiteSpace(job.Name) ? "system" : job.Name)}"
+            : job.SessionId;
         var channelId = job.ChannelId ?? "cron";
 
         // If a delivery RecipientId is explicitly set, send responses to that recipient.
         // Otherwise, set a stable "pseudo recipient" so the cron channel can bucket outputs per job/session.
         var senderId = job.RecipientId ?? sessionId ?? job.Name ?? "system";
 
-        var msg = new InboundMessage
+        InboundMessage? msg = null;
+        if (_runDispatcher is not null && !string.IsNullOrWhiteSpace(job.AutomationId))
+        {
+            msg = await _runDispatcher.PrepareDispatchAsync(new AutomationDispatchRequest
+            {
+                AutomationId = job.AutomationId!,
+                TriggerSource = string.IsNullOrWhiteSpace(job.AutomationTriggerSource)
+                    ? AutomationRunTriggerSources.Schedule
+                    : job.AutomationTriggerSource!,
+                SessionId = sessionId!,
+                ChannelId = channelId,
+                SenderId = senderId!,
+                Prompt = job.Prompt,
+                Subject = job.Subject ?? (string.IsNullOrWhiteSpace(job.Name) ? null : $"OpenClaw Cron: {job.Name}")
+            }, ct);
+
+            if (msg is null)
+                return false;
+        }
+
+        msg ??= new InboundMessage
         {
             IsSystem = true,
             SessionId = sessionId,
@@ -155,33 +187,37 @@ public sealed class CronScheduler : BackgroundService
         };
 
         await _pipelineChannel.WriteAsync(msg, ct);
+        return true;
     }
 
     /// <summary>
-    /// Evaluates a standard 5-field cron expression against a given time.
-    /// (Minutes, Hours, Day of Month, Month, Day of Week)
+    /// Evaluates a cron expression against a given time using TickerQ parsing semantics.
     /// </summary>
     public static bool IsTime(string expression, DateTimeOffset time)
     {
-        if (string.IsNullOrWhiteSpace(expression)) return false;
+        if (string.IsNullOrWhiteSpace(expression))
+            return false;
 
-        expression = NormalizeExpression(expression);
+        var normalizedExpression = NormalizeExpression(expression, time);
+        if (!CronExpression.TryParse(normalizedExpression, out var cronExpression))
+            return false;
 
-        var parts = expression.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length != 5) return false;
+        var schedule = CrontabSchedule.Parse(cronExpression.Value, new CrontabSchedule.ParseOptions
+        {
+            IncludingSeconds = true
+        });
 
-        var minMatch = MatchField(parts[0], time.Minute, 0, 59, time);
-        var hourMatch = MatchField(parts[1], time.Hour, 0, 23, time);
-        var domMatch = MatchField(parts[2], time.Day, 1, 31, time);
-        var monthMatch = MatchField(parts[3], time.Month, 1, 12, time);
-        var dowMatch = MatchField(parts[4], (int)time.DayOfWeek, 0, 6, time);
+        var truncatedTime = time.AddTicks(-(time.Ticks % TimeSpan.TicksPerSecond));
+        var localTime = DateTime.SpecifyKind(truncatedTime.DateTime, DateTimeKind.Unspecified);
+        var previousSecond = localTime.AddSeconds(-1);
+        var nextOccurrence = schedule.GetNextOccurrence(previousSecond);
 
-        return minMatch && hourMatch && domMatch && monthMatch && dowMatch;
+        return nextOccurrence == localTime;
     }
 
-    private static string NormalizeExpression(string expression)
+    private static string NormalizeExpression(string expression, DateTimeOffset time)
     {
-        return expression.Trim().ToLowerInvariant() switch
+        var normalized = expression.Trim().ToLowerInvariant() switch
         {
             "@hourly" => "0 * * * *",
             "@daily" => "0 0 * * *",
@@ -189,56 +225,19 @@ public sealed class CronScheduler : BackgroundService
             "@monthly" => "0 0 1 * *",
             _ => expression
         };
-    }
 
-    private static bool MatchField(string field, int value, int minValue, int maxValue, DateTimeOffset time)
-    {
-        if (field == "*") return true;
-
-        if (field == "L")
-            return value == DateTime.DaysInMonth(time.Year, time.Month);
-
-        if (int.TryParse(field, out var exact))
-            return exact == value;
-
-        if (field.Contains(','))
-            return field.Split(',').Any(option => MatchField(option, value, minValue, maxValue, time));
-
-        if (field.Contains('/'))
+        var parts = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var dayOfMonthIndex = parts.Length switch
         {
-            var stepParts = field.Split('/');
-            if (stepParts.Length == 2 && int.TryParse(stepParts[1], out var step) && step > 0)
-            {
-                var range = stepParts[0];
-                if (range == "*")
-                    return (value - minValue) % step == 0;
+            5 => 2,
+            6 => 3,
+            _ => -1
+        };
 
-                if (TryParseRange(range, out var start, out var end))
-                {
-                    if (!IsValueInRange(value, start, end))
-                        return false;
+        if (dayOfMonthIndex >= 0 && string.Equals(parts[dayOfMonthIndex], "l", StringComparison.OrdinalIgnoreCase))
+            parts[dayOfMonthIndex] = DateTime.DaysInMonth(time.Year, time.Month).ToString();
 
-                    return (value - start) % step == 0;
-                }
-            }
-        }
-
-        if (TryParseRange(field, out var rangeStart, out var rangeEnd))
-            return IsValueInRange(value, rangeStart, rangeEnd);
-
-        return false;
-    }
-
-    private static bool TryParseRange(string field, out int start, out int end)
-    {
-        start = 0;
-        end = 0;
-        var rangeParts = field.Split('-');
-        if (rangeParts.Length != 2)
-            return false;
-
-        return int.TryParse(rangeParts[0], out start)
-            && int.TryParse(rangeParts[1], out end);
+        return string.Join(' ', parts);
     }
 
     private void CleanupStaleRunningJobs(DateTimeOffset nowUtc)
@@ -258,11 +257,10 @@ public sealed class CronScheduler : BackgroundService
         }
     }
 
-    private static bool IsValueInRange(int value, int start, int end)
+    private void LogOverlap(string jobName)
     {
-        if (start <= end)
-            return value >= start && value <= end;
-
-        return value >= start || value <= end;
+        const string Template = "Background job '{JobName}' is still running from an earlier trigger; this tick was skipped.";
+        _logger.LogWarning(Template, jobName);
+        _startupNoticeSink.Record($"Background job '{jobName}' is still running from an earlier trigger; this tick was skipped.");
     }
 }

@@ -18,6 +18,7 @@ internal sealed class IntegrationApiFacade
     private readonly IMemoryNoteCatalog? _memoryCatalog;
     private readonly IToolPresetResolver? _toolPresetResolver;
     private readonly TextToSpeechService? _textToSpeechService;
+    private readonly GatewayMaintenanceRuntimeService? _maintenanceService;
 
     public static IntegrationApiFacade Create(
         GatewayStartupContext startup,
@@ -35,6 +36,7 @@ internal sealed class IntegrationApiFacade
         var memoryCatalog = services.GetService<IMemoryStore>() as IMemoryNoteCatalog;
         var toolPresetResolver = services.GetService<IToolPresetResolver>();
         var textToSpeechService = services.GetService<TextToSpeechService>();
+        var maintenanceService = services.GetService<GatewayMaintenanceRuntimeService>();
 
         return new IntegrationApiFacade(
             startup,
@@ -46,7 +48,8 @@ internal sealed class IntegrationApiFacade
             learningService,
             memoryCatalog,
             toolPresetResolver,
-            textToSpeechService);
+            textToSpeechService,
+            maintenanceService);
     }
 
     public IntegrationApiFacade(
@@ -59,7 +62,8 @@ internal sealed class IntegrationApiFacade
         LearningService learningService,
         IMemoryNoteCatalog? memoryCatalog,
         IToolPresetResolver? toolPresetResolver,
-        TextToSpeechService? textToSpeechService)
+        TextToSpeechService? textToSpeechService,
+        GatewayMaintenanceRuntimeService? maintenanceService)
     {
         _startup = startup;
         _runtime = runtime;
@@ -71,6 +75,7 @@ internal sealed class IntegrationApiFacade
         _memoryCatalog = memoryCatalog;
         _toolPresetResolver = toolPresetResolver;
         _textToSpeechService = textToSpeechService;
+        _maintenanceService = maintenanceService;
     }
 
     public IntegrationStatusResponse BuildStatusResponse()
@@ -107,6 +112,9 @@ internal sealed class IntegrationApiFacade
                 Id = session.Id,
                 ChannelId = session.ChannelId,
                 SenderId = session.SenderId,
+                StableSessionId = session.StableSessionBinding?.ExternalSessionId,
+                StableSessionNamespace = session.StableSessionBinding?.Namespace,
+                StableSessionOwnerKey = session.StableSessionBinding?.OwnerKey,
                 CreatedAt = session.CreatedAt,
                 LastActiveAt = session.LastActiveAt,
                 State = session.State,
@@ -207,6 +215,18 @@ internal sealed class IntegrationApiFacade
             Catalog = PublicCompatibilityCatalog.GetCatalog(compatibilityStatus, kind, category)
         };
 
+    public IntegrationCompatibilityExportResponse GetCompatibilityExport()
+        => new()
+        {
+            RequestedRuntimeMode = _startup.RuntimeState.RequestedMode,
+            EffectiveRuntimeMode = _startup.RuntimeState.EffectiveModeName,
+            DynamicCodeSupported = _startup.RuntimeState.DynamicCodeSupported,
+            Posture = SecurityPostureBuilder.Build(_startup, _runtime),
+            Channels = MapChannelReadiness(ChannelReadinessEvaluator.Evaluate(_startup.Config, _startup.IsNonLoopbackBind)),
+            Plugins = _runtime.Operations.PluginHealth.ListSnapshots(),
+            Catalog = PublicCompatibilityCatalog.GetCatalog()
+        };
+
     public IntegrationOperatorAuditResponse GetOperatorAudit(OperatorAuditQuery query)
         => new()
         {
@@ -229,6 +249,9 @@ internal sealed class IntegrationApiFacade
     }
 
     public async Task<OperatorDashboardSnapshot> GetOperatorDashboardAsync(CancellationToken cancellationToken)
+        => await GetOperatorDashboardAsync(reliability: null, cancellationToken);
+
+    public async Task<OperatorDashboardSnapshot> GetOperatorDashboardAsync(ReliabilitySnapshot? reliability, CancellationToken cancellationToken)
     {
         var metadataById = _runtime.Operations.SessionMetadata.GetAll();
         var persistedSessions = await SessionAdminPersistedListing.ListAllMatchingSummariesAsync(
@@ -242,6 +265,9 @@ internal sealed class IntegrationApiFacade
                 Id = session.Id,
                 ChannelId = session.ChannelId,
                 SenderId = session.SenderId,
+                StableSessionId = session.StableSessionBinding?.ExternalSessionId,
+                StableSessionNamespace = session.StableSessionBinding?.Namespace,
+                StableSessionOwnerKey = session.StableSessionBinding?.OwnerKey,
                 CreatedAt = session.CreatedAt,
                 LastActiveAt = session.LastActiveAt,
                 State = session.State,
@@ -276,11 +302,12 @@ internal sealed class IntegrationApiFacade
         {
             var runState = await _automationService.GetRunStateAsync(automation.Id, cancellationToken);
             var outcome = runState?.Outcome ?? "never";
+            var lifecycle = runState?.LifecycleState ?? AutomationLifecycleStates.Never;
             var isQueuedOrRunning = runningAutomationIds.Contains(automation.Id) ||
-                string.Equals(outcome, "queued", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "running", StringComparison.OrdinalIgnoreCase);
-            var isFailing = string.Equals(outcome, "failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "error", StringComparison.OrdinalIgnoreCase);
+                string.Equals(lifecycle, AutomationLifecycleStates.Queued, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(lifecycle, AutomationLifecycleStates.Running, StringComparison.OrdinalIgnoreCase);
+            var isFailing = string.Equals(runState?.HealthState, AutomationHealthStates.Degraded, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(runState?.HealthState, AutomationHealthStates.Quarantined, StringComparison.OrdinalIgnoreCase);
 
             if (automation.Enabled)
                 enabledAutomations++;
@@ -310,6 +337,7 @@ internal sealed class IntegrationApiFacade
         {
             var runState = await _automationService.GetRunStateAsync(automation.Id, cancellationToken);
             var outcome = runState?.Outcome ?? "never";
+            var lifecycle = runState?.LifecycleState ?? AutomationLifecycleStates.Never;
             if (automation.Enabled)
                 enabledAutomations++;
             if (automation.IsDraft)
@@ -317,13 +345,13 @@ internal sealed class IntegrationApiFacade
             if (string.Equals(outcome, "never", StringComparison.OrdinalIgnoreCase))
                 neverRunAutomations++;
             if (runningAutomationIds.Contains(automation.Id) ||
-                string.Equals(outcome, "queued", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "running", StringComparison.OrdinalIgnoreCase))
+                string.Equals(lifecycle, AutomationLifecycleStates.Queued, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(lifecycle, AutomationLifecycleStates.Running, StringComparison.OrdinalIgnoreCase))
             {
                 queuedOrRunningAutomations++;
             }
-            if (string.Equals(outcome, "failed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(outcome, "error", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(runState?.HealthState, AutomationHealthStates.Degraded, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(runState?.HealthState, AutomationHealthStates.Quarantined, StringComparison.OrdinalIgnoreCase))
             {
                 failingAutomations++;
             }
@@ -339,7 +367,7 @@ internal sealed class IntegrationApiFacade
             .ToArray();
         var memoryEvents = _runtime.Operations.RuntimeEvents.Query(new RuntimeEventQuery { Limit = 20, Component = "memory" });
 
-        return new OperatorDashboardSnapshot
+        var snapshot = new OperatorDashboardSnapshot
         {
             Sessions = new DashboardSessionSummary
             {
@@ -448,7 +476,32 @@ internal sealed class IntegrationApiFacade
                         .Select(static group => (Key: group.Key, Label: group.Key, Count: group.Count())))
             }
         };
+
+        if (reliability is not null)
+            return CloneWithReliability(snapshot, reliability);
+
+        if (_maintenanceService is null)
+            return snapshot;
+
+        var maintenance = await _maintenanceService.ScanAsync(setupStatus: null, cancellationToken);
+        return CloneWithReliability(snapshot, maintenance.Reliability);
     }
+
+    private static OperatorDashboardSnapshot CloneWithReliability(
+        OperatorDashboardSnapshot snapshot,
+        ReliabilitySnapshot reliability)
+        => new()
+        {
+            Sessions = snapshot.Sessions,
+            Approvals = snapshot.Approvals,
+            Memory = snapshot.Memory,
+            Automations = snapshot.Automations,
+            Learning = snapshot.Learning,
+            Delegation = snapshot.Delegation,
+            Channels = snapshot.Channels,
+            Plugins = snapshot.Plugins,
+            Reliability = reliability
+        };
 
     public async Task<IntegrationSessionSearchResponse> SearchSessionsAsync(SessionSearchQuery query, CancellationToken cancellationToken)
         => new()
@@ -527,6 +580,23 @@ internal sealed class IntegrationApiFacade
             RunState = await _automationService.GetRunStateAsync(automationId, cancellationToken)
         };
 
+    public async Task<IntegrationAutomationRunsResponse> GetAutomationRunsAsync(string automationId, CancellationToken cancellationToken)
+        => new()
+        {
+            AutomationId = automationId,
+            RunState = await _automationService.GetRunStateAsync(automationId, cancellationToken),
+            Items = await _automationService.ListRunRecordsAsync(automationId, limit: 50, cancellationToken)
+        };
+
+    public async Task<IntegrationAutomationRunDetailResponse> GetAutomationRunAsync(string automationId, string runId, CancellationToken cancellationToken)
+        => new()
+        {
+            AutomationId = automationId,
+            Automation = await _automationService.GetAsync(automationId, cancellationToken),
+            RunState = await _automationService.GetRunStateAsync(automationId, cancellationToken),
+            Run = await _automationService.GetRunRecordAsync(automationId, runId, cancellationToken)
+        };
+
     public AutomationTemplateListResponse ListAutomationTemplates()
         => new()
         {
@@ -555,31 +625,54 @@ internal sealed class IntegrationApiFacade
         }
 
         var result = await _automationService.RunNowAsync(automationId, _runtime.Pipeline, cancellationToken);
-        if (result == RunNowResult.Queued)
+        if (string.Equals(result.Status, "queued", StringComparison.Ordinal))
         {
-            await _automationService.SaveRunStateAsync(new AutomationRunState
-            {
-                AutomationId = automationId,
-                Outcome = "queued",
-                LastRunAtUtc = DateTimeOffset.UtcNow,
-                SessionId = string.IsNullOrWhiteSpace(automation.SessionId) ? $"automation:{automation.Id}" : automation.SessionId,
-                MessagePreview = automation.Prompt.Length > 180 ? automation.Prompt[..180] : automation.Prompt
-            }, cancellationToken);
-
             AppendRuntimeEvent(
                 component: "automations",
                 action: "queued",
-                summary: $"Automation '{automationId}' queued for execution.",
+                summary: string.IsNullOrWhiteSpace(result.RunId)
+                    ? $"Automation '{automationId}' queued for execution."
+                    : $"Automation '{automationId}' queued for execution as run '{result.RunId}'.",
                 sessionId: automation.SessionId,
                 channelId: automation.DeliveryChannelId,
                 senderId: automation.DeliveryRecipientId);
         }
 
-        return result switch
+        return result.Status switch
         {
-            RunNowResult.Queued => new MutationResponse { Success = true, Message = "Automation queued." },
-            RunNowResult.AlreadyRunning => new MutationResponse { Success = false, Error = "Automation is already running." },
+            "queued" => new MutationResponse { Success = true, Message = "Automation queued." },
+            "already_running" => new MutationResponse { Success = false, Error = "Automation is already running." },
+            "quarantined" => new MutationResponse { Success = false, Error = "Automation is quarantined and cannot be scheduled automatically." },
             _ => new MutationResponse { Success = false, Error = "Automation could not be queued." }
+        };
+    }
+
+    public async Task<MutationResponse> ReplayAutomationRunAsync(string automationId, string runId, CancellationToken cancellationToken)
+    {
+        var automation = await _automationService.GetAsync(automationId, cancellationToken);
+        if (automation is null)
+            return new MutationResponse { Success = false, Error = "Automation not found." };
+
+        var result = await _automationService.ReplayAsync(automationId, runId, _runtime.Pipeline, cancellationToken);
+        return result.Status switch
+        {
+            "queued" => new MutationResponse { Success = true, Message = "Automation replay queued." },
+            "already_running" => new MutationResponse { Success = false, Error = "Automation is already running." },
+            _ => new MutationResponse { Success = false, Error = "Automation replay could not be queued." }
+        };
+    }
+
+    public async Task<MutationResponse> ClearAutomationQuarantineAsync(string automationId, CancellationToken cancellationToken)
+    {
+        var automation = await _automationService.GetAsync(automationId, cancellationToken);
+        if (automation is null)
+            return new MutationResponse { Success = false, Error = "Automation not found." };
+
+        await _automationService.ClearQuarantineAsync(automationId, cancellationToken);
+        return new MutationResponse
+        {
+            Success = true,
+            Message = "Automation quarantine cleared."
         };
     }
 

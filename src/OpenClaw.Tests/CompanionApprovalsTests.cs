@@ -1,0 +1,352 @@
+using OpenClaw.Companion.Services;
+using OpenClaw.Companion.ViewModels;
+using OpenClaw.Core.Models;
+using OpenClaw.Core.Pipeline;
+using Xunit;
+
+namespace OpenClaw.Tests;
+
+public sealed class CompanionApprovalsTests : IDisposable
+{
+    private readonly List<string> _tempDirs = [];
+
+    public void Dispose()
+    {
+        foreach (var dir in _tempDirs)
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch { /* best-effort cleanup */ }
+        }
+    }
+
+    [Fact]
+    public void FromRequest_CopiesCoreFields()
+    {
+        var req = new ToolApprovalRequest
+        {
+            ApprovalId = "apr_1",
+            SessionId = "sess_1",
+            ChannelId = "websocket",
+            SenderId = "user@example.com",
+            ToolName = "shell",
+            Arguments = "{}",
+            Action = "run",
+            IsMutation = true,
+            Summary = "Run a shell command."
+        };
+
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Equal("apr_1", item.ApprovalId);
+        Assert.Equal("sess_1", item.SessionId);
+        Assert.Equal("websocket", item.ChannelId);
+        Assert.Equal("user@example.com", item.SenderId);
+        Assert.Equal("shell", item.ToolName);
+        Assert.Equal("run", item.Action);
+        Assert.True(item.IsMutation);
+        Assert.Equal("Run a shell command.", item.Summary);
+    }
+
+    [Fact]
+    public void FromRequest_EmptyArguments_ShowsPlaceholder()
+    {
+        var req = NewRequest(arguments: "");
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Equal("(no arguments)", item.ArgumentsPreview);
+    }
+
+    [Fact]
+    public void FromRequest_ValidJson_PrettyPrintsWithNewlines()
+    {
+        var req = NewRequest(arguments: "{\"path\":\"/tmp/a.txt\",\"mode\":\"read\"}");
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Contains('\n', item.ArgumentsPreview);
+        Assert.Contains("\"path\"", item.ArgumentsPreview, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromRequest_InvalidJson_FallsBackToRaw()
+    {
+        var req = NewRequest(arguments: "not-json-at-all");
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Equal("not-json-at-all", item.ArgumentsPreview);
+    }
+
+    [Fact]
+    public void FromRequest_VeryLongArguments_AreTruncated()
+    {
+        var raw = new string('x', 900);
+        var req = NewRequest(arguments: raw);
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.EndsWith("…", item.ArgumentsPreview, StringComparison.Ordinal);
+        Assert.True(item.ArgumentsPreview.Length < raw.Length);
+    }
+
+    [Fact]
+    public void Origin_OmitsSender_WhenBlank()
+    {
+        var req = NewRequest(senderId: "");
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Equal(req.ChannelId, item.Origin);
+    }
+
+    [Fact]
+    public void Origin_IncludesSender_WhenPresent()
+    {
+        var req = NewRequest(senderId: "user@example.com");
+        var item = PendingApprovalItem.FromRequest(req);
+
+        Assert.Contains(req.ChannelId, item.Origin);
+        Assert.Contains("user@example.com", item.Origin, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MergePendingApprovals_AddsNewItems()
+    {
+        var viewModel = CreateViewModel();
+        Assert.Empty(viewModel.PendingApprovals);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+
+        Assert.Equal(2, viewModel.PendingApprovals.Count);
+        Assert.Equal(2, viewModel.PendingApprovalsCount);
+    }
+
+    [Fact]
+    public void MergePendingApprovals_RemovesMissingItems()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+
+        viewModel.MergePendingApprovals([NewItem("apr_2")]);
+
+        Assert.Single(viewModel.PendingApprovals);
+        Assert.Equal("apr_2", viewModel.PendingApprovals[0].ApprovalId);
+    }
+
+    [Fact]
+    public void MergePendingApprovals_PreservesExistingItemReferences()
+    {
+        var viewModel = CreateViewModel();
+        var original = NewItem("apr_1");
+        viewModel.MergePendingApprovals([original]);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+
+        Assert.Equal(2, viewModel.PendingApprovals.Count);
+        Assert.Same(original, viewModel.PendingApprovals.Single(i => i.ApprovalId == "apr_1"));
+    }
+
+    [Fact]
+    public void MergePendingApprovals_WithEmptyLatest_ClearsQueue()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+
+        viewModel.MergePendingApprovals([]);
+
+        Assert.Empty(viewModel.PendingApprovals);
+        Assert.Equal(0, viewModel.PendingApprovalsCount);
+    }
+
+    [Fact]
+    public void HasPendingApprovals_TracksQueueState()
+    {
+        var viewModel = CreateViewModel();
+        Assert.False(viewModel.HasPendingApprovals);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1")]);
+        Assert.True(viewModel.HasPendingApprovals);
+
+        viewModel.MergePendingApprovals([]);
+        Assert.False(viewModel.HasPendingApprovals);
+    }
+
+    [Fact]
+    public void QueueSeverity_TiersFromCount()
+    {
+        var viewModel = CreateViewModel();
+        Assert.Equal(ApprovalQueueSeverity.None, viewModel.QueueSeverity);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1")]);
+        Assert.Equal(ApprovalQueueSeverity.Light, viewModel.QueueSeverity);
+        Assert.True(viewModel.QueueSeverityIsLight);
+        Assert.False(viewModel.QueueSeverityIsHeavy);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+        Assert.Equal(ApprovalQueueSeverity.Light, viewModel.QueueSeverity);
+
+        viewModel.MergePendingApprovals([NewItem("apr_1"), NewItem("apr_2"), NewItem("apr_3")]);
+        Assert.Equal(ApprovalQueueSeverity.Heavy, viewModel.QueueSeverity);
+        Assert.True(viewModel.QueueSeverityIsHeavy);
+        Assert.False(viewModel.QueueSeverityIsLight);
+    }
+
+    [Fact]
+    public void PollingMode_ActiveWhenWindowFocusedAndTabActive()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.IsWindowActive = true;
+        viewModel.IsWindowMinimized = false;
+        viewModel.IsApprovalsTabActive = true;
+
+        Assert.Equal(ApprovalsPollingMode.Active, viewModel.ApprovalsPollingMode);
+    }
+
+    [Fact]
+    public void PollingMode_BackgroundWhenAnotherTabActiveButWindowFocused()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.IsWindowActive = true;
+        viewModel.IsWindowMinimized = false;
+        viewModel.IsApprovalsTabActive = false;
+
+        Assert.Equal(ApprovalsPollingMode.Background, viewModel.ApprovalsPollingMode);
+    }
+
+    [Fact]
+    public void PollingMode_BackgroundWhenWindowNotFocused()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.IsWindowActive = false;
+        viewModel.IsWindowMinimized = false;
+        viewModel.IsApprovalsTabActive = true;
+
+        Assert.Equal(ApprovalsPollingMode.Background, viewModel.ApprovalsPollingMode);
+    }
+
+    [Fact]
+    public void PollingMode_PausedWhenMinimized()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.IsWindowActive = true;
+        viewModel.IsApprovalsTabActive = true;
+        viewModel.IsWindowMinimized = true;
+
+        Assert.Equal(ApprovalsPollingMode.Paused, viewModel.ApprovalsPollingMode);
+    }
+
+    [Fact]
+    public void DetectNewApprovals_FirstCallSeedsSilently()
+    {
+        var viewModel = CreateViewModel();
+
+        var newItems = viewModel.DetectNewApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+
+        Assert.Empty(newItems);
+    }
+
+    [Fact]
+    public void DetectNewApprovals_ReportsNewcomersAfterSeed()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.DetectNewApprovals([NewItem("apr_1")]);
+
+        var newItems = viewModel.DetectNewApprovals([NewItem("apr_1"), NewItem("apr_2"), NewItem("apr_3")]);
+
+        Assert.Equal(2, newItems.Count);
+        Assert.Contains(newItems, i => i.ApprovalId == "apr_2");
+        Assert.Contains(newItems, i => i.ApprovalId == "apr_3");
+    }
+
+    [Fact]
+    public void DetectNewApprovals_PrunesResolvedIds()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.DetectNewApprovals([NewItem("apr_1"), NewItem("apr_2")]);
+        viewModel.DetectNewApprovals([]); // apr_1 and apr_2 resolved; pruned.
+
+        var newItems = viewModel.DetectNewApprovals([NewItem("apr_1")]);
+
+        Assert.Single(newItems);
+        Assert.Equal("apr_1", newItems[0].ApprovalId);
+    }
+
+    [Fact]
+    public void ApprovalHistoryItem_FromEntry_MapsApprovedDecision()
+    {
+        var entry = new ApprovalHistoryEntry
+        {
+            EventType = "decision",
+            ApprovalId = "apr_1",
+            SessionId = "sess",
+            ChannelId = "websocket",
+            SenderId = "user@example.com",
+            ToolName = "shell",
+            ArgumentsPreview = "{}",
+            TimestampUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            DecisionAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            ActorDisplayName = "admin1",
+            DecisionSource = "http_admin",
+            Approved = true
+        };
+
+        var item = ApprovalHistoryItem.FromEntry(entry);
+
+        Assert.Equal("apr_1", item.ApprovalId);
+        Assert.Equal("shell", item.ToolName);
+        Assert.Contains("websocket", item.Origin);
+        Assert.Contains("user@example.com", item.Origin);
+        Assert.True(item.Approved);
+        Assert.Equal("Approved", item.OutcomeLabel);
+        Assert.Equal("admin1", item.Actor);
+    }
+
+    [Fact]
+    public void ApprovalHistoryItem_FromEntry_MapsDeniedDecision()
+    {
+        var entry = new ApprovalHistoryEntry
+        {
+            EventType = "decision",
+            ApprovalId = "apr_2",
+            SessionId = "sess",
+            ChannelId = "websocket",
+            SenderId = "sender",
+            ToolName = "write_file",
+            ArgumentsPreview = "{}",
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Approved = false
+        };
+
+        var item = ApprovalHistoryItem.FromEntry(entry);
+
+        Assert.False(item.Approved);
+        Assert.Equal("Denied", item.OutcomeLabel);
+    }
+
+    private MainWindowViewModel CreateViewModel()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "openclaw-companion-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        _tempDirs.Add(dir);
+        var settings = new SettingsStore(dir);
+        return new MainWindowViewModel(settings, new GatewayWebSocketClient());
+    }
+
+    private static ToolApprovalRequest NewRequest(string arguments = "{}", string senderId = "sender")
+        => new()
+        {
+            ApprovalId = Guid.NewGuid().ToString("N"),
+            SessionId = "sess",
+            ChannelId = "websocket",
+            SenderId = senderId,
+            ToolName = "shell",
+            Arguments = arguments
+        };
+
+    private static PendingApprovalItem NewItem(string approvalId)
+        => PendingApprovalItem.FromRequest(new ToolApprovalRequest
+        {
+            ApprovalId = approvalId,
+            SessionId = "sess",
+            ChannelId = "websocket",
+            SenderId = "sender",
+            ToolName = "shell",
+            Arguments = "{}"
+        });
+}

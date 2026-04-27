@@ -37,7 +37,11 @@ public sealed class FileMemoryStoreTests
                         ToolName = "memory",
                         Arguments = """{"action":"write","key":"note","content":"hello"}""",
                         Result = "Saved note: note",
-                        Duration = TimeSpan.FromMilliseconds(12)
+                        Duration = TimeSpan.FromMilliseconds(12),
+                        ResultStatus = ToolResultStatuses.Blocked,
+                        FailureCode = ToolFailureCodes.ApprovalRequired,
+                        FailureMessage = "Approval required.",
+                        NextStep = "Approve the request and retry."
                     }
                 ]
             });
@@ -57,6 +61,10 @@ public sealed class FileMemoryStoreTests
             var toolCall = Assert.Single(loaded!.History[1].ToolCalls!);
             Assert.Equal("memory", toolCall.ToolName);
             Assert.Equal("Saved note: note", toolCall.Result);
+            Assert.Equal(ToolResultStatuses.Blocked, toolCall.ResultStatus);
+            Assert.Equal(ToolFailureCodes.ApprovalRequired, toolCall.FailureCode);
+            Assert.Equal("Approval required.", toolCall.FailureMessage);
+            Assert.Equal("Approve the request and retry.", toolCall.NextStep);
         }
         finally
         {
@@ -133,6 +141,32 @@ public sealed class FileMemoryStoreTests
             Assert.Equal(sessionId, ex.SessionId);
             Assert.Contains(".corrupt-", ex.FilePath, StringComparison.Ordinal);
             Assert.DoesNotContain(sessionFile, Directory.GetFiles(Path.Combine(storagePath, "sessions")), StringComparer.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(storagePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GetSessionAsync_DoesNotLoadLegacyTraversalPath()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-file-memory-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(storagePath);
+
+        try
+        {
+            var escapedTarget = Path.Combine(storagePath, "escape-target.json");
+            await File.WriteAllTextAsync(
+                escapedTarget,
+                """{"Id":"../escape-target","ChannelId":"test","SenderId":"user","History":[]}""",
+                CancellationToken.None);
+
+            var store = new FileMemoryStore(storagePath, 4);
+            var loaded = await store.GetSessionAsync("../escape-target", CancellationToken.None);
+
+            Assert.Null(loaded);
+            Assert.True(File.Exists(escapedTarget));
         }
         finally
         {

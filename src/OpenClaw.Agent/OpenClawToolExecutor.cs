@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenClaw.Agent.Execution;
+using OpenClaw.Agent.Tools;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
@@ -15,6 +16,10 @@ public sealed class ToolExecutionResult
 {
     public required ToolInvocation Invocation { get; init; }
     public required string ResultText { get; init; }
+    public string ResultStatus { get; init; } = ToolResultStatuses.Completed;
+    public string? FailureCode { get; init; }
+    public string? FailureMessage { get; init; }
+    public string? NextStep { get; init; }
 
     public FunctionResultContent ToFunctionResultContent(string callId)
         => new(callId, ResultText);
@@ -35,6 +40,7 @@ public sealed class OpenClawToolExecutor
     private readonly ToolUsageTracker? _toolUsageTracker;
     private readonly ToolExecutionRouter _executionRouter;
     private readonly IToolPresetResolver? _toolPresetResolver;
+    private readonly ToolAuditLog? _auditLog;
 
     public OpenClawToolExecutor(
         IReadOnlyList<ITool> tools,
@@ -48,7 +54,8 @@ public sealed class OpenClawToolExecutor
         IToolSandbox? toolSandbox = null,
         ToolUsageTracker? toolUsageTracker = null,
         ToolExecutionRouter? executionRouter = null,
-        IToolPresetResolver? toolPresetResolver = null)
+        IToolPresetResolver? toolPresetResolver = null,
+        ToolAuditLog? auditLog = null)
     {
         _toolsByName = tools.ToDictionary(t => t.Name, StringComparer.Ordinal);
         _toolDeclarations = tools.Select(CreateDeclaration).Cast<AITool>().ToArray();
@@ -74,6 +81,7 @@ public sealed class OpenClawToolExecutor
         _toolUsageTracker = toolUsageTracker;
         _executionRouter = executionRouter ?? new ToolExecutionRouter(_config, _toolSandbox, logger);
         _toolPresetResolver = toolPresetResolver;
+        _auditLog = auditLog;
     }
 
     public IList<AITool> ToolDeclarations => _toolDeclarations;
@@ -121,19 +129,14 @@ public sealed class OpenClawToolExecutor
 
         if (!_toolsByName.TryGetValue(toolName, out var tool))
         {
-            var unknown = new ToolInvocation
-            {
-                ToolName = toolName,
-                Arguments = argsJson,
-                Result = "Error: Unknown tool",
-                Duration = TimeSpan.Zero
-            };
-
-            return new ToolExecutionResult
-            {
-                Invocation = unknown,
-                ResultText = unknown.Result!
-            };
+            return CreateImmediateResult(
+                toolName,
+                argsJson,
+                "Error: Unknown tool",
+                resultStatus: ToolResultStatuses.Failed,
+                failureCode: ToolFailureCodes.ToolFailed,
+                failureMessage: "Unknown tool.",
+                nextStep: "Use one of the tools declared for this session.");
         }
 
         var preset = _toolPresetResolver?.Resolve(session, _toolsByName.Keys);
@@ -143,7 +146,14 @@ public sealed class OpenClawToolExecutor
                 ? $"Tool '{tool.Name}' is not allowed for preset '{preset.PresetId}'."
                 : $"Tool '{tool.Name}' is not allowed for this session.";
             _logger?.LogInformation("[{CorrelationId}] {Message}", turnCtx.CorrelationId, deniedByPreset);
-            return CreateImmediateResult(toolName, argsJson, deniedByPreset);
+            return CreateImmediateResult(
+                toolName,
+                argsJson,
+                deniedByPreset,
+                resultStatus: ToolResultStatuses.Blocked,
+                failureCode: ToolFailureCodes.PresetBlocked,
+                failureMessage: deniedByPreset,
+                nextStep: "Use a broader preset on this surface, or change the session preset if that access is intentional.");
         }
 
         var hookCtx = new ToolHookContext
@@ -168,7 +178,13 @@ public sealed class OpenClawToolExecutor
                 {
                     var deniedByHook = $"Tool execution denied by hook: {hook.Name}";
                     _logger?.LogInformation("[{CorrelationId}] {Message}", turnCtx.CorrelationId, deniedByHook);
-                    return CreateImmediateResult(toolName, argsJson, deniedByHook);
+                    return CreateImmediateResult(
+                        toolName,
+                        argsJson,
+                        deniedByHook,
+                        resultStatus: ToolResultStatuses.Blocked,
+                        failureCode: ToolFailureCodes.ToolFailed,
+                        failureMessage: deniedByHook);
                 }
             }
             catch (Exception ex)
@@ -196,7 +212,14 @@ public sealed class OpenClawToolExecutor
                 if (!approved)
                 {
                     _logger?.LogInformation("[{CorrelationId}] Tool {Tool} denied by user", turnCtx.CorrelationId, tool.Name);
-                    return CreateImmediateResult(toolName, argsJson, "Tool execution denied by user.");
+                    return CreateImmediateResult(
+                        toolName,
+                        argsJson,
+                        "Tool execution denied by user.",
+                        resultStatus: ToolResultStatuses.Blocked,
+                        failureCode: ToolFailureCodes.ApprovalRequired,
+                        failureMessage: "Tool execution was denied by the reviewer.",
+                        nextStep: "Approve the tool request to allow this action.");
                 }
             }
             else
@@ -205,15 +228,27 @@ public sealed class OpenClawToolExecutor
                     "[{CorrelationId}] Tool {Tool} requires approval but no approval channel is available — denied",
                     turnCtx.CorrelationId,
                     tool.Name);
+                var approvalMessage =
+                    $"Tool '{tool.Name}' requires approval but this session has no approval channel — auto-denied. " +
+                    "To enable this tool: connect through the browser chat at /chat (it supports interactive approvals) " +
+                    "or set OpenClaw:Tooling:RequireToolApproval=false for trusted local sessions.";
                 return CreateImmediateResult(
                     toolName,
                     argsJson,
-                    "Tool requires approval but no approval channel is available. Please confirm you want to execute this action.");
+                    approvalMessage,
+                    resultStatus: ToolResultStatuses.Blocked,
+                    failureCode: ToolFailureCodes.ApprovalRequired,
+                    failureMessage: approvalMessage,
+                    nextStep: "Use an approval-capable surface such as /chat, or disable approval requirements for trusted local sessions.");
             }
         }
 
         var sw = Stopwatch.StartNew();
         string result;
+        string resultStatus = ToolResultStatuses.Completed;
+        string? failureCode = null;
+        string? failureMessage = null;
+        string? nextStep = null;
         var toolFailed = false;
         var toolTimedOut = false;
         try
@@ -232,6 +267,10 @@ public sealed class OpenClawToolExecutor
             result = "Error: Tool execution timed out.";
             toolFailed = true;
             toolTimedOut = true;
+            resultStatus = ToolResultStatuses.Failed;
+            failureCode = ToolFailureCodes.Timeout;
+            failureMessage = result;
+            nextStep = "Retry the tool call or increase Tooling.ToolTimeoutSeconds.";
             _metrics?.IncrementToolTimeouts();
             _logger?.LogWarning("[{CorrelationId}] Tool {Tool} timed out after {Timeout}s", turnCtx.CorrelationId, tool.Name, _toolTimeoutSeconds);
         }
@@ -239,21 +278,57 @@ public sealed class OpenClawToolExecutor
         {
             result = ex.Message;
             toolFailed = true;
+            resultStatus = ToolResultStatuses.Blocked;
+            failureCode = ClassifyToolFailureCode(tool.Name, ex.Message);
+            failureMessage = ex.Message;
+            nextStep = BuildFailureNextStep(tool.Name, failureCode);
             _metrics?.IncrementToolFailures();
             _logger?.LogWarning(ex, "[{CorrelationId}] Tool {Tool} sandbox execution failed", turnCtx.CorrelationId, tool.Name);
         }
         catch (Exception ex)
         {
-            result = "Error: Tool execution failed.";
+            failureCode = ClassifyToolFailureCode(tool.Name, ex.Message);
+            failureMessage = ex.Message;
             toolFailed = true;
+            if (failureCode is ToolFailureCodes.OperatorAuthRequired or ToolFailureCodes.BrowserBackendMissing or ToolFailureCodes.RuntimeCapabilityUnavailable)
+            {
+                result = ex.Message.StartsWith("Error:", StringComparison.OrdinalIgnoreCase)
+                    ? ex.Message
+                    : $"Error: {ex.Message}";
+                resultStatus = ToolResultStatuses.Blocked;
+                nextStep = BuildFailureNextStep(tool.Name, failureCode);
+            }
+            else
+            {
+                result = "Error: Tool execution failed.";
+                resultStatus = ToolResultStatuses.Failed;
+            }
             _metrics?.IncrementToolFailures();
             _logger?.LogWarning(ex, "[{CorrelationId}] Tool {Tool} failed", turnCtx.CorrelationId, tool.Name);
         }
         sw.Stop();
 
         _metrics?.IncrementToolCalls();
+        Telemetry.ToolExecutionDuration.Record(
+            sw.Elapsed.TotalMilliseconds,
+            new KeyValuePair<string, object?>("tool.name", tool.Name),
+            new KeyValuePair<string, object?>("tool.success", !toolFailed));
         turnCtx.RecordToolCall(sw.Elapsed, toolFailed, toolTimedOut);
         _toolUsageTracker?.RecordToolCall(tool.Name, sw.Elapsed, toolFailed, toolTimedOut);
+        _auditLog?.Record(new ToolAuditEntry
+        {
+            TimestampUtc = DateTimeOffset.UtcNow,
+            ToolName = tool.Name,
+            SessionId = session.Id,
+            ChannelId = session.ChannelId,
+            SenderId = session.SenderId,
+            CorrelationId = turnCtx.CorrelationId,
+            DurationMs = sw.Elapsed.TotalMilliseconds,
+            Failed = toolFailed,
+            TimedOut = toolTimedOut,
+            ArgumentsBytes = Encoding.UTF8.GetByteCount(argsJson),
+            ResultBytes = Encoding.UTF8.GetByteCount(result)
+        });
         _logger?.LogDebug("[{CorrelationId}] Tool {Tool} completed in {Duration}ms ok={Ok}",
             turnCtx.CorrelationId,
             tool.Name,
@@ -280,30 +355,53 @@ public sealed class OpenClawToolExecutor
             ToolName = toolName,
             Arguments = argsJson,
             Result = result,
-            Duration = sw.Elapsed
+            Duration = sw.Elapsed,
+            ResultStatus = resultStatus,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage,
+            NextStep = nextStep
         };
 
         return new ToolExecutionResult
         {
             Invocation = invocation,
-            ResultText = result
+            ResultText = result,
+            ResultStatus = resultStatus,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage,
+            NextStep = nextStep
         };
     }
 
-    private static ToolExecutionResult CreateImmediateResult(string toolName, string argsJson, string result)
+    private static ToolExecutionResult CreateImmediateResult(
+        string toolName,
+        string argsJson,
+        string result,
+        string resultStatus = ToolResultStatuses.Completed,
+        string? failureCode = null,
+        string? failureMessage = null,
+        string? nextStep = null)
     {
         var invocation = new ToolInvocation
         {
             ToolName = toolName,
             Arguments = argsJson,
             Result = result,
-            Duration = TimeSpan.Zero
+            Duration = TimeSpan.Zero,
+            ResultStatus = resultStatus,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage,
+            NextStep = nextStep
         };
 
         return new ToolExecutionResult
         {
             Invocation = invocation,
-            ResultText = result
+            ResultText = result,
+            ResultStatus = resultStatus,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage,
+            NextStep = nextStep
         };
     }
 
@@ -376,7 +474,12 @@ public sealed class OpenClawToolExecutor
         CancellationToken ct)
     {
         if (!_executionRouter.TryResolveRoute(tool, out var route, out var template, out var legacySandboxRoute, out var sandboxMode))
+        {
+            if (IsLocalExecutionDisabled(tool))
+                throw new ToolSandboxException(BrowserTool.LocalExecutionUnavailableMessage);
+
             return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
+        }
 
         if (tool is not ISandboxCapableTool sandboxCapableTool)
             return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
@@ -389,6 +492,9 @@ public sealed class OpenClawToolExecutor
             throw new ToolSandboxException(
                 $"Error: Tool '{tool.Name}' requires sandboxing but no sandbox provider is configured.");
         }
+
+        if (string.Equals(backendName, "local", StringComparison.OrdinalIgnoreCase) && IsLocalExecutionDisabled(tool))
+            throw new ToolSandboxException(BrowserTool.LocalExecutionUnavailableMessage);
 
         if (string.Equals(backendName, "local", StringComparison.OrdinalIgnoreCase) && !legacySandboxRoute)
             return await ExecuteToolWithTimeoutAsync(tool, argsJson, session, turnCtx, ct);
@@ -432,7 +538,8 @@ public sealed class OpenClawToolExecutor
                 WorkingDirectory = sandboxRequest.WorkingDirectory,
                 Template = sandboxRequest.Template,
                 TimeToLiveSeconds = sandboxRequest.TimeToLiveSeconds,
-                RequireWorkspace = route?.RequireWorkspace ?? true
+                RequireWorkspace = route?.RequireWorkspace ?? true,
+                AllowLocalFallback = !IsLocalExecutionDisabled(tool)
             }, route?.FallbackBackend, ct);
 
             var sandboxResult = new SandboxResult
@@ -445,6 +552,15 @@ public sealed class OpenClawToolExecutor
         }
         catch (ToolSandboxUnavailableException ex) when (legacySandboxRoute || !string.IsNullOrWhiteSpace(route?.FallbackBackend))
         {
+            if (IsLocalExecutionDisabled(tool))
+            {
+                throw new ToolSandboxException(
+                    legacySandboxRoute
+                        ? $"Error: Tool '{tool.Name}' requires sandboxing but the sandbox provider is unavailable."
+                        : $"Error: Tool '{tool.Name}' requires execution backend '{backendName}' but the provider is unavailable.",
+                    ex);
+            }
+
             if (sandboxMode == ToolSandboxMode.Require)
             {
                 throw new ToolSandboxException(
@@ -467,6 +583,9 @@ public sealed class OpenClawToolExecutor
                 ex);
         }
     }
+
+    private static bool IsLocalExecutionDisabled(ITool tool)
+        => tool is BrowserTool { LocalExecutionSupported: false };
 
     private async Task<string> ExecuteToolWithTimeoutAsync(
         ITool tool,
@@ -512,4 +631,44 @@ public sealed class OpenClawToolExecutor
         string.Equals(toolName, "file_write", StringComparison.Ordinal)
             ? "write_file"
             : toolName;
+
+    private static string ClassifyToolFailureCode(string toolName, string message)
+    {
+        if (LooksLikeOperatorAuthFailure(message))
+            return ToolFailureCodes.OperatorAuthRequired;
+
+        if (toolName.Equals("browser", StringComparison.OrdinalIgnoreCase))
+        {
+            return message.Contains("execution backend", StringComparison.OrdinalIgnoreCase) ||
+                message.Contains("Local Playwright execution is unavailable", StringComparison.OrdinalIgnoreCase)
+                ? ToolFailureCodes.BrowserBackendMissing
+                : ToolFailureCodes.RuntimeCapabilityUnavailable;
+        }
+
+        return message.Contains("sandbox", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("execution backend", StringComparison.OrdinalIgnoreCase)
+            ? ToolFailureCodes.RuntimeCapabilityUnavailable
+            : ToolFailureCodes.ToolFailed;
+    }
+
+    private static string? BuildFailureNextStep(string toolName, string? failureCode)
+        => failureCode switch
+        {
+            ToolFailureCodes.OperatorAuthRequired => "Authenticate with a browser session or operator token on this surface before retrying the tool.",
+            ToolFailureCodes.BrowserBackendMissing => "Configure a browser execution backend or sandbox, or disable the browser tool in this runtime.",
+            ToolFailureCodes.RuntimeCapabilityUnavailable when toolName.Equals("shell", StringComparison.OrdinalIgnoreCase)
+                => "Configure the required sandbox or execution backend for shell, or relax the tool policy for trusted local sessions.",
+            ToolFailureCodes.RuntimeCapabilityUnavailable
+                => "Configure the required execution backend or sandbox for this tool, or disable the tool in this runtime.",
+            _ => null
+        };
+
+    private static bool LooksLikeOperatorAuthFailure(string message)
+        => message.Contains("operator auth", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("operator authentication", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("operator token", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("browser-session", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("account-token", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("bootstrap token", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("current surface", StringComparison.OrdinalIgnoreCase);
 }

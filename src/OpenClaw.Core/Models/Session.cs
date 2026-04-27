@@ -22,6 +22,7 @@ public sealed class Session
     public required string Id { get; init; }
     public required string ChannelId { get; init; }
     public required string SenderId { get; init; }
+    public StableSessionBindingInfo? StableSessionBinding { get; set; }
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset LastActiveAt { get; set; } = DateTimeOffset.UtcNow;
     public List<ChatTurn> History { get; init; } = [];
@@ -56,6 +57,9 @@ public sealed class Session
 
     /// <summary>When true, shows tool calls and token counts in responses. Set via /verbose command.</summary>
     public bool VerboseMode { get; set; }
+
+    /// <summary>Response style preference for this session.</summary>
+    public string ResponseMode { get; set; } = SessionResponseModes.Default;
 
     /// <summary>Total input tokens consumed across all turns in this session.</summary>
     public long TotalInputTokens
@@ -127,6 +131,14 @@ public sealed class Session
         => TotalInputTokens + TotalOutputTokens;
 }
 
+public sealed class StableSessionBindingInfo
+{
+    public string ExternalSessionId { get; set; } = "";
+    public string Namespace { get; set; } = "";
+    public string OwnerKey { get; set; } = "";
+    public DateTimeOffset BoundAtUtc { get; set; } = DateTimeOffset.UtcNow;
+}
+
 public enum SessionState : byte
 {
     Active,
@@ -148,6 +160,10 @@ public sealed record ToolInvocation
     public required string Arguments { get; init; }
     public string? Result { get; init; }
     public TimeSpan Duration { get; init; }
+    public string? ResultStatus { get; init; }
+    public string? FailureCode { get; init; }
+    public string? FailureMessage { get; init; }
+    public string? NextStep { get; init; }
 }
 
 public sealed class SessionDelegationMetadata
@@ -200,6 +216,7 @@ public sealed class SessionDelegationChildSummary
 /// AOT-compatible JSON serialization context for all core models.
 /// </summary>
 [JsonSerializable(typeof(Session))]
+[JsonSerializable(typeof(StableSessionBindingInfo))]
 [JsonSerializable(typeof(ChatTurn))]
 [JsonSerializable(typeof(ToolInvocation))]
 [JsonSerializable(typeof(List<ToolInvocation>))]
@@ -222,6 +239,9 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(DiagnosticsConfig))]
 [JsonSerializable(typeof(PromptCacheTraceConfig))]
 [JsonSerializable(typeof(ModelsConfig))]
+[JsonSerializable(typeof(LocalModelPresetDefinition))]
+[JsonSerializable(typeof(List<LocalModelPresetDefinition>))]
+[JsonSerializable(typeof(LocalModelPresetListResponse))]
 [JsonSerializable(typeof(ModelProfileConfig))]
 [JsonSerializable(typeof(List<ModelProfileConfig>))]
 [JsonSerializable(typeof(ModelCapabilities))]
@@ -393,9 +413,12 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(CronConfig))]
 [JsonSerializable(typeof(CronJobConfig))]
 [JsonSerializable(typeof(AutomationsConfig))]
+[JsonSerializable(typeof(AutomationRetryPolicy))]
 [JsonSerializable(typeof(AutomationDefinition))]
 [JsonSerializable(typeof(List<AutomationDefinition>))]
 [JsonSerializable(typeof(AutomationRunState))]
+[JsonSerializable(typeof(AutomationRunRecord))]
+[JsonSerializable(typeof(List<AutomationRunRecord>))]
 [JsonSerializable(typeof(AutomationTemplate))]
 [JsonSerializable(typeof(List<AutomationTemplate>))]
 [JsonSerializable(typeof(AutomationTemplateListResponse))]
@@ -581,6 +604,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(IntegrationProvidersResponse))]
 [JsonSerializable(typeof(IntegrationPluginsResponse))]
 [JsonSerializable(typeof(IntegrationCompatibilityCatalogResponse))]
+[JsonSerializable(typeof(IntegrationCompatibilityExportResponse))]
 [JsonSerializable(typeof(IntegrationOperatorAuditResponse))]
 [JsonSerializable(typeof(IntegrationDashboardResponse))]
 [JsonSerializable(typeof(IntegrationSessionSearchResponse))]
@@ -588,6 +612,8 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(IntegrationProfileResponse))]
 [JsonSerializable(typeof(IntegrationAutomationsResponse))]
 [JsonSerializable(typeof(IntegrationAutomationDetailResponse))]
+[JsonSerializable(typeof(IntegrationAutomationRunsResponse))]
+[JsonSerializable(typeof(IntegrationAutomationRunDetailResponse))]
 [JsonSerializable(typeof(LearningProposalListResponse))]
 [JsonSerializable(typeof(IntegrationToolPresetsResponse))]
 [JsonSerializable(typeof(RuntimeEventQuery))]
@@ -628,7 +654,35 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(OrganizationPolicyResponse))]
 [JsonSerializable(typeof(SetupArtifactStatusItem))]
 [JsonSerializable(typeof(List<SetupArtifactStatusItem>))]
+[JsonSerializable(typeof(BrowserToolCapabilitySummary))]
 [JsonSerializable(typeof(SetupStatusResponse))]
+[JsonSerializable(typeof(MaintenanceFinding))]
+[JsonSerializable(typeof(List<MaintenanceFinding>))]
+[JsonSerializable(typeof(MaintenancePromptBudgetSnapshot))]
+[JsonSerializable(typeof(MaintenanceStorageSnapshot))]
+[JsonSerializable(typeof(MaintenanceDriftSnapshot))]
+[JsonSerializable(typeof(MaintenanceReportResponse))]
+[JsonSerializable(typeof(MaintenanceFixRequest))]
+[JsonSerializable(typeof(MaintenanceFixAction))]
+[JsonSerializable(typeof(List<MaintenanceFixAction>))]
+[JsonSerializable(typeof(MaintenanceFixResponse))]
+[JsonSerializable(typeof(ReliabilityFactor))]
+[JsonSerializable(typeof(List<ReliabilityFactor>))]
+[JsonSerializable(typeof(ReliabilityRecommendation))]
+[JsonSerializable(typeof(List<ReliabilityRecommendation>))]
+[JsonSerializable(typeof(ReliabilitySnapshot))]
+[JsonSerializable(typeof(MaintenanceHistorySnapshot))]
+[JsonSerializable(typeof(List<MaintenanceHistorySnapshot>))]
+[JsonSerializable(typeof(SetupVerificationCheck))]
+[JsonSerializable(typeof(List<SetupVerificationCheck>))]
+[JsonSerializable(typeof(SetupVerificationResponse))]
+[JsonSerializable(typeof(SetupVerificationSnapshot))]
+[JsonSerializable(typeof(UpgradeRollbackSnapshotArtifact))]
+[JsonSerializable(typeof(List<UpgradeRollbackSnapshotArtifact>))]
+[JsonSerializable(typeof(UpgradeRollbackSnapshot))]
+[JsonSerializable(typeof(DoctorCheckItem))]
+[JsonSerializable(typeof(List<DoctorCheckItem>))]
+[JsonSerializable(typeof(DoctorReportResponse))]
 [JsonSerializable(typeof(ObservabilityMetricPoint))]
 [JsonSerializable(typeof(List<ObservabilityMetricPoint>))]
 [JsonSerializable(typeof(ObservabilitySummaryCard))]
@@ -700,8 +754,15 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(ContractStatusResponse))]
 [JsonSerializable(typeof(ContractListResponse))]
 [JsonSerializable(typeof(Dictionary<string, decimal>))]
+[JsonSerializable(typeof(VerificationPolicy))]
+[JsonSerializable(typeof(VerificationCheckDefinition))]
+[JsonSerializable(typeof(VerificationCheckDefinition[]))]
+[JsonSerializable(typeof(VerificationCheckResult))]
+[JsonSerializable(typeof(List<VerificationCheckResult>))]
 [JsonSerializable(typeof(ToolUsageSnapshot))]
 [JsonSerializable(typeof(List<ToolUsageSnapshot>))]
+[JsonSerializable(typeof(OpenClaw.Core.Observability.ToolAuditEntry))]
+[JsonSerializable(typeof(IReadOnlyList<OpenClaw.Core.Observability.ToolAuditEntry>))]
 [JsonSerializable(typeof(OpenClaw.Core.Plugins.BridgeMediaAttachment))]
 [JsonSerializable(typeof(OpenClaw.Core.Plugins.BridgeMediaAttachment[]))]
 [JsonSerializable(typeof(OpenClaw.Core.Plugins.BridgeChannelTypingRequest))]

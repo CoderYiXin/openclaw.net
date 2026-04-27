@@ -1,11 +1,26 @@
 using System.Text.Json;
 using OpenClaw.Cli;
+using OpenClaw.Core.Models;
 using Xunit;
 
 namespace OpenClaw.Tests;
 
 public sealed class SetupCommandTests
 {
+    [Fact]
+    public void BuildLaunchUrls_IncludesChatAndAdminRoutes()
+    {
+        var urls = SetupLifecycleCommand.BuildLaunchUrls("http://127.0.0.1:18789/");
+
+        Assert.Equal(
+            [
+                ("Gateway URL", "http://127.0.0.1:18789"),
+                ("Chat URL", "http://127.0.0.1:18789/chat"),
+                ("Admin URL", "http://127.0.0.1:18789/admin")
+            ],
+            urls);
+    }
+
     [Fact]
     public async Task RunAsync_NonInteractiveLocalProfile_WritesConfigAndEnvExample()
     {
@@ -58,8 +73,9 @@ public sealed class SetupCommandTests
 
             var stdout = output.ToString();
             Assert.Contains("Config validation: passed", stdout, StringComparison.Ordinal);
+            Assert.Contains("openclaw setup verify", stdout, StringComparison.Ordinal);
             Assert.Contains("--doctor", stdout, StringComparison.Ordinal);
-            Assert.Contains("admin posture", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("OPENCLAW_AUTH_TOKEN=", stdout, StringComparison.Ordinal);
         }
         finally
         {
@@ -115,6 +131,59 @@ public sealed class SetupCommandTests
             var stdout = output.ToString();
             Assert.Contains("Warnings:", stdout, StringComparison.Ordinal);
             Assert.Contains("Public profile disables third-party bridge plugins by default.", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonInteractiveOllamaPreset_WritesPresetBackedLocalProfile()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.ollama.json");
+            var workspace = Path.Combine(root, "workspace");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "ollama",
+                    "--model", "llama3.2",
+                    "--model-preset", "ollama-general"
+                ],
+                new StringReader(string.Empty),
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            Assert.Equal("ollama", openClaw.GetProperty("llm").GetProperty("provider").GetString());
+            Assert.Equal("llama3.2", openClaw.GetProperty("llm").GetProperty("model").GetString());
+            Assert.Equal("http://127.0.0.1:11434", openClaw.GetProperty("llm").GetProperty("endpoint").GetString());
+
+            var models = openClaw.GetProperty("models");
+            Assert.Equal("local-primary", models.GetProperty("defaultProfile").GetString());
+            var profile = Assert.Single(models.GetProperty("profiles").EnumerateArray());
+            Assert.Equal("local-primary", profile.GetProperty("id").GetString());
+            Assert.Equal("ollama-general", profile.GetProperty("presetId").GetString());
+            Assert.Equal("http://127.0.0.1:11434", profile.GetProperty("baseUrl").GetString());
+
+            var envExample = await File.ReadAllTextAsync(Path.Combine(root, "config", "openclaw.ollama.env.example"));
+            Assert.DoesNotContain("MODEL_PROVIDER_KEY=replace-me", envExample, StringComparison.Ordinal);
+            Assert.Contains($"OPENCLAW_WORKSPACE={workspace}", envExample, StringComparison.Ordinal);
         }
         finally
         {
@@ -269,6 +338,117 @@ public sealed class SetupCommandTests
             var statusText = statusOutput.ToString();
             Assert.Contains("Gateway systemd unit: present", statusText, StringComparison.Ordinal);
             Assert.Contains("Caddy reverse proxy recipe: present", statusText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifyOffline_SucceedsWithoutLiveProviderProbe()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.settings.json");
+            var workspace = Path.Combine(root, "workspace");
+            using var setupOutput = new StringWriter();
+            using var setupError = new StringWriter();
+
+            var setupExitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "openai",
+                    "--model", "gpt-4o",
+                    "--api-key", "env:OPENAI_API_KEY"
+                ],
+                new StringReader(string.Empty),
+                setupOutput,
+                setupError,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, setupExitCode);
+
+            using var verifyOutput = new StringWriter();
+            using var verifyError = new StringWriter();
+            var verifyExitCode = await SetupCommand.RunAsync(
+                ["verify", "--config", configPath, "--offline"],
+                new StringReader(string.Empty),
+                verifyOutput,
+                verifyError,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, verifyExitCode);
+            Assert.Equal(string.Empty, verifyError.ToString());
+            Assert.Contains("Setup verification:", verifyOutput.ToString(), StringComparison.Ordinal);
+            Assert.Contains("Provider smoke skipped because offline mode is enabled.", verifyOutput.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_VerifyJson_PersistsSnapshotIntoSetupStatus()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.settings.json");
+            var workspace = Path.Combine(root, "workspace");
+            Directory.CreateDirectory(workspace);
+            using var setupOutput = new StringWriter();
+            using var setupError = new StringWriter();
+
+            var setupExitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "openai",
+                    "--model", "gpt-4o",
+                    "--api-key", "env:OPENAI_API_KEY"
+                ],
+                new StringReader(string.Empty),
+                setupOutput,
+                setupError,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, setupExitCode);
+
+            using var verifyOutput = new StringWriter();
+            using var verifyError = new StringWriter();
+            var verifyExitCode = await SetupCommand.RunAsync(
+                ["verify", "--config", configPath, "--offline", "--json"],
+                new StringReader(string.Empty),
+                verifyOutput,
+                verifyError,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, verifyExitCode);
+            Assert.Equal(string.Empty, verifyError.ToString());
+
+            var verification = JsonSerializer.Deserialize(verifyOutput.ToString(), CoreJsonContext.Default.SetupVerificationResponse);
+            Assert.NotNull(verification);
+            var providerSmoke = Assert.Single(verification!.Checks, static item => item.Id == "provider_smoke");
+            Assert.Equal(SetupCheckStates.Skip, providerSmoke.Status);
+
+            var status = SetupLifecycleCommand.BuildStatus(configPath, GatewayConfigFile.Load(configPath));
+            Assert.Equal(SetupVerificationSources.Cli, status.LastVerificationSource);
+            Assert.Equal(verification.OverallStatus, status.LastVerificationStatus);
+            Assert.Equal(SetupCheckStates.Skip, status.ProviderSmokeStatus);
+            Assert.True(status.LastVerificationAtUtc.HasValue);
+            Assert.False(status.LastVerificationHasFailures);
         }
         finally
         {

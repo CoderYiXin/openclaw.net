@@ -116,6 +116,17 @@ internal static class IntegrationEndpoints
                 CoreJsonContext.Default.IntegrationCompatibilityCatalogResponse);
         });
 
+        group.MapGet("/compatibility/export", (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                facade.GetCompatibilityExport(),
+                CoreJsonContext.Default.IntegrationCompatibilityExportResponse);
+        });
+
         group.MapGet("/operator-audit", (HttpContext ctx) =>
         {
             var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
@@ -391,6 +402,44 @@ internal static class IntegrationEndpoints
             return Results.Json(detail, CoreJsonContext.Default.IntegrationAutomationDetailResponse);
         });
 
+        group.MapGet("/automations/{id}/runs", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var detail = await facade.GetAutomationAsync(id, ctx.RequestAborted);
+            if (detail.Automation is null)
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "Automation not found." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+
+            return Results.Json(
+                await facade.GetAutomationRunsAsync(id, ctx.RequestAborted),
+                CoreJsonContext.Default.IntegrationAutomationRunsResponse);
+        });
+
+        group.MapGet("/automations/{id}/runs/{runId}", async (HttpContext ctx, string id, string runId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var detail = await facade.GetAutomationRunAsync(id, runId, ctx.RequestAborted);
+            if (detail.Automation is null || detail.Run is null)
+            {
+                return Results.Json(
+                    new OperationStatusResponse { Success = false, Error = "Automation run not found." },
+                    CoreJsonContext.Default.OperationStatusResponse,
+                    statusCode: StatusCodes.Status404NotFound);
+            }
+
+            return Results.Json(detail, CoreJsonContext.Default.IntegrationAutomationRunDetailResponse);
+        });
+
         group.MapPost("/automations/{id}/run", async (HttpContext ctx, string id) =>
         {
             var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
@@ -421,6 +470,32 @@ internal static class IntegrationEndpoints
                 result,
                 CoreJsonContext.Default.MutationResponse,
                 statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status404NotFound);
+        });
+
+        group.MapPost("/automations/{id}/runs/{runId}/replay", async (HttpContext ctx, string id, string runId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            var result = await facade.ReplayAutomationRunAsync(id, runId, ctx.RequestAborted);
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status202Accepted : StatusCodes.Status404NotFound);
+        });
+
+        group.MapPost("/automations/{id}/quarantine/clear", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            var result = await facade.ClearAutomationQuarantineAsync(id, ctx.RequestAborted);
+            return Results.Json(
+                result,
+                CoreJsonContext.Default.MutationResponse,
+                statusCode: result.Success ? StatusCodes.Status200OK : StatusCodes.Status404NotFound);
         });
 
         group.MapDelete("/automations/{id}", async (HttpContext ctx, string id) =>

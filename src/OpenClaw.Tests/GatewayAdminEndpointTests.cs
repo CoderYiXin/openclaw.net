@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using System.Text.RegularExpressions;
 using System.Text;
@@ -58,6 +59,8 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal(HttpStatusCode.OK, bearerResponse.StatusCode);
         var bearerPayload = await ReadJsonAsync(bearerResponse);
         Assert.Equal("bearer", bearerPayload.RootElement.GetProperty("authMode").GetString());
+        Assert.Equal("web", bearerPayload.RootElement.GetProperty("effectiveToolPresetId").GetString());
+        Assert.True(bearerPayload.RootElement.GetProperty("capabilitySummary").GetArrayLength() >= 1);
 
         using var loginRequest = new HttpRequestMessage(HttpMethod.Post, "/auth/session")
         {
@@ -68,6 +71,7 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal(HttpStatusCode.OK, loginResponse.StatusCode);
         var loginPayload = await ReadJsonAsync(loginResponse);
         Assert.Equal("browser-session", loginPayload.RootElement.GetProperty("authMode").GetString());
+        Assert.Equal("web", loginPayload.RootElement.GetProperty("effectiveToolSurface").GetString());
         var csrfToken = loginPayload.RootElement.GetProperty("csrfToken").GetString();
         Assert.False(string.IsNullOrWhiteSpace(csrfToken));
         var cookie = Assert.Single(loginResponse.Headers.GetValues("Set-Cookie"));
@@ -284,11 +288,116 @@ public sealed class GatewayAdminEndpointTests
         using var payload = await ReadJsonAsync(response);
         Assert.False(payload.RootElement.GetProperty("bootstrapTokenEnabled").GetBoolean());
         Assert.Equal("reviewed", payload.RootElement.GetProperty("minimumPluginTrustLevel").GetString());
+        Assert.True(payload.RootElement.GetProperty("hasOperatorAccounts").GetBoolean());
+        Assert.True(payload.RootElement.GetProperty("operatorAccountCount").GetInt32() >= 1);
+        Assert.Equal("complete", payload.RootElement.GetProperty("bootstrapGuidanceState").GetString());
+        Assert.True(payload.RootElement.GetProperty("recommendedNextActions").GetArrayLength() >= 1);
         Assert.Contains(
             payload.RootElement.GetProperty("artifacts").EnumerateArray().Select(static item => item.GetProperty("id").GetString()).OfType<string>(),
             id => id == "caddy");
         var caddy = payload.RootElement.GetProperty("artifacts").EnumerateArray().First(item => item.GetProperty("id").GetString() == "caddy");
         Assert.True(caddy.GetProperty("exists").GetBoolean());
+        Assert.True(payload.RootElement.GetProperty("reliability").GetProperty("score").GetInt32() >= 0);
+    }
+
+    [Fact]
+    public async Task AdminMaintenance_ReportsFindings_AndFixesManagedArtifacts()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+        var adminRoot = Path.Combine(harness.StoragePath, "admin");
+        var evaluationRoot = Path.Combine(adminRoot, "model-evaluations");
+        Directory.CreateDirectory(evaluationRoot);
+        Directory.CreateDirectory(Path.Combine(harness.StoragePath, "logs"));
+
+        await File.WriteAllTextAsync(Path.Combine(harness.StoragePath, "logs", "cache-trace.jsonl"), "trace");
+        await File.WriteAllTextAsync(Path.Combine(evaluationRoot, "eval-old-01.json"), "{}");
+        await File.WriteAllTextAsync(
+            Path.Combine(adminRoot, "session-metadata.json"),
+            JsonSerializer.Serialize(
+                new List<SessionMetadataSnapshot> { new() { SessionId = "missing-session" } },
+                CoreJsonContext.Default.ListSessionMetadataSnapshot));
+
+        using var reportRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/maintenance");
+        reportRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var reportResponse = await harness.Client.SendAsync(reportRequest);
+        reportResponse.EnsureSuccessStatusCode();
+
+        using var reportPayload = await ReadJsonAsync(reportResponse);
+        Assert.True(reportPayload.RootElement.GetProperty("reliability").GetProperty("score").GetInt32() >= 0);
+        Assert.Contains(
+            reportPayload.RootElement.GetProperty("findings").EnumerateArray().Select(static item => item.GetProperty("id").GetString()).OfType<string>(),
+            id => id == "orphaned-session-metadata");
+
+        using var fixRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/maintenance/fix");
+        fixRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        fixRequest.Content = new StringContent(
+            JsonSerializer.Serialize(
+                new MaintenanceFixRequest
+                {
+                    DryRun = false,
+                    Apply = "all"
+                },
+                CoreJsonContext.Default.MaintenanceFixRequest),
+            Encoding.UTF8,
+            "application/json");
+        var fixResponse = await harness.Client.SendAsync(fixRequest);
+        fixResponse.EnsureSuccessStatusCode();
+
+        Assert.False(File.Exists(Path.Combine(harness.StoragePath, "logs", "cache-trace.jsonl")));
+        var metadata = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(Path.Combine(adminRoot, "session-metadata.json")),
+            CoreJsonContext.Default.ListSessionMetadataSnapshot);
+        Assert.Empty(metadata ?? []);
+    }
+
+    [Fact]
+    public async Task AdminSummary_WritesSingleMaintenanceSnapshotPerRequest()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/admin/summary");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var history = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(Path.Combine(harness.StoragePath, "admin", "maintenance-history.json")),
+            CoreJsonContext.Default.ListMaintenanceHistorySnapshot);
+        Assert.Single(history ?? []);
+    }
+
+    [Fact]
+    public async Task AdminMaintenance_WritesSingleMaintenanceSnapshotPerRequest()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/admin/maintenance");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+
+        var history = JsonSerializer.Deserialize(
+            await File.ReadAllTextAsync(Path.Combine(harness.StoragePath, "admin", "maintenance-history.json")),
+            CoreJsonContext.Default.ListMaintenanceHistorySnapshot);
+        Assert.Single(history ?? []);
+    }
+
+    [Fact]
+    public async Task AdminSetupVerify_ReturnsStructuredChecks()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/admin/setup/verify");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        using var payload = await ReadJsonAsync(response);
+        Assert.True(payload.RootElement.TryGetProperty("overallStatus", out _));
+        Assert.True(payload.RootElement.GetProperty("checks").GetArrayLength() >= 5);
+        Assert.Contains(
+            payload.RootElement.GetProperty("checks").EnumerateArray().Select(static item => item.GetProperty("id").GetString()).OfType<string>(),
+            id => id == "provider_smoke");
     }
 
     [Fact]
@@ -374,6 +483,8 @@ public sealed class GatewayAdminEndpointTests
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
         var operatorAccounts = harness.App.Services.GetRequiredService<OperatorAccountService>();
+        var heartbeatService = harness.App.Services.GetRequiredService<HeartbeatService>();
+        var store = new FileFeatureStore(harness.StoragePath);
         var created = operatorAccounts.Create(new OperatorAccountCreateRequest
         {
             Username = "viewer-observe",
@@ -445,6 +556,30 @@ public sealed class GatewayAdminEndpointTests
         harness.Runtime.ProviderUsage.RecordError("openai", "gpt-4o");
         harness.Runtime.ProviderUsage.RecordRetry("openai", "gpt-4o");
 
+        await store.SaveAutomationAsync(new AutomationDefinition
+        {
+            Id = "auto-observability-fail",
+            Name = "Observability Failure",
+            Enabled = true,
+            Schedule = "@daily",
+            Prompt = "Report failures.",
+            DeliveryChannelId = "cron",
+            RetryPolicy = new AutomationRetryPolicy()
+        }, CancellationToken.None);
+        await store.SaveRunStateAsync(new AutomationRunState
+        {
+            AutomationId = "auto-observability-fail",
+            Outcome = AutomationVerificationStatuses.Failed,
+            LastRunAtUtc = now.AddMinutes(-8),
+            LastCompletedAtUtc = now.AddMinutes(-8),
+            LastRunId = "run-observe-1",
+            FailureStreak = 1,
+            VerificationSummary = "Expected report file was missing."
+        }, CancellationToken.None);
+
+        var heartbeatSession = await harness.Runtime.SessionManager.GetOrCreateByIdAsync("heartbeat-observe", "web", "viewer-observe", CancellationToken.None);
+        heartbeatService.RecordResult(heartbeatSession, "Urgent competitor alert", suppressed: false, inputTokenDelta: 12, outputTokenDelta: 34);
+
         var range = $"fromUtc={Uri.EscapeDataString(now.AddHours(-1).ToString("O"))}&toUtc={Uri.EscapeDataString(now.AddMinutes(1).ToString("O"))}";
         using var summaryRequest = new HttpRequestMessage(HttpMethod.Get, $"/admin/observability/summary?{range}");
         summaryRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token!.Token);
@@ -454,6 +589,7 @@ public sealed class GatewayAdminEndpointTests
         var cards = summaryPayload.RootElement.GetProperty("cards").EnumerateArray().ToArray();
         Assert.Contains(cards, item => item.GetProperty("id").GetString() == "operator-actions" && item.GetProperty("value").GetInt32() >= 1);
         Assert.Contains(cards, item => item.GetProperty("id").GetString() == "dead-letters" && item.GetProperty("value").GetInt32() >= 1);
+        Assert.Contains(cards, item => item.GetProperty("id").GetString() == "automation-failures" && item.GetProperty("value").GetInt32() == 1);
         Assert.Contains(
             summaryPayload.RootElement.GetProperty("operatorActions").EnumerateArray().Select(static item => item.GetProperty("label").GetString()).OfType<string>(),
             value => value == "approval_review");
@@ -466,6 +602,7 @@ public sealed class GatewayAdminEndpointTests
         var points = seriesPayload.RootElement.GetProperty("points").EnumerateArray().ToArray();
         Assert.NotEmpty(points);
         Assert.Contains(points, item => item.GetProperty("operatorActions").GetInt32() >= 1);
+        Assert.All(points, item => Assert.Equal(1, item.GetProperty("automationFailures").GetInt32()));
         var expectedProviderErrors = points[0].GetProperty("providerErrors").GetInt32();
         var expectedProviderRetries = points[0].GetProperty("providerRetries").GetInt32();
         Assert.All(points, item => Assert.Equal(expectedProviderErrors, item.GetProperty("providerErrors").GetInt32()));
@@ -668,6 +805,84 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task ApprovalSimulation_DeniesProcessWorkingDirectoryOutsideWorkspace()
+    {
+        var workspaceRoot = Path.Combine(Path.GetTempPath(), "openclaw-process-workspace", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspaceRoot);
+
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Tooling.WorkspaceOnly = true;
+            config.Tooling.WorkspaceRoot = workspaceRoot;
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/approvals/simulate")
+        {
+            Content = JsonContent("""{"toolName":"process","argumentsJson":"{\"working_directory\":\"/tmp\"}","autonomyMode":"full","requireToolApproval":false}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.Equal("deny", payload.RootElement.GetProperty("decision").GetString());
+    }
+
+    [Fact]
+    public async Task ApprovalSimulation_DeniesProcessForbiddenWorkingDirectory()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Tooling.ForbiddenPathGlobs = ["/workspace/secret*"];
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/approvals/simulate")
+        {
+            Content = JsonContent("""{"toolName":"process","argumentsJson":"{\"working_directory\":\"/workspace/secret-data\"}","autonomyMode":"full","requireToolApproval":false}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.Equal("deny", payload.RootElement.GetProperty("decision").GetString());
+    }
+
+    [Fact]
+    public async Task ApprovalSimulation_ReportsExecutionRouteMetadata()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Tooling.AllowShell = true;
+            config.Sandbox = new SandboxConfig
+            {
+                Provider = SandboxProviderNames.OpenSandbox,
+                Endpoint = "http://sandbox.example",
+                Tools = new Dictionary<string, SandboxToolConfig>(StringComparer.Ordinal)
+                {
+                    ["process"] = new()
+                    {
+                        Mode = nameof(ToolSandboxMode.Require),
+                        Template = "ghcr.io/example/process:latest"
+                    }
+                }
+            };
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/admin/approvals/simulate")
+        {
+            Content = JsonContent("""{"toolName":"process","argumentsJson":"{\"working_directory\":\"/workspace\"}","autonomyMode":"full","requireToolApproval":false}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.Equal("opensandbox", payload.RootElement.GetProperty("executionBackend").GetString());
+        Assert.Equal("require", payload.RootElement.GetProperty("executionSandboxMode").GetString());
+    }
+
+    [Fact]
     public async Task IncidentExport_RedactsSensitiveRuntimeEventContent()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
@@ -736,6 +951,35 @@ public sealed class GatewayAdminEndpointTests
         Assert.Contains("- slack:", text, StringComparison.Ordinal);
         Assert.Contains("- discord:", text, StringComparison.Ordinal);
         Assert.Contains("- signal:", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DoctorText_ReportsBrowserToolAvailability_WhenLocalExecutionIsUnavailable()
+    {
+        await using var harness = await CreateHarnessAsync(
+            nonLoopbackBind: true,
+            configure: config => config.Tooling.EnableBrowserTool = true,
+            runtimeStateOverride: new GatewayRuntimeState
+            {
+                RequestedMode = "aot",
+                EffectiveMode = GatewayRuntimeMode.Aot,
+                DynamicCodeSupported = false
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/doctor/text");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        response.EnsureSuccessStatusCode();
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.Contains(
+            "- browser_tool: configured=yes registered=no local_supported=no backend_configured=no",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Configure a non-local execution backend or sandbox for the browser tool, or disable Tooling.EnableBrowserTool.",
+            text,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1575,7 +1819,10 @@ public sealed class GatewayAdminEndpointTests
             "history:4",
             secondPayload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString());
 
-        var persisted = await harness.MemoryStore.GetSessionAsync(stableSessionId, CancellationToken.None);
+        var activeSession = await FindStableSessionAsync(harness, stableSessionId);
+        Assert.NotNull(activeSession);
+
+        var persisted = await harness.MemoryStore.GetSessionAsync(activeSession!.Id, CancellationToken.None);
         Assert.NotNull(persisted);
         Assert.Collection(
             persisted!.History,
@@ -1605,7 +1852,7 @@ public sealed class GatewayAdminEndpointTests
                 Assert.Equal("history:4", turn.Content);
             });
 
-        Assert.True(harness.Runtime.SessionManager.RemoveActive(stableSessionId));
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession.Id));
     }
 
     [Fact]
@@ -1650,7 +1897,206 @@ public sealed class GatewayAdminEndpointTests
             "ok",
             payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString());
 
-        Assert.True(harness.Runtime.SessionManager.RemoveActive("stable-save-failure"));
+        var activeSession = await FindStableSessionAsync(harness, "stable-save-failure");
+        Assert.NotNull(activeSession);
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession!.Id));
+    }
+
+    [Fact]
+    public async Task ChatCompletions_StableSession_RejectsUnsafeStableSessionId()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello"}]}""")
+        };
+        request.Headers.Add("X-OpenClaw-Session-Id", "../escape-target");
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("unsafe stable session id", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_StableSession_NamespacesByRequester()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo =>
+            {
+                var session = callInfo.Arg<Session>();
+                var userMessage = callInfo.ArgAt<string>(1);
+                session.History.Add(new ChatTurn { Role = "user", Content = userMessage });
+                var response = $"ok:{session.Id}";
+                session.History.Add(new ChatTurn { Role = "assistant", Content = response });
+                return Task.FromResult(response);
+            });
+
+        const string stableSessionId = "shared-stable-session";
+
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello"}]}""")
+        };
+        firstRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "owner-token");
+        firstRequest.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+
+        using var firstResponse = await harness.Client.SendAsync(firstRequest);
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        using var secondRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello again"}]}""")
+        };
+        secondRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "different-owner-token");
+        secondRequest.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+
+        using var secondResponse = await harness.Client.SendAsync(secondRequest);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+
+        var stableSessions = (await harness.Runtime.SessionManager.ListActiveAsync(CancellationToken.None))
+            .Where(session => string.Equals(session.StableSessionBinding?.ExternalSessionId, stableSessionId, StringComparison.Ordinal))
+            .OrderBy(session => session.SenderId, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(2, stableSessions.Length);
+        Assert.All(stableSessions, session =>
+        {
+            Assert.Equal(stableSessionId, session.StableSessionBinding?.ExternalSessionId);
+            Assert.Equal(session.SenderId, session.StableSessionBinding?.OwnerKey);
+        });
+        Assert.NotEqual(stableSessions[0].Id, stableSessions[1].Id);
+        Assert.NotEqual(
+            stableSessions[0].StableSessionBinding?.Namespace,
+            stableSessions[1].StableSessionBinding?.Namespace);
+
+        using var adminRequest = new HttpRequestMessage(HttpMethod.Get, $"/admin/sessions?search={Uri.EscapeDataString(stableSessionId)}");
+        adminRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        using var adminResponse = await harness.Client.SendAsync(adminRequest);
+        Assert.Equal(HttpStatusCode.OK, adminResponse.StatusCode);
+
+        using var adminPayload = await ReadJsonAsync(adminResponse);
+        var activeSessions = adminPayload.RootElement.GetProperty("active").EnumerateArray().ToArray();
+        Assert.Equal(2, activeSessions.Length);
+        Assert.All(activeSessions, item =>
+        {
+            Assert.Equal(stableSessionId, item.GetProperty("stableSessionId").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("stableSessionNamespace").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(item.GetProperty("stableSessionOwnerKey").GetString()));
+        });
+    }
+
+    [Fact]
+    public async Task ChatCompletions_StableSession_BindingConflict_ReleasesSessionLock()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+        const string stableSessionId = "binding-conflict-chat";
+        const string bearerToken = "owner-token";
+        var requesterKey = CreateHttpRequesterKey(bearerToken);
+        var binding = CreateStableSessionBinding(stableSessionId, requesterKey);
+        var scopedSessionId = BuildScopedStableSessionId(binding);
+        var conflictingSession = await harness.Runtime.SessionManager.GetOrCreateByIdAsync(
+            scopedSessionId,
+            "openai-http",
+            "another-requester",
+            CancellationToken.None);
+        conflictingSession.StableSessionBinding = new StableSessionBindingInfo
+        {
+            ExternalSessionId = stableSessionId,
+            Namespace = binding.Namespace,
+            OwnerKey = "another-requester",
+            BoundAtUtc = DateTimeOffset.UtcNow
+        };
+
+        using var request = CreateStableChatCompletionRequest(stableSessionId, "hello", bearerToken);
+        using var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("belongs to another requester scope", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+
+        await AssertSessionLockReleasedAsync(harness, scopedSessionId);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_StableSession_SerializesConcurrentRequests()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
+        var firstInvocationStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstInvocation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+        var inFlight = 0;
+        var maxInFlight = 0;
+
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(async callInfo =>
+            {
+                var currentInFlight = Interlocked.Increment(ref inFlight);
+                UpdateMax(ref maxInFlight, currentInFlight);
+                var invocation = Interlocked.Increment(ref callCount);
+                try
+                {
+                    if (invocation == 1)
+                    {
+                        firstInvocationStarted.TrySetResult(true);
+                        await releaseFirstInvocation.Task;
+                    }
+
+                    var session = callInfo.Arg<Session>();
+                    var userMessage = callInfo.ArgAt<string>(1);
+                    session.History.Add(new ChatTurn { Role = "user", Content = userMessage });
+                    var response = $"history:{session.History.Count}";
+                    session.History.Add(new ChatTurn { Role = "assistant", Content = response });
+                    return response;
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref inFlight);
+                }
+            });
+
+        const string stableSessionId = "serialized-stable-session";
+        var firstRequest = CreateStableChatCompletionRequest(stableSessionId, "first", bearerToken: "shared-owner");
+        var secondRequest = CreateStableChatCompletionRequest(stableSessionId, "second", bearerToken: "shared-owner");
+
+        var firstResponseTask = harness.Client.SendAsync(firstRequest);
+        await firstInvocationStarted.Task;
+
+        var secondResponseTask = harness.Client.SendAsync(secondRequest);
+        await Task.Delay(100);
+        Assert.Equal(1, Volatile.Read(ref maxInFlight));
+
+        releaseFirstInvocation.SetResult(true);
+
+        using var firstResponse = await firstResponseTask;
+        using var secondResponse = await secondResponseTask;
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+        Assert.Equal(2, Volatile.Read(ref callCount));
+        Assert.Equal(1, Volatile.Read(ref maxInFlight));
+
+        var activeSession = await FindStableSessionAsync(harness, stableSessionId);
+        Assert.NotNull(activeSession);
+
+        var persisted = await harness.MemoryStore.GetSessionAsync(activeSession!.Id, CancellationToken.None);
+        Assert.NotNull(persisted);
+        Assert.Collection(
+            persisted!.History,
+            turn => Assert.Equal("first", turn.Content),
+            turn => Assert.Equal("history:1", turn.Content),
+            turn => Assert.Equal("second", turn.Content),
+            turn => Assert.Equal("history:3", turn.Content));
     }
 
     [Fact]
@@ -1705,7 +2151,10 @@ public sealed class GatewayAdminEndpointTests
             "history:3",
             GetResponsesAssistantText(secondPayload.RootElement));
 
-        var persisted = await harness.MemoryStore.GetSessionAsync(stableSessionId, CancellationToken.None);
+        var activeSession = await FindStableSessionAsync(harness, stableSessionId);
+        Assert.NotNull(activeSession);
+
+        var persisted = await harness.MemoryStore.GetSessionAsync(activeSession!.Id, CancellationToken.None);
         Assert.NotNull(persisted);
         Assert.Collection(
             persisted!.History,
@@ -1730,7 +2179,44 @@ public sealed class GatewayAdminEndpointTests
                 Assert.Equal("history:3", turn.Content);
             });
 
-        Assert.True(harness.Runtime.SessionManager.RemoveActive(stableSessionId));
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession.Id));
+    }
+
+    [Fact]
+    public async Task Responses_StableSession_BindingConflict_ReleasesSessionLock()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        const string stableSessionId = "binding-conflict-responses";
+        var bearerToken = harness.AuthToken;
+        var requesterKey = CreateHttpRequesterKey(bearerToken);
+        var binding = CreateStableSessionBinding(stableSessionId, requesterKey);
+        var scopedSessionId = BuildScopedStableSessionId(binding);
+        var conflictingSession = await harness.Runtime.SessionManager.GetOrCreateByIdAsync(
+            scopedSessionId,
+            "openai-responses",
+            "another-requester",
+            CancellationToken.None);
+        conflictingSession.StableSessionBinding = new StableSessionBindingInfo
+        {
+            ExternalSessionId = stableSessionId,
+            Namespace = binding.Namespace,
+            OwnerKey = "another-requester",
+            BoundAtUtc = DateTimeOffset.UtcNow
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"input":"hello"}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        request.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+
+        using var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Contains("belongs to another requester scope", await response.Content.ReadAsStringAsync(), StringComparison.OrdinalIgnoreCase);
+
+        await AssertSessionLockReleasedAsync(harness, scopedSessionId);
     }
 
     [Fact]
@@ -1767,7 +2253,176 @@ public sealed class GatewayAdminEndpointTests
         using var payload = await ReadJsonAsync(response);
         Assert.Equal("ok", GetResponsesAssistantText(payload.RootElement));
 
-        Assert.True(harness.Runtime.SessionManager.RemoveActive("stable-responses-save-failure"));
+        var activeSession = await FindStableSessionAsync(harness, "stable-responses-save-failure");
+        Assert.NotNull(activeSession);
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession!.Id));
+    }
+
+    [Fact]
+    public async Task ChatCompletions_NonStreaming_OpenAiHttpApprovalWaitsForApprovalAndResumes()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Security.RequireRequesterMatchForHttpToolApproval = true;
+        });
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo => WaitForToolApprovalAsync(
+                callInfo.ArgAt<ToolApprovalCallback?>(3),
+                callInfo.ArgAt<CancellationToken>(2),
+                approvedText: "approved via openai-http",
+                deniedText: "denied via openai-http"));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello"}]}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var responseTask = harness.Client.SendAsync(request);
+        var approval = await WaitForPendingApprovalAsync(harness.Runtime.ToolApprovalService, "openai-http");
+
+        Assert.Equal("openai-http", approval.ChannelId);
+        Assert.Equal("shell", approval.ToolName);
+
+        using var approvalResponse = await SubmitApprovalDecisionAsync(harness.Client, harness.AuthToken, approval, approved: true);
+        Assert.Equal(HttpStatusCode.OK, approvalResponse.StatusCode);
+
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.Equal(
+            "approved via openai-http",
+            payload.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString());
+
+        var decision = harness.Runtime.ApprovalAuditStore.Query(new ApprovalHistoryQuery { Limit = 10, ChannelId = "openai-http" })
+            .Single(item => item.EventType == "decision");
+        Assert.Equal("http_requester", decision.DecisionSource);
+        Assert.True(decision.Approved);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_Streaming_OpenAiHttpApprovalDenialReturnsToolFailureContent()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Security.RequireRequesterMatchForHttpToolApproval = true;
+        });
+        harness.Runtime.AgentRuntime.RunStreamingAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>())
+            .Returns(callInfo => StreamToolApprovalAsync(
+                callInfo.ArgAt<ToolApprovalCallback?>(3),
+                callInfo.ArgAt<CancellationToken>(2),
+                approvedText: "tool approved by reviewer",
+                deniedText: "tool denied by reviewer"));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello"}],"stream":true}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var responseTask = harness.Client.SendAsync(request);
+        var approval = await WaitForPendingApprovalAsync(harness.Runtime.ToolApprovalService, "openai-http");
+
+        using var denialResponse = await SubmitApprovalDecisionAsync(harness.Client, harness.AuthToken, approval, approved: false);
+        Assert.Equal(HttpStatusCode.OK, denialResponse.StatusCode);
+
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        var payload = await response.Content.ReadAsStringAsync();
+        Assert.Contains("tool denied by reviewer", payload, StringComparison.Ordinal);
+        Assert.Contains("openclaw_tool_result", payload, StringComparison.Ordinal);
+        Assert.Contains("data: [DONE]", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Responses_NonStreaming_OpenAiHttpApprovalTimeoutReturnsDeniedResultAndRecordsTimeout()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Security.RequireRequesterMatchForHttpToolApproval = true;
+            config.Tooling.ToolApprovalTimeoutSeconds = 5;
+        });
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo => WaitForToolApprovalAsync(
+                callInfo.ArgAt<ToolApprovalCallback?>(3),
+                callInfo.ArgAt<CancellationToken>(2),
+                approvedText: "approved via responses",
+                deniedText: "approval timed out"));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"input":"hello"}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var responseTask = harness.Client.SendAsync(request);
+        var approval = await WaitForPendingApprovalAsync(harness.Runtime.ToolApprovalService, "openai-http");
+
+        Assert.Equal("openai-http", approval.ChannelId);
+
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.Equal("approval timed out", GetResponsesAssistantText(payload.RootElement));
+
+        var decision = harness.Runtime.ApprovalAuditStore.Query(new ApprovalHistoryQuery { Limit = 10, ChannelId = "openai-http" })
+            .Single(item => item.EventType == "decision");
+        Assert.Equal("timeout", decision.DecisionSource);
+        Assert.False(decision.Approved);
+    }
+
+    [Fact]
+    public async Task Responses_Streaming_OpenAiHttpApprovalWaitsForApprovalAndResumes()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Security.RequireRequesterMatchForHttpToolApproval = true;
+        });
+        harness.Runtime.AgentRuntime.RunStreamingAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>())
+            .Returns(callInfo => StreamToolApprovalAsync(
+                callInfo.ArgAt<ToolApprovalCallback?>(3),
+                callInfo.ArgAt<CancellationToken>(2),
+                approvedText: "tool approved by reviewer",
+                deniedText: "tool denied by reviewer"));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"input":"hello","stream":true}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var responseTask = harness.Client.SendAsync(request);
+        var approval = await WaitForPendingApprovalAsync(harness.Runtime.ToolApprovalService, "openai-http");
+
+        using var approvalResponse = await SubmitApprovalDecisionAsync(harness.Client, harness.AuthToken, approval, approved: true);
+        Assert.Equal(HttpStatusCode.OK, approvalResponse.StatusCode);
+
+        using var response = await responseTask;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        var payload = await response.Content.ReadAsStringAsync();
+        Assert.Contains("response.openclaw_tool_result", payload, StringComparison.Ordinal);
+        Assert.Contains("tool approved by reviewer", payload, StringComparison.Ordinal);
+        Assert.Contains("response.completed", payload, StringComparison.Ordinal);
     }
 
     private static string GetResponsesAssistantText(JsonElement root)
@@ -1838,6 +2493,76 @@ public sealed class GatewayAdminEndpointTests
         var historyPayload = await ReadJsonAsync(historyResponse);
         Assert.Equal(1, historyPayload.RootElement.GetProperty("items").GetArrayLength());
         Assert.Equal("created", historyPayload.RootElement.GetProperty("items")[0].GetProperty("eventType").GetString());
+    }
+
+    [Fact]
+    public async Task CompatibilityExport_ReturnsPostureChannelsAndCatalog()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, config =>
+        {
+            config.Sandbox = new SandboxConfig
+            {
+                Provider = SandboxProviderNames.OpenSandbox,
+                Endpoint = "http://sandbox.example",
+                Tools = new Dictionary<string, SandboxToolConfig>(StringComparer.Ordinal)
+                {
+                    ["process"] = new()
+                    {
+                        Mode = nameof(ToolSandboxMode.Require),
+                        Template = "ghcr.io/example/process:latest"
+                    }
+                }
+            };
+        });
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/integration/compatibility/export");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var payload = await ReadJsonAsync(response);
+        Assert.True(payload.RootElement.GetProperty("posture").GetProperty("publicBind").GetBoolean());
+        Assert.True(payload.RootElement.GetProperty("posture").GetProperty("stableSessionsScopedByRequester").GetBoolean());
+        Assert.True(payload.RootElement.GetProperty("posture").GetProperty("processToolSafeForPublicBind").GetBoolean());
+        Assert.True(payload.RootElement.GetProperty("channels").GetArrayLength() >= 1);
+        Assert.True(payload.RootElement.GetProperty("catalog").GetProperty("items").GetArrayLength() >= 1);
+    }
+
+    [Fact]
+    public async Task ViewerRole_CannotMutateControlOrDiagnosticsEndpoints()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var viewerToken = CreateOperatorToken(harness, OperatorRoleNames.Viewer, "viewer-control");
+
+        using var pairingRequest = new HttpRequestMessage(HttpMethod.Post, "/pairing/revoke?channelId=telegram&senderId=user1");
+        pairingRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken);
+        var pairingResponse = await harness.Client.SendAsync(pairingRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, pairingResponse.StatusCode);
+
+        using var sweepRequest = new HttpRequestMessage(HttpMethod.Post, "/memory/retention/sweep?dryRun=true");
+        sweepRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken);
+        var sweepResponse = await harness.Client.SendAsync(sweepRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, sweepResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task ViewerRole_CannotListOrMutatePendingApprovals()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var viewerToken = CreateOperatorToken(harness, OperatorRoleNames.Viewer, "viewer-approvals");
+        var approval = harness.Runtime.ToolApprovalService.Create("sess1", "telegram", "sender1", "shell", """{"cmd":"ls"}""", TimeSpan.FromMinutes(5));
+
+        using var listRequest = new HttpRequestMessage(HttpMethod.Get, "/tools/approvals");
+        listRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken);
+        var listResponse = await harness.Client.SendAsync(listRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, listResponse.StatusCode);
+
+        using var approveRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/tools/approve?approvalId={Uri.EscapeDataString(approval.ApprovalId)}&approved=true&requesterChannelId=telegram&requesterSenderId=sender1");
+        approveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", viewerToken);
+        var approveResponse = await harness.Client.SendAsync(approveRequest);
+        Assert.Equal(HttpStatusCode.Forbidden, approveResponse.StatusCode);
     }
 
     [Fact]
@@ -1999,8 +2724,8 @@ public sealed class GatewayAdminEndpointTests
                     Diagnostics = []
                 }
             ],
-            pluginHost: null,
-            nativeDynamicPluginHost: null);
+            pluginRuntimeTelemetry: null,
+            nativeDynamicPluginRuntimeTelemetry: null);
         harness.Runtime.LoadedSkills =
         [
             new SkillDefinition
@@ -2349,6 +3074,7 @@ public sealed class GatewayAdminEndpointTests
     public async Task IntegrationApi_Dashboard_Approvals_Providers_Plugins_Audit_AndTimeline_AreServed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var store = new FileFeatureStore(harness.StoragePath);
 
         var session = await harness.Runtime.SessionManager.GetOrCreateByIdAsync("sess-dashboard", "api", "user-dashboard", CancellationToken.None);
         session.History.Add(new ChatTurn { Role = "user", Content = "inspect me" });
@@ -2377,6 +3103,24 @@ public sealed class GatewayAdminEndpointTests
             Severity = "info",
             Summary = "seeded"
         });
+        await store.SaveAutomationAsync(new AutomationDefinition
+        {
+            Id = "auto-dashboard-legacy",
+            Name = "Legacy failing automation",
+            Enabled = true,
+            Schedule = "@daily",
+            Prompt = "Fail",
+            DeliveryChannelId = "cron",
+            RetryPolicy = new AutomationRetryPolicy()
+        }, CancellationToken.None);
+        await store.SaveRunStateAsync(new AutomationRunState
+        {
+            AutomationId = "auto-dashboard-legacy",
+            Outcome = AutomationVerificationStatuses.Failed,
+            LastRunAtUtc = DateTimeOffset.UtcNow.AddMinutes(-10),
+            LastRunId = "legacy-run-1",
+            FailureStreak = 1
+        }, CancellationToken.None);
 
         using var dashboardRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/dashboard");
         dashboardRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
@@ -2387,8 +3131,10 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal(1, dashboardPayload.RootElement.GetProperty("approvals").GetProperty("items").GetArrayLength());
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("sessions").GetProperty("uniqueTotal").GetInt32() >= 1);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("approvals").GetProperty("pending").GetInt32() >= 1);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("automations").GetProperty("failing").GetInt32() >= 1);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("automations").GetProperty("templates").GetArrayLength() >= 2);
         Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("channels").GetProperty("items").GetArrayLength() >= 1);
+        Assert.True(dashboardPayload.RootElement.GetProperty("operator").GetProperty("reliability").GetProperty("score").GetInt32() >= 0);
 
         using var approvalsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/approvals?channelId=api&senderId=user-dashboard");
         approvalsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
@@ -2496,6 +3242,201 @@ public sealed class GatewayAdminEndpointTests
         detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
         var detailResponse = await harness.Client.SendAsync(detailRequest);
         Assert.Equal(HttpStatusCode.NotFound, detailResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task AutomationEndpoints_PreserveExplicitDefaultResponseMode()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+
+        using var saveRequest = new HttpRequestMessage(HttpMethod.Put, "/admin/automations/auto_default_response_mode")
+        {
+            Content = JsonContent("""
+                {
+                  "id": "auto_default_response_mode",
+                  "name": "Default response mode automation",
+                  "enabled": true,
+                  "schedule": "@daily",
+                  "prompt": "Ping once a day.",
+                  "deliveryChannelId": "cron",
+                  "responseMode": "default",
+                  "source": "managed"
+                }
+                """)
+        };
+        saveRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var saveResponse = await harness.Client.SendAsync(saveRequest);
+        saveResponse.EnsureSuccessStatusCode();
+
+        using var detailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/auto_default_response_mode");
+        detailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var detailResponse = await harness.Client.SendAsync(detailRequest);
+        detailResponse.EnsureSuccessStatusCode();
+        using var detailPayload = await ReadJsonAsync(detailResponse);
+
+        Assert.Equal(
+            SessionResponseModes.Default,
+            detailPayload.RootElement.GetProperty("automation").GetProperty("responseMode").GetString());
+    }
+
+    [Fact]
+    public async Task AutomationRunEndpoints_Replay_And_ClearQuarantine_Work()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var store = new FileFeatureStore(harness.StoragePath);
+
+        await store.SaveAutomationAsync(new AutomationDefinition
+        {
+            Id = "auto_run_history",
+            Name = "Run history automation",
+            Enabled = true,
+            Schedule = "@daily",
+            Prompt = "Summarize alerts.",
+            DeliveryChannelId = "cron",
+            RetryPolicy = new AutomationRetryPolicy()
+        }, CancellationToken.None);
+
+        await store.SaveRunStateAsync(new AutomationRunState
+        {
+            AutomationId = "auto_run_history",
+            Outcome = AutomationVerificationStatuses.Failed,
+            LifecycleState = AutomationLifecycleStates.Completed,
+            VerificationStatus = AutomationVerificationStatuses.Failed,
+            HealthState = AutomationHealthStates.Quarantined,
+            LastRunAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            LastCompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            LastRunId = "run-1",
+            FailureStreak = 3,
+            QuarantinedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4),
+            QuarantineReason = "Repeated failures."
+        }, CancellationToken.None);
+        await store.SaveRunRecordAsync(new AutomationRunRecord
+        {
+            RunId = "run-1",
+            AutomationId = "auto_run_history",
+            TriggerSource = AutomationRunTriggerSources.Schedule,
+            LifecycleState = AutomationLifecycleStates.Completed,
+            VerificationStatus = AutomationVerificationStatuses.Failed,
+            VerificationSummary = "Expected file does not exist.",
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-4)
+        }, CancellationToken.None);
+
+        using var runsRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/auto_run_history/runs");
+        runsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var runsResponse = await harness.Client.SendAsync(runsRequest);
+        Assert.Equal(HttpStatusCode.OK, runsResponse.StatusCode);
+        using var runsPayload = await ReadJsonAsync(runsResponse);
+        Assert.Equal(1, runsPayload.RootElement.GetProperty("items").GetArrayLength());
+
+        using var runDetailRequest = new HttpRequestMessage(HttpMethod.Get, "/admin/automations/auto_run_history/runs/run-1");
+        runDetailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var runDetailResponse = await harness.Client.SendAsync(runDetailRequest);
+        Assert.Equal(HttpStatusCode.OK, runDetailResponse.StatusCode);
+        using var runDetailPayload = await ReadJsonAsync(runDetailResponse);
+        Assert.Equal("run-1", runDetailPayload.RootElement.GetProperty("run").GetProperty("runId").GetString());
+
+        using var replayRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/automations/auto_run_history/runs/run-1/replay");
+        replayRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var replayResponse = await harness.Client.SendAsync(replayRequest);
+        Assert.Equal(HttpStatusCode.Accepted, replayResponse.StatusCode);
+        using var replayPayload = await ReadJsonAsync(replayResponse);
+        Assert.True(replayPayload.RootElement.GetProperty("success").GetBoolean());
+
+        var replayed = await harness.Runtime.Pipeline.InboundReader.ReadAsync(CancellationToken.None);
+        Assert.Equal("auto_run_history", replayed.CronJobName);
+        Assert.Equal(AutomationRunTriggerSources.Replay, replayed.AutomationTriggerSource);
+        Assert.False(string.IsNullOrWhiteSpace(replayed.AutomationRunId));
+
+        using var clearRequest = new HttpRequestMessage(HttpMethod.Post, "/admin/automations/auto_run_history/quarantine/clear");
+        clearRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var clearResponse = await harness.Client.SendAsync(clearRequest);
+        Assert.Equal(HttpStatusCode.OK, clearResponse.StatusCode);
+
+        var clearedState = await store.GetRunStateAsync("auto_run_history", CancellationToken.None);
+        Assert.NotNull(clearedState);
+        Assert.Null(clearedState!.QuarantinedAtUtc);
+        Assert.Equal(0, clearedState.FailureStreak);
+    }
+
+    [Fact]
+    public async Task IntegrationAutomationRunEndpoints_Replay_And_ClearQuarantine_Work()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var store = new FileFeatureStore(harness.StoragePath);
+
+        await store.SaveAutomationAsync(new AutomationDefinition
+        {
+            Id = "auto_integration_runs",
+            Name = "Integration runs",
+            Enabled = true,
+            Schedule = "@daily",
+            Prompt = "Summarize changes.",
+            DeliveryChannelId = "cron",
+            RetryPolicy = new AutomationRetryPolicy()
+        }, CancellationToken.None);
+
+        await store.SaveRunStateAsync(new AutomationRunState
+        {
+            AutomationId = "auto_integration_runs",
+            Outcome = AutomationVerificationStatuses.Failed,
+            LifecycleState = AutomationLifecycleStates.Completed,
+            VerificationStatus = AutomationVerificationStatuses.Failed,
+            HealthState = AutomationHealthStates.Quarantined,
+            LastRunAtUtc = DateTimeOffset.UtcNow.AddMinutes(-6),
+            LastCompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            LastRunId = "run-int-1",
+            FailureStreak = 3,
+            QuarantinedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+            QuarantineReason = "Repeated failures."
+        }, CancellationToken.None);
+        await store.SaveRunRecordAsync(new AutomationRunRecord
+        {
+            RunId = "run-int-1",
+            AutomationId = "auto_integration_runs",
+            TriggerSource = AutomationRunTriggerSources.Schedule,
+            LifecycleState = AutomationLifecycleStates.Completed,
+            VerificationStatus = AutomationVerificationStatuses.Failed,
+            VerificationSummary = "Expected endpoint returned 500.",
+            StartedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-6),
+            CompletedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5)
+        }, CancellationToken.None);
+
+        using var runsRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/automations/auto_integration_runs/runs");
+        runsRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var runsResponse = await harness.Client.SendAsync(runsRequest);
+        Assert.Equal(HttpStatusCode.OK, runsResponse.StatusCode);
+        using var runsPayload = await ReadJsonAsync(runsResponse);
+        Assert.Equal(1, runsPayload.RootElement.GetProperty("items").GetArrayLength());
+
+        using var runDetailRequest = new HttpRequestMessage(HttpMethod.Get, "/api/integration/automations/auto_integration_runs/runs/run-int-1");
+        runDetailRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var runDetailResponse = await harness.Client.SendAsync(runDetailRequest);
+        Assert.Equal(HttpStatusCode.OK, runDetailResponse.StatusCode);
+        using var runDetailPayload = await ReadJsonAsync(runDetailResponse);
+        Assert.Equal("run-int-1", runDetailPayload.RootElement.GetProperty("run").GetProperty("runId").GetString());
+
+        using var replayRequest = new HttpRequestMessage(HttpMethod.Post, "/api/integration/automations/auto_integration_runs/runs/run-int-1/replay");
+        replayRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var replayResponse = await harness.Client.SendAsync(replayRequest);
+        Assert.Equal(HttpStatusCode.Accepted, replayResponse.StatusCode);
+        using var replayPayload = await ReadJsonAsync(replayResponse);
+        Assert.True(replayPayload.RootElement.GetProperty("success").GetBoolean());
+
+        var replayed = await harness.Runtime.Pipeline.InboundReader.ReadAsync(CancellationToken.None);
+        Assert.Equal("auto_integration_runs", replayed.CronJobName);
+        Assert.Equal(AutomationRunTriggerSources.Replay, replayed.AutomationTriggerSource);
+        Assert.False(string.IsNullOrWhiteSpace(replayed.AutomationRunId));
+
+        using var clearRequest = new HttpRequestMessage(HttpMethod.Post, "/api/integration/automations/auto_integration_runs/quarantine/clear");
+        clearRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        var clearResponse = await harness.Client.SendAsync(clearRequest);
+        Assert.Equal(HttpStatusCode.OK, clearResponse.StatusCode);
+
+        var clearedState = await store.GetRunStateAsync("auto_integration_runs", CancellationToken.None);
+        Assert.NotNull(clearedState);
+        Assert.Null(clearedState!.QuarantinedAtUtc);
+        Assert.Equal(0, clearedState.FailureStreak);
     }
 
     [Fact]
@@ -3300,6 +4241,65 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public void CompanionViewModel_ToolResultFailures_RenderStructuredGuidance_AndSuccessRemainsQuiet()
+    {
+        var settingsDir = Path.Combine(Path.GetTempPath(), "openclaw-companion-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(settingsDir);
+
+        try
+        {
+            var viewModel = new MainWindowViewModel(new SettingsStore(settingsDir), new GatewayWebSocketClient());
+            var inboundEnvelopeType = typeof(MainWindowViewModel).GetNestedType("InboundEnvelope", System.Reflection.BindingFlags.NonPublic);
+            Assert.NotNull(inboundEnvelopeType);
+            var inboundEnvelopeCtor = inboundEnvelopeType!
+                .GetConstructors(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public)
+                .Single(static ctor => ctor.GetParameters().Length == 8);
+
+            var applyEnvelope = typeof(MainWindowViewModel).GetMethod("ApplyEnvelope", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            Assert.NotNull(applyEnvelope);
+
+            var failureEnvelope = inboundEnvelopeCtor.Invoke(
+                [
+                "tool_result",
+                "Error: restricted tool call.",
+                null,
+                "browser",
+                ToolResultStatuses.Blocked,
+                ToolFailureCodes.OperatorAuthRequired,
+                "Operator authentication required.",
+                "Authenticate with an operator token and retry."
+                ]);
+            Assert.NotNull(failureEnvelope);
+
+            applyEnvelope!.Invoke(viewModel, [failureEnvelope]);
+
+            var failureMessage = Assert.Single(viewModel.Messages);
+            Assert.Equal(OpenClaw.Companion.Models.ChatRole.System, failureMessage.Role);
+            Assert.Contains("operator authentication", failureMessage.Text, StringComparison.OrdinalIgnoreCase);
+
+            var successEnvelope = inboundEnvelopeCtor.Invoke(
+                [
+                "tool_result",
+                "ok",
+                null,
+                "browser",
+                ToolResultStatuses.Completed,
+                null,
+                null,
+                null
+                ]);
+            Assert.NotNull(successEnvelope);
+
+            applyEnvelope.Invoke(viewModel, [successEnvelope]);
+            Assert.Single(viewModel.Messages);
+        }
+        finally
+        {
+            Directory.Delete(settingsDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task OpenApi_Document_IsExposed()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: false);
@@ -3343,7 +4343,11 @@ public sealed class GatewayAdminEndpointTests
             "/api/integration/automations",
             "/api/integration/automations/templates",
             "/api/integration/automations/{id}",
+            "/api/integration/automations/{id}/runs",
+            "/api/integration/automations/{id}/runs/{runId}",
             "/api/integration/automations/{id}/run",
+            "/api/integration/automations/{id}/runs/{runId}/replay",
+            "/api/integration/automations/{id}/quarantine/clear",
             "/api/integration/runtime-events",
             "/api/integration/messages",
             "/mcp/",
@@ -3396,7 +4400,11 @@ public sealed class GatewayAdminEndpointTests
             "/admin/automations/templates",
             "/admin/automations/preview",
             "/admin/automations/{id}",
+            "/admin/automations/{id}/runs",
+            "/admin/automations/{id}/runs/{runId}",
             "/admin/automations/{id}/run",
+            "/admin/automations/{id}/runs/{runId}/replay",
+            "/admin/automations/{id}/quarantine/clear",
             "/admin/learning/proposals",
             "/admin/learning/proposals/{id}",
             "/admin/channels/auth",
@@ -3449,6 +4457,34 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task WebChat_ToolFailures_AreRenderedInTranscript()
+    {
+        var webChatHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/webchat.html"));
+        var html = await File.ReadAllTextAsync(webChatHtmlPath);
+
+        Assert.Contains("function isToolFailureEnvelope", html, StringComparison.Ordinal);
+        Assert.Contains("function explainToolFailure", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"chat-state-bar\"", html, StringComparison.Ordinal);
+        Assert.Contains("refreshChatState()", html, StringComparison.Ordinal);
+        Assert.Contains("case 'tool_result':", html, StringComparison.Ordinal);
+        Assert.Contains("if (isToolFailureEnvelope(env))", html, StringComparison.Ordinal);
+        Assert.Contains("appendSystem(explainToolFailure(env), true);", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AdminHtml_ExposesSetupVerifyAndFirstOperatorWizard()
+    {
+        var adminHtmlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../src/OpenClaw.Gateway/wwwroot/admin.html"));
+        var html = await File.ReadAllTextAsync(adminHtmlPath);
+
+        Assert.Contains("id=\"setup-verify-button\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"setup-wizard-run-button\"", html, StringComparison.Ordinal);
+        Assert.Contains("loadSetupVerification()", html, StringComparison.Ordinal);
+        Assert.Contains("runFirstOperatorWizard()", html, StringComparison.Ordinal);
+        Assert.Contains("/admin/setup/verify", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CliMigrate_Help_NotesBareAliasRemainsLegacy()
     {
         var previousOut = Console.Out;
@@ -3487,6 +4523,8 @@ public sealed class GatewayAdminEndpointTests
             payload.RootElement.GetProperty("csrfToken").GetString()!);
     }
 
+    private const string ShellApprovalArgumentsJson = """{"command":"pwd"}""";
+
     private static StringContent JsonContent(string json)
         => new(json, Encoding.UTF8, "application/json");
 
@@ -3504,6 +4542,156 @@ public sealed class GatewayAdminEndpointTests
     {
         var payload = await response.Content.ReadAsStringAsync();
         return JsonDocument.Parse(payload);
+    }
+
+    private static async Task<string> WaitForToolApprovalAsync(
+        ToolApprovalCallback? approvalCallback,
+        CancellationToken ct,
+        string approvedText,
+        string deniedText)
+    {
+        Assert.NotNull(approvalCallback);
+        var approved = await approvalCallback!("shell", ShellApprovalArgumentsJson, ct);
+        return approved ? approvedText : deniedText;
+    }
+
+    private static async IAsyncEnumerable<AgentStreamEvent> StreamToolApprovalAsync(
+        ToolApprovalCallback? approvalCallback,
+        [EnumeratorCancellation] CancellationToken ct,
+        string approvedText,
+        string deniedText)
+    {
+        Assert.NotNull(approvalCallback);
+
+        yield return new AgentStreamEvent
+        {
+            Type = AgentStreamEventType.ToolStart,
+            Content = "shell",
+            ToolName = "shell",
+            ToolArguments = ShellApprovalArgumentsJson
+        };
+
+        var approved = await approvalCallback!("shell", ShellApprovalArgumentsJson, ct);
+        var content = approved ? approvedText : deniedText;
+
+        yield return new AgentStreamEvent
+        {
+            Type = AgentStreamEventType.ToolResult,
+            Content = content,
+            ToolName = "shell",
+            ToolArguments = ShellApprovalArgumentsJson
+        };
+
+        yield return AgentStreamEvent.TextDelta(content);
+        yield return AgentStreamEvent.Complete();
+    }
+
+    private static async Task<ToolApprovalRequest> WaitForPendingApprovalAsync(
+        ToolApprovalService service,
+        string channelId,
+        TimeSpan? timeout = null)
+    {
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(2));
+        while (DateTime.UtcNow < deadline)
+        {
+            var pending = service.ListPending(channelId);
+            if (pending.Count > 0)
+                return pending[0];
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException($"Pending approval for channel '{channelId}' was not created in time.");
+    }
+
+    private static async Task<HttpResponseMessage> SubmitApprovalDecisionAsync(
+        HttpClient client,
+        string authToken,
+        ToolApprovalRequest approval,
+        bool approved)
+    {
+        var requestUri =
+            $"/tools/approve?approvalId={Uri.EscapeDataString(approval.ApprovalId)}" +
+            $"&approved={(approved ? "true" : "false")}" +
+            $"&requesterChannelId={Uri.EscapeDataString(approval.ChannelId)}" +
+            $"&requesterSenderId={Uri.EscapeDataString(approval.SenderId)}";
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", authToken);
+        return await client.SendAsync(request);
+    }
+
+    private static HttpRequestMessage CreateStableChatCompletionRequest(string stableSessionId, string message, string? bearerToken = null)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent($$"""{"messages":[{"role":"user","content":"{{message}}"}]}""")
+        };
+        if (!string.IsNullOrWhiteSpace(bearerToken))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+        request.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+        return request;
+    }
+
+    private static string CreateHttpRequesterKey(string bearerToken)
+    {
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(bearerToken));
+        return "token:" + Convert.ToHexString(hash.AsSpan(0, 8));
+    }
+
+    private static StableSessionBindingInfo CreateStableSessionBinding(string stableSessionId, string requesterKey)
+    {
+        var namespaceHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(requesterKey)).AsSpan(0, 8))
+            .ToLowerInvariant();
+        return new StableSessionBindingInfo
+        {
+            ExternalSessionId = stableSessionId,
+            Namespace = namespaceHash,
+            OwnerKey = requesterKey,
+            BoundAtUtc = DateTimeOffset.UtcNow
+        };
+    }
+
+    private static string BuildScopedStableSessionId(StableSessionBindingInfo binding)
+        => $"openai-stable:{binding.Namespace}:{binding.ExternalSessionId}";
+
+    private static string CreateOperatorToken(GatewayTestHarness harness, string role, string username)
+    {
+        var operatorAccounts = harness.App.Services.GetRequiredService<OperatorAccountService>();
+        var account = operatorAccounts.Create(new OperatorAccountCreateRequest
+        {
+            Username = username,
+            Password = "viewer-pass",
+            Role = role
+        });
+        var token = operatorAccounts.CreateToken(account.Id, new OperatorAccountTokenCreateRequest { Label = username });
+        Assert.NotNull(token);
+        return token!.Token;
+    }
+
+    private static async Task<Session?> FindStableSessionAsync(GatewayTestHarness harness, string externalStableSessionId)
+    {
+        var sessions = await harness.Runtime.SessionManager.ListActiveAsync(CancellationToken.None);
+        return sessions.FirstOrDefault(session =>
+            string.Equals(session.StableSessionBinding?.ExternalSessionId, externalStableSessionId, StringComparison.Ordinal));
+    }
+
+    private static async Task AssertSessionLockReleasedAsync(GatewayTestHarness harness, string sessionId)
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        await using var sessionLock = await harness.Runtime.SessionManager.AcquireSessionLockAsync(sessionId, cts.Token);
+    }
+
+    private static void UpdateMax(ref int target, int value)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref target);
+            if (value <= current)
+                return;
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+                return;
+        }
     }
 
     private static async Task WaitForAsync(Func<object?, bool> condition, object? state, TimeSpan timeout)
@@ -3551,16 +4739,18 @@ public sealed class GatewayAdminEndpointTests
         bool nonLoopbackBind,
         Action<GatewayConfig>? configure = null,
         Func<string, IMemoryStore>? memoryStoreFactory = null,
-        Action<IServiceCollection, GatewayConfig>? configureServices = null)
+        Action<IServiceCollection, GatewayConfig>? configureServices = null,
+        GatewayRuntimeState? runtimeStateOverride = null)
     {
-        return await CreateHarnessAsyncInternal(nonLoopbackBind, configure, memoryStoreFactory, configureServices);
+        return await CreateHarnessAsyncInternal(nonLoopbackBind, configure, memoryStoreFactory, configureServices, runtimeStateOverride);
     }
 
     private static async Task<GatewayTestHarness> CreateHarnessAsyncInternal(
         bool nonLoopbackBind,
         Action<GatewayConfig>? configure,
         Func<string, IMemoryStore>? memoryStoreFactory,
-        Action<IServiceCollection, GatewayConfig>? configureServices)
+        Action<IServiceCollection, GatewayConfig>? configureServices,
+        GatewayRuntimeState? runtimeStateOverride)
     {
         var storagePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "openclaw-admin-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(storagePath);
@@ -3593,10 +4783,12 @@ public sealed class GatewayAdminEndpointTests
         };
         configure?.Invoke(config);
 
+        var runtimeState = runtimeStateOverride ?? RuntimeModeResolver.Resolve(config.Runtime);
+
         var startup = new GatewayStartupContext
         {
             Config = config,
-            RuntimeState = RuntimeModeResolver.Resolve(config.Runtime),
+            RuntimeState = runtimeState,
             IsNonLoopbackBind = nonLoopbackBind,
             WorkspacePath = null
         };
@@ -3649,7 +4841,7 @@ public sealed class GatewayAdminEndpointTests
             var contractStartup = new GatewayStartupContext
             {
                 Config = config,
-                RuntimeState = RuntimeModeResolver.Resolve(config.Runtime),
+                RuntimeState = runtimeState,
                 IsNonLoopbackBind = nonLoopbackBind,
                 WorkspacePath = null
             };

@@ -69,7 +69,8 @@ public sealed class MafAgentRuntime : IAgentRuntime
             context.RuntimeMetrics,
             logger,
             config: context.Config,
-            toolSandbox: context.ToolSandbox);
+            toolSandbox: context.ToolSandbox,
+            auditLog: context.ToolAuditLog);
         _options = options;
         _agentFactory = agentFactory;
         _sessionStateStore = sessionStateStore;
@@ -487,6 +488,8 @@ public sealed class MafAgentRuntime : IAgentRuntime
         {
             systemPrompt = _systemPrompt;
         }
+
+        systemPrompt = AgentSystemPromptBuilder.ApplyResponseMode(systemPrompt, session.ResponseMode);
 
         if (string.IsNullOrWhiteSpace(session.SystemPromptOverride))
             return systemPrompt;

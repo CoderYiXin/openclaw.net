@@ -44,6 +44,12 @@ public sealed partial class MainWindowViewModel : ViewModelBase
     private bool _debugMode;
 
     [ObservableProperty]
+    private bool _approvalDesktopNotificationsEnabled = true;
+
+    [ObservableProperty]
+    private bool _approvalDesktopNotificationsOnlyWhenUnfocused = true;
+
+    [ObservableProperty]
     private bool _isConnected;
 
     [ObservableProperty]
@@ -111,6 +117,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             AllowPlaintextTokenFallback = settings.AllowPlaintextTokenFallback;
             AuthToken = settings.AuthToken ?? "";
             DebugMode = settings.DebugMode;
+            ApprovalDesktopNotificationsEnabled = settings.ApprovalDesktopNotificationsEnabled;
+            ApprovalDesktopNotificationsOnlyWhenUnfocused = settings.ApprovalDesktopNotificationsOnlyWhenUnfocused;
         }
         finally
         {
@@ -130,6 +138,8 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             RememberToken = RememberToken,
             AllowPlaintextTokenFallback = AllowPlaintextTokenFallback,
             DebugMode = DebugMode,
+            ApprovalDesktopNotificationsEnabled = ApprovalDesktopNotificationsEnabled,
+            ApprovalDesktopNotificationsOnlyWhenUnfocused = ApprovalDesktopNotificationsOnlyWhenUnfocused,
             AuthToken = string.IsNullOrWhiteSpace(AuthToken) ? null : AuthToken
         });
         ShowSettingsWarningIfNeeded();
@@ -183,6 +193,11 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             case "tool_start":
                 if (!string.IsNullOrWhiteSpace(envelope.Text))
                     AddSystemMessageCore($"Agent invoked tool: {envelope.Text}");
+                return;
+
+            case "tool_result":
+                if (IsToolFailureEnvelope(envelope))
+                    AddSystemMessageCore(ExplainToolFailure(envelope));
                 return;
 
             case "tool_approval_required":
@@ -274,7 +289,7 @@ public sealed partial class MainWindowViewModel : ViewModelBase
 
     private static bool TryParseEnvelope(string payload, out InboundEnvelope envelope)
     {
-        envelope = new InboundEnvelope(string.Empty, string.Empty, string.Empty);
+        envelope = new InboundEnvelope(string.Empty, string.Empty, string.Empty, null, null, null, null, null);
 
         if (payload.Length == 0 || payload[0] != '{')
             return false;
@@ -301,8 +316,23 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             var inReplyToMessageId = root.TryGetProperty("inReplyToMessageId", out var replyProp)
                 ? replyProp.GetString()
                 : null;
+            var toolName = root.TryGetProperty("toolName", out var toolNameProp)
+                ? toolNameProp.GetString()
+                : null;
+            var resultStatus = root.TryGetProperty("resultStatus", out var resultStatusProp)
+                ? resultStatusProp.GetString()
+                : null;
+            var failureCode = root.TryGetProperty("failureCode", out var failureCodeProp)
+                ? failureCodeProp.GetString()
+                : null;
+            var failureMessage = root.TryGetProperty("failureMessage", out var failureMessageProp)
+                ? failureMessageProp.GetString()
+                : null;
+            var nextStep = root.TryGetProperty("nextStep", out var nextStepProp)
+                ? nextStepProp.GetString()
+                : null;
 
-            envelope = new InboundEnvelope(type, text, inReplyToMessageId);
+            envelope = new InboundEnvelope(type, text, inReplyToMessageId, toolName, resultStatus, failureCode, failureMessage, nextStep);
             return true;
         }
         catch
@@ -310,6 +340,49 @@ public sealed partial class MainWindowViewModel : ViewModelBase
             return false;
         }
     }
+
+    private static bool IsToolFailureEnvelope(InboundEnvelope envelope)
+        => !string.IsNullOrWhiteSpace(envelope.FailureCode)
+            || (!string.IsNullOrWhiteSpace(envelope.ResultStatus) &&
+                !string.Equals(envelope.ResultStatus, ToolResultStatuses.Completed, StringComparison.OrdinalIgnoreCase))
+            || LooksLikeToolFailureText(envelope.Text);
+
+    private static string ExplainToolFailure(InboundEnvelope envelope)
+    {
+        var toolName = string.IsNullOrWhiteSpace(envelope.ToolName) ? "This tool" : envelope.ToolName;
+        var nextStep = string.IsNullOrWhiteSpace(envelope.NextStep) ? null : envelope.NextStep;
+        var code = envelope.FailureCode?.Trim().ToLowerInvariant();
+
+        if (code == ToolFailureCodes.PresetBlocked)
+            return $"{toolName} is blocked by the active preset on this surface.{AppendNextStep(nextStep)}";
+        if (code == ToolFailureCodes.ApprovalRequired)
+            return $"This tool requires operator approval before it can run.{AppendNextStep(nextStep)}";
+        if (code == ToolFailureCodes.OperatorAuthRequired)
+            return $"This tool requires operator authentication on the current surface.{AppendNextStep(nextStep)}";
+        if (code is ToolFailureCodes.BrowserBackendMissing or ToolFailureCodes.RuntimeCapabilityUnavailable)
+            return $"{toolName} is unavailable in the current runtime.{AppendNextStep(nextStep)}";
+        if (!string.IsNullOrWhiteSpace(envelope.FailureMessage))
+            return envelope.FailureMessage!;
+        if (!string.IsNullOrWhiteSpace(envelope.Text))
+            return envelope.Text!;
+
+        return $"{toolName} failed.{AppendNextStep(nextStep)}";
+    }
+
+    private static bool LooksLikeToolFailureText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        return text.Contains("error:", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("requires approval", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("blocked", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("denied", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("unavailable", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string AppendNextStep(string? nextStep)
+        => string.IsNullOrWhiteSpace(nextStep) ? string.Empty : $" {nextStep}";
 
     private void AddSystemMessage(string text)
     {
@@ -339,6 +412,20 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         if (value)
             ClearActiveAssistantMessage(replyToMessageId: null);
 
+        SaveSettings();
+    }
+
+    partial void OnApprovalDesktopNotificationsEnabledChanged(bool value)
+    {
+        if (_isLoadingSettings)
+            return;
+        SaveSettings();
+    }
+
+    partial void OnApprovalDesktopNotificationsOnlyWhenUnfocusedChanged(bool value)
+    {
+        if (_isLoadingSettings)
+            return;
         SaveSettings();
     }
 
@@ -547,5 +634,13 @@ public sealed partial class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private sealed record InboundEnvelope(string Type, string? Text, string? InReplyToMessageId);
+    private sealed record InboundEnvelope(
+        string Type,
+        string? Text,
+        string? InReplyToMessageId,
+        string? ToolName,
+        string? ResultStatus,
+        string? FailureCode,
+        string? FailureMessage,
+        string? NextStep);
 }

@@ -105,7 +105,8 @@ public sealed class AgentRuntime : IAgentRuntime
         Func<Session, bool>? isContractTokenBudgetExceeded = null,
         Func<Session, bool>? isContractRuntimeBudgetExceeded = null,
         Action<Session, string, string, long, long>? recordContractTurnUsage = null,
-        Action<Session, string>? appendContractSnapshot = null)
+        Action<Session, string>? appendContractSnapshot = null,
+        ToolAuditLog? toolAuditLog = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -149,7 +150,8 @@ public sealed class AgentRuntime : IAgentRuntime
             toolSandbox: toolSandbox,
             toolUsageTracker: toolUsageTracker,
             executionRouter: executionRouter,
-            toolPresetResolver: toolPresetResolver);
+            toolPresetResolver: toolPresetResolver,
+            auditLog: toolAuditLog);
         _sessionTokenBudget = sessionTokenBudget;
         _estimateTokenBudgetAdmission = gatewayConfig?.EnableEstimatedTokenAdmissionControl ?? false;
         _recall = recall;
@@ -436,7 +438,9 @@ public sealed class AgentRuntime : IAgentRuntime
 
         if (_requireToolApproval && approvalCallback is null)
         {
-            _logger?.LogWarning("[{CorrelationId}] Streaming session has RequireToolApproval=true but no approval callback — protected tools will be auto-denied",
+            _logger?.LogWarning(
+                "[{CorrelationId}] Streaming session has RequireToolApproval=true but no approval callback is registered — protected tools will be auto-denied. " +
+                "Connect through /chat for interactive approvals, or set OpenClaw:Tooling:RequireToolApproval=false for trusted local sessions.",
                 turnCtx.CorrelationId);
         }
 
@@ -572,13 +576,19 @@ public sealed class AgentRuntime : IAgentRuntime
                         FullMode = BoundedChannelFullMode.Wait
                     });
 
-                    async Task<(ToolInvocation, FunctionResultContent)> RunToolAsync()
+                    async Task<(ToolExecutionResult, FunctionResultContent)> RunToolAsync()
                     {
                         try
                         {
-                            return await ExecuteSingleToolCallAsync(
-                                call, session, turnCtx, isStreaming: true, approvalCallback, ct,
+                            var execution = await _toolExecutor.ExecuteAsync(
+                                call,
+                                session,
+                                turnCtx,
+                                isStreaming: true,
+                                approvalCallback,
+                                ct,
                                 onDelta: async chunk => await channel.Writer.WriteAsync(chunk, ct));
+                            return (execution, execution.ToFunctionResultContent(call.CallId));
                         }
                         finally
                         {
@@ -591,11 +601,17 @@ public sealed class AgentRuntime : IAgentRuntime
                     await foreach (var chunk in channel.Reader.ReadAllAsync(ct))
                         yield return AgentStreamEvent.ToolDelta(call.Name, chunk);
 
-                    var (inv, res) = await task;
-                    invocations.Add(inv);
+                    var (execution, res) = await task;
+                    invocations.Add(execution.Invocation);
                     toolResults.Add(res);
 
-                    yield return AgentStreamEvent.ToolCompleted(inv.ToolName, inv.Result ?? "");
+                    yield return AgentStreamEvent.ToolCompleted(
+                        execution.Invocation.ToolName,
+                        execution.ResultText,
+                        resultStatus: execution.ResultStatus,
+                        failureCode: execution.FailureCode,
+                        failureMessage: execution.FailureMessage,
+                        nextStep: execution.NextStep);
                 }
             }
             else
@@ -1359,6 +1375,8 @@ public sealed class AgentRuntime : IAgentRuntime
         {
             systemPrompt = _systemPrompt;
         }
+
+        systemPrompt = AgentSystemPromptBuilder.ApplyResponseMode(systemPrompt, session.ResponseMode);
 
         if (string.IsNullOrWhiteSpace(session.SystemPromptOverride))
             return systemPrompt;
