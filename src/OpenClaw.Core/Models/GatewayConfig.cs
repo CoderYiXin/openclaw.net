@@ -17,6 +17,7 @@ public sealed class GatewayConfig
     public MemoryConfig Memory { get; set; } = new();
     public SecurityConfig Security { get; set; } = new();
     public WebSocketConfig WebSocket { get; set; } = new();
+    public CanvasConfig Canvas { get; set; } = new();
     public ToolingConfig Tooling { get; set; } = new();
     public SandboxConfig Sandbox { get; set; } = new();
     public ExecutionConfig Execution { get; set; } = new();
@@ -284,13 +285,45 @@ public sealed class SecurityConfig
     public int BrowserRememberDays { get; set; } = 30;
 }
 
+public sealed class UrlSafetyConfig
+{
+    /// <summary>Enable URL validation for tools that initiate outbound navigation or fetches.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Block loopback, private, link-local, metadata, and other non-public address ranges.</summary>
+    public bool BlockPrivateNetworkTargets { get; set; } = true;
+
+    /// <summary>Additional host globs to block. Examples: ["*.internal", "metadata.google.internal"].</summary>
+    public string[] BlockedHostGlobs { get; set; } = [];
+
+    /// <summary>Additional CIDR ranges to block. Examples: ["203.0.113.0/24", "2001:db8::/32"].</summary>
+    public string[] BlockedCidrs { get; set; } = [];
+}
+
 public sealed class WebSocketConfig
 {
-    public int MaxMessageBytes { get; set; } = 65_536;
+    public int MaxMessageBytes { get; set; } = 256 * 1024;
     public int MaxConnections { get; set; } = 1_000;
     public int MaxConnectionsPerIp { get; set; } = 50;
     public int MessagesPerMinutePerConnection { get; set; } = 120;
     public int ReceiveTimeoutSeconds { get; set; } = 120;
+}
+
+public sealed class CanvasConfig
+{
+    /// <summary>Enables first-party Canvas/A2UI command forwarding on websocket clients.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Canvas is disabled on non-loopback binds unless this is explicitly enabled.</summary>
+    public bool AllowOnPublicBind { get; set; } = false;
+
+    public int MaxCommandBytes { get; set; } = 256 * 1024;
+    public int MaxSnapshotBytes { get; set; } = 256 * 1024;
+    public int CommandTimeoutSeconds { get; set; } = 10;
+    public int MaxFramesPerPush { get; set; } = 100;
+    public bool EnableLocalHtml { get; set; } = true;
+    public bool EnableRemoteNavigation { get; set; } = false;
+    public bool EnableEval { get; set; } = true;
 }
 
 public sealed class ToolingConfig
@@ -334,6 +367,7 @@ public sealed class ToolingConfig
     public bool AllowBrowserEvaluate { get; set; } = true;
     public bool BrowserHeadless { get; set; } = true;
     public int BrowserTimeoutSeconds { get; set; } = 30;
+    public UrlSafetyConfig UrlSafety { get; set; } = new();
     public Dictionary<string, ToolsetConfig> Toolsets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, ToolPresetConfig> Presets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> SurfaceBindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);

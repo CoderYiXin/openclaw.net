@@ -20,6 +20,7 @@ public sealed class SetupVerificationRequest
     public ModelSelectionDoctorResponse? ModelDoctor { get; init; }
     public IModelProfileRegistry? ModelProfiles { get; init; }
     public ProviderSmokeRegistry? ProviderSmokeRegistry { get; init; }
+    public ConfigSourceDiagnostics? ConfigSources { get; init; }
 }
 
 public sealed class DoctorReportRequest
@@ -35,6 +36,7 @@ public sealed class DoctorReportRequest
     public ModelSelectionDoctorResponse? ModelDoctor { get; init; }
     public IModelProfileRegistry? ModelProfiles { get; init; }
     public ProviderSmokeRegistry? ProviderSmokeRegistry { get; init; }
+    public ConfigSourceDiagnostics? ConfigSources { get; init; }
 }
 
 public static class SetupVerificationService
@@ -64,7 +66,8 @@ public static class SetupVerificationService
             WorkspacePath = request.WorkspacePath,
             ModelDoctor = request.ModelDoctor,
             ModelProfiles = request.ModelProfiles,
-            ProviderSmokeRegistry = request.ProviderSmokeRegistry
+            ProviderSmokeRegistry = request.ProviderSmokeRegistry,
+            ConfigSources = request.ConfigSources
         }, ct);
 
         return BuildSetupVerificationResponse(report);
@@ -82,6 +85,7 @@ public static class SetupVerificationService
         {
             BuildRuntimeCheck(request.RuntimeState),
             BuildConfigCheck(config),
+            BuildConfigSourceDiagnosticsCheck(request.ConfigSources),
             BuildPromptCacheCheck(config),
             BuildModelProfileConsistencyCheck(config),
             BuildWorkspaceCheck(config, workspacePath),
@@ -324,6 +328,35 @@ public static class SetupVerificationService
         };
     }
 
+    private static DoctorCheckItem BuildConfigSourceDiagnosticsCheck(ConfigSourceDiagnostics? diagnostics)
+    {
+        if (diagnostics is null || diagnostics.Items.Count == 0)
+        {
+            return new DoctorCheckItem
+            {
+                Id = "config_sources",
+                Label = "Effective configuration sources",
+                Category = DoctorCheckCategories.Config,
+                Status = SetupCheckStates.Skip,
+                Summary = "Configuration source diagnostics were not supplied."
+            };
+        }
+
+        return new DoctorCheckItem
+        {
+            Id = "config_sources",
+            Label = "Effective configuration sources",
+            Category = DoctorCheckCategories.Config,
+            Status = SetupCheckStates.Pass,
+            Summary = "Effective bind, storage, provider, and secret-source winners are listed.",
+            Detail = string.Join(Environment.NewLine, diagnostics.Items.Select(static item =>
+                $"- {item.Label}: {FormatConfigDiagnosticValue(item)} (source: {item.Source})"))
+        };
+    }
+
+    private static string FormatConfigDiagnosticValue(ConfigSourceDiagnosticItem item)
+        => item.Redacted ? "configured (redacted)" : item.EffectiveValue;
+
     private static DoctorCheckItem BuildPromptCacheCheck(GatewayConfig config)
         => HasValidPromptCacheConfiguration(config)
             ? new DoctorCheckItem
@@ -435,6 +468,8 @@ public static class SetupVerificationService
             issues.Add("Public bind is enabled without an auth token.");
         if (publicBind && !config.Security.RequireRequesterMatchForHttpToolApproval)
             warnings.Add("Requester-matched HTTP tool approvals are disabled.");
+        if (publicBind && config.Canvas.Enabled && !config.Canvas.AllowOnPublicBind)
+            issues.Add("Canvas command forwarding is enabled on a public bind without Canvas.AllowOnPublicBind.");
         if (publicBind && !config.Security.TrustForwardedHeaders)
             warnings.Add("Forwarded headers are not trusted, so browser session cookies may not be marked secure behind TLS termination.");
         if (publicBind &&

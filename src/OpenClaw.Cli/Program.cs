@@ -29,6 +29,7 @@ internal static class Program
                 "chat" => await ChatAsync(rest),
                 "live" => await LiveAsync(rest),
                 "tui" => await TuiAsync(rest),
+                "insights" => await InsightsAsync(rest),
                 "setup" => await SetupAsync(rest),
                 "upgrade" => await UpgradeAsync(rest),
                 "maintenance" => await MaintenanceAsync(rest),
@@ -85,6 +86,7 @@ internal static class Program
               openclaw chat [options]
               openclaw live [options]
               openclaw tui [options]
+              openclaw insights [options]
               openclaw setup [options]
               openclaw setup <launch|service|status|verify|channel> [options]
               openclaw upgrade <check|rollback> [options]
@@ -97,7 +99,7 @@ internal static class Program
               openclaw eval <run|compare> [options]
               openclaw accounts <list|add|remove|probe> [options]
               openclaw backends <list|probe|run|session send> [options]
-              openclaw admin <posture|incident export|approvals simulate> [options]
+              openclaw admin <posture|incident export|trajectory export|approvals simulate> [options]
               openclaw compatibility <catalog> [options]
               openclaw skills <inspect|install|list> [options]
               openclaw clawhub [wrapper options] [--] <clawhub args...>
@@ -111,6 +113,7 @@ internal static class Program
 
             run options:
               --file <path>      Attach file contents (repeatable)
+              --image <path|url> Attach image input (repeatable)
               --no-stream        Disable SSE streaming
               --temperature <n>  Temperature (optional)
               --max-tokens <n>   Max tokens (optional)
@@ -119,6 +122,7 @@ internal static class Program
               /help, /exit, /reset
               /system <text>
               /model <model>
+              /image <path|url> [prompt]
 
             Examples:
               openclaw start
@@ -131,6 +135,7 @@ internal static class Program
               openclaw chat --system "Be concise."
               openclaw live --model gemini-2.0-flash-live-001 --system "Be concise."
               openclaw tui
+              openclaw insights
               openclaw setup
               openclaw upgrade check
               openclaw upgrade check --config ~/.openclaw/config/openclaw.settings.json --offline
@@ -220,6 +225,7 @@ internal static class Program
             Usage:
               openclaw admin posture [--url <url>] [--token <token>]
               openclaw admin incident export [--approval-limit <n>] [--event-limit <n>] [--url <url>] [--token <token>]
+              openclaw admin trajectory export [--session <id>] [--from <iso8601>] [--to <iso8601>] [--anonymize] [--output <path>] [--url <url>] [--token <token>]
               openclaw admin approvals simulate --tool <tool> [--args <json>] [--autonomy <mode>] [--require-approval <true|false>] [--approval-tool <tool>]... [--url <url>] [--token <token>]
             """);
     }
@@ -376,6 +382,21 @@ internal static class Program
             """);
     }
 
+    private static void PrintInsightsHelp()
+    {
+        Console.WriteLine(
+            """
+            openclaw insights
+
+            Usage:
+              openclaw insights [--from <iso8601>] [--to <iso8601>] [--json] [--url <url>] [--token <token>]
+
+            Notes:
+              - Summarizes provider usage, estimated token spend, tool frequency, and session counts.
+              - Provider and tool usage are live runtime counters; session counts use the requested range.
+            """);
+    }
+
     private static void PrintLiveHelp()
     {
         Console.WriteLine(
@@ -424,7 +445,7 @@ internal static class Program
             return 2;
         }
 
-        var userContent = BuildUserContent(prompt, parsed.Files);
+        var userContent = BuildUserContent(prompt, parsed.Files, parsed.Images);
         var messages = BuildMessages(system, userContent, priorConversation: null);
 
         using var client = new OpenClawHttpClient(baseUrl, token);
@@ -488,15 +509,22 @@ internal static class Program
             if (line.Length == 0)
                 continue;
 
-            if (line.StartsWith('/'))
+            var userContent = line.StartsWith("/image ", StringComparison.OrdinalIgnoreCase)
+                ? BuildImageCommandContent(line)
+                : line;
+
+            if (userContent is null)
+                continue;
+
+            if (line.StartsWith('/') && !line.StartsWith("/image ", StringComparison.OrdinalIgnoreCase))
             {
                 if (HandleSlashCommand(line, conversation, ref system, ref model))
                     break;
                 continue;
             }
 
-            conversation.Add(new OpenAiMessage { Role = "user", Content = line });
-            var messages = BuildMessages(system, line, conversation);
+            conversation.Add(new OpenAiMessage { Role = "user", Content = userContent });
+            var messages = BuildMessages(system, userContent, conversation);
 
             var request = new OpenAiChatCompletionRequest
             {
@@ -565,6 +593,32 @@ internal static class Program
             Console.Error.WriteLine("The TUI is not available in this build. Use the non-AOT build or the admin web UI.");
             return 1;
         }
+    }
+
+    private static async Task<int> InsightsAsync(string[] args)
+    {
+        var parsed = CliArgs.Parse(args);
+        if (parsed.ShowHelp)
+        {
+            PrintInsightsHelp();
+            return 0;
+        }
+
+        var baseUrl = parsed.GetOption("--url") ?? Environment.GetEnvironmentVariable(EnvBaseUrl) ?? DefaultBaseUrl;
+        var token = ResolveAuthToken(parsed, Console.Error);
+        var fromUtc = ParseDateTimeOffset(parsed.GetOption("--from"));
+        var toUtc = ParseDateTimeOffset(parsed.GetOption("--to"));
+
+        using var client = new OpenClawHttpClient(baseUrl, token);
+        var insights = await client.GetOperatorInsightsAsync(fromUtc, toUtc, CancellationToken.None);
+        if (parsed.HasFlag("--json"))
+        {
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(insights, CoreJsonContext.Default.OperatorInsightsResponse));
+            return 0;
+        }
+
+        WriteInsights(insights);
+        return 0;
     }
 
     private static async Task<int> SetupAsync(string[] args)
@@ -709,6 +763,31 @@ internal static class Program
             using var client = new OpenClawHttpClient(baseUrl, token);
             var bundle = await client.ExportIncidentBundleAsync(approvalLimit, eventLimit, CancellationToken.None);
             Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(bundle, CoreJsonContext.Default.IncidentBundleResponse));
+            return 0;
+        }
+
+        if (group == "trajectory" && args.Length > 1 && string.Equals(args[1], "export", StringComparison.OrdinalIgnoreCase))
+        {
+            var parsed = CliArgs.Parse(args.Skip(2).ToArray());
+            var baseUrl = parsed.GetOption("--url") ?? Environment.GetEnvironmentVariable(EnvBaseUrl) ?? DefaultBaseUrl;
+            var token = ResolveAuthToken(parsed, Console.Error);
+            var fromUtc = ParseDateTimeOffset(parsed.GetOption("--from"));
+            var toUtc = ParseDateTimeOffset(parsed.GetOption("--to"));
+            var sessionId = parsed.GetOption("--session");
+            var anonymize = parsed.HasFlag("--anonymize");
+            using var client = new OpenClawHttpClient(baseUrl, token);
+            var jsonl = await client.ExportTrajectoryJsonlAsync(fromUtc, toUtc, sessionId, anonymize, CancellationToken.None);
+            var outputPath = parsed.GetOption("--output");
+            if (string.IsNullOrWhiteSpace(outputPath))
+            {
+                Console.Write(jsonl);
+            }
+            else
+            {
+                await File.WriteAllTextAsync(outputPath, jsonl);
+                Console.WriteLine($"wrote {outputPath}");
+            }
+
             return 0;
         }
 
@@ -1538,7 +1617,51 @@ internal static class Program
             Console.WriteLine("Issues:");
             foreach (var issue in status.Issues)
                 Console.WriteLine($"- {issue.Severity}: {issue.Message}");
+            }
+    }
+
+    private static void WriteInsights(OperatorInsightsResponse insights)
+    {
+        Console.WriteLine($"window: {insights.StartUtc:O}..{insights.EndUtc:O}");
+        Console.WriteLine($"sessions: active={insights.Sessions.Active} persisted={insights.Sessions.Persisted} total={insights.Sessions.UniqueTotal} range={insights.Sessions.InRange} 24h={insights.Sessions.Last24Hours} 7d={insights.Sessions.Last7Days}");
+        Console.WriteLine($"provider_usage: requests={insights.Totals.ProviderRequests} errors={insights.Totals.ProviderErrors} tokens={insights.Totals.TotalTokens} input={insights.Totals.InputTokens} output={insights.Totals.OutputTokens} cache_read={insights.Totals.CacheReadTokens} cache_write={insights.Totals.CacheWriteTokens} estimated_cost_usd={insights.Totals.EstimatedCostUsd.ToString("0.######", CultureInfo.InvariantCulture)}");
+        Console.WriteLine($"tool_calls: {insights.Totals.ToolCalls}");
+
+        Console.WriteLine();
+        Console.WriteLine("Providers");
+        if (insights.Providers.Count == 0)
+        {
+            Console.WriteLine("- none");
         }
+        else
+        {
+            foreach (var provider in insights.Providers.Take(10))
+            {
+                Console.WriteLine($"- {provider.ProviderId}/{provider.ModelId}: requests={provider.Requests} tokens={provider.TotalTokens} input={provider.InputTokens} output={provider.OutputTokens} retries={provider.Retries} errors={provider.Errors} estimated_cost_usd={provider.EstimatedCostUsd.ToString("0.######", CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Tools");
+        if (insights.Tools.Count == 0)
+        {
+            Console.WriteLine("- none");
+        }
+        else
+        {
+            foreach (var tool in insights.Tools.Take(10))
+            {
+                Console.WriteLine($"- {tool.ToolName}: calls={tool.Calls} failures={tool.Failures} timeouts={tool.Timeouts} avg_ms={tool.AverageDurationMs.ToString("0.0", CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        if (insights.Sessions.ByChannel.Count > 0)
+            Console.WriteLine($"session_channels: {string.Join(", ", insights.Sessions.ByChannel.Select(static item => $"{item.Label}={item.Count}"))}");
+        if (insights.Sessions.ByState.Count > 0)
+            Console.WriteLine($"session_states: {string.Join(", ", insights.Sessions.ByState.Select(static item => $"{item.Label}={item.Count}"))}");
+
+        foreach (var warning in insights.Warnings)
+            Console.WriteLine($"note: {warning}");
     }
 
     private static void WritePosture(SecurityPostureResponse posture)
@@ -1612,15 +1735,43 @@ internal static class Program
         return messages;
     }
 
-    private static string BuildUserContent(string prompt, IReadOnlyList<string> files)
+    internal static string? BuildImageCommandContent(string command)
     {
-        if (files.Count == 0)
+        var tail = command["/image ".Length..].Trim();
+        if (tail.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: /image <path|url> [prompt]");
+            return null;
+        }
+
+        var firstSpace = tail.IndexOf(' ');
+        var image = firstSpace < 0 ? tail : tail[..firstSpace].Trim();
+        var prompt = firstSpace < 0 ? "Describe this image." : tail[(firstSpace + 1)..].Trim();
+        if (string.IsNullOrWhiteSpace(prompt))
+            prompt = "Describe this image.";
+
+        return BuildUserContent(prompt, files: [], images: [image]);
+    }
+
+    internal static string BuildUserContent(string prompt, IReadOnlyList<string> files, IReadOnlyList<string>? images = null)
+    {
+        images ??= [];
+        if (files.Count == 0 && images.Count == 0)
             return prompt;
 
         var parts = new List<string> { prompt };
+        foreach (var image in images)
+            parts.Add(BuildImageMarker(image));
+
         foreach (var path in files)
         {
             var fullPath = Path.GetFullPath(path);
+            if (IsImagePath(fullPath))
+            {
+                parts.Add(BuildImageMarker(fullPath));
+                continue;
+            }
+
             var content = File.ReadAllText(fullPath);
             parts.Add(
                 $"""
@@ -1632,6 +1783,30 @@ internal static class Program
                 """);
         }
         return string.Join('\n', parts);
+    }
+
+    private static string BuildImageMarker(string image)
+    {
+        if (Uri.TryCreate(image, UriKind.Absolute, out var uri) &&
+            (uri.Scheme is "http" or "https" or "data"))
+        {
+            return $"[IMAGE_URL:{image}]";
+        }
+
+        if (Uri.TryCreate(image, UriKind.Absolute, out uri) && uri.IsFile)
+            return $"[IMAGE_PATH:{Path.GetFullPath(uri.LocalPath)}]";
+
+        return $"[IMAGE_PATH:{Path.GetFullPath(image)}]";
+    }
+
+    private static bool IsImagePath(string path)
+    {
+        var extension = Path.GetExtension(path);
+        return extension.Equals(".png", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+               || extension.Equals(".gif", StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task<string?> ReadAllStdinAsync()

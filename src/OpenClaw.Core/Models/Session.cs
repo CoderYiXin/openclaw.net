@@ -111,6 +111,9 @@ public sealed class Session
     /// <summary>Accumulated USD cost incurred since the current contract was attached.</summary>
     public decimal ContractAccumulatedCostUsd { get; set; }
 
+    /// <summary>Last durable execution checkpoint written by the agent runtime.</summary>
+    public SessionExecutionCheckpoint? ExecutionCheckpoint { get; set; }
+
     public void AddTokenUsage(long inputTokens, long outputTokens)
     {
         if (inputTokens != 0)
@@ -156,6 +159,7 @@ public sealed record ChatTurn
 
 public sealed record ToolInvocation
 {
+    public string? CallId { get; init; }
     public required string ToolName { get; init; }
     public required string Arguments { get; init; }
     public string? Result { get; init; }
@@ -164,6 +168,46 @@ public sealed record ToolInvocation
     public string? FailureCode { get; init; }
     public string? FailureMessage { get; init; }
     public string? NextStep { get; init; }
+}
+
+public static class SessionCheckpointKinds
+{
+    public const string ToolBatch = "tool_batch";
+}
+
+public static class SessionCheckpointStates
+{
+    public const string ReadyToResume = "ready_to_resume";
+    public const string Completed = "completed";
+    public const string Failed = "failed";
+}
+
+public sealed class SessionExecutionCheckpoint
+{
+    public required string CheckpointId { get; init; }
+    public string Kind { get; init; } = SessionCheckpointKinds.ToolBatch;
+    public string State { get; set; } = SessionCheckpointStates.ReadyToResume;
+    public int Sequence { get; init; }
+    public int Iteration { get; init; }
+    public int HistoryCount { get; init; }
+    public string? CorrelationId { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? PersistedAtUtc { get; set; }
+    public DateTimeOffset? LastResumeAttemptAtUtc { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public string? CompletionReason { get; set; }
+    public List<SessionCheckpointToolCall> ToolCalls { get; init; } = [];
+}
+
+public sealed class SessionCheckpointToolCall
+{
+    public string? CallId { get; init; }
+    public required string ToolName { get; init; }
+    public string ResultStatus { get; init; } = ToolResultStatuses.Completed;
+    public string? FailureCode { get; init; }
+    public long DurationMs { get; init; }
+    public int ArgumentsBytes { get; init; }
+    public int ResultBytes { get; init; }
 }
 
 public sealed class SessionDelegationMetadata
@@ -220,6 +264,9 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(ChatTurn))]
 [JsonSerializable(typeof(ToolInvocation))]
 [JsonSerializable(typeof(List<ToolInvocation>))]
+[JsonSerializable(typeof(SessionExecutionCheckpoint))]
+[JsonSerializable(typeof(SessionCheckpointToolCall))]
+[JsonSerializable(typeof(List<SessionCheckpointToolCall>))]
 [JsonSerializable(typeof(SessionDelegationMetadata))]
 [JsonSerializable(typeof(SessionDelegationToolUsage))]
 [JsonSerializable(typeof(List<SessionDelegationToolUsage>))]
@@ -233,6 +280,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(WsServerEnvelope))]
 [JsonSerializable(typeof(GatewayConfig))]
 [JsonSerializable(typeof(RuntimeConfig))]
+[JsonSerializable(typeof(CanvasConfig))]
 [JsonSerializable(typeof(GatewayRuntimeState))]
 [JsonSerializable(typeof(LlmProviderConfig))]
 [JsonSerializable(typeof(PromptCachingConfig))]
@@ -266,6 +314,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(MemoryRecallConfig))]
 [JsonSerializable(typeof(MemoryRetentionConfig))]
 [JsonSerializable(typeof(SecurityConfig))]
+[JsonSerializable(typeof(UrlSafetyConfig))]
 [JsonSerializable(typeof(WebSocketConfig))]
 [JsonSerializable(typeof(ToolingConfig))]
 [JsonSerializable(typeof(ToolsetConfig))]
@@ -329,6 +378,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(BackendFileWriteEvent))]
 [JsonSerializable(typeof(BackendErrorEvent))]
 [JsonSerializable(typeof(BackendSessionCompletedEvent))]
+[JsonSerializable(typeof(AudioTranscriptionConfig))]
 [JsonSerializable(typeof(TextToSpeechConfig))]
 [JsonSerializable(typeof(GeminiLiveConfig))]
 [JsonSerializable(typeof(ElevenLabsConfig))]
@@ -445,6 +495,8 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(OpenAiChatCompletionRequest))]
 [JsonSerializable(typeof(OpenAiChatCompletionResponse))]
 [JsonSerializable(typeof(OpenAiMessage))]
+[JsonSerializable(typeof(OpenAiMessageContent))]
+[JsonSerializable(typeof(OpenAiMessageContentPart))]
 [JsonSerializable(typeof(OpenAiChoice))]
 [JsonSerializable(typeof(OpenAiResponseMessage))]
 [JsonSerializable(typeof(OpenAiUsage))]
@@ -688,8 +740,16 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(ObservabilitySummaryCard))]
 [JsonSerializable(typeof(List<ObservabilitySummaryCard>))]
 [JsonSerializable(typeof(ObservabilitySummaryResponse))]
+[JsonSerializable(typeof(OperatorInsightsResponse))]
+[JsonSerializable(typeof(OperatorInsightsTotals))]
+[JsonSerializable(typeof(OperatorInsightsSessionCounts))]
+[JsonSerializable(typeof(OperatorInsightsProviderUsage))]
+[JsonSerializable(typeof(List<OperatorInsightsProviderUsage>))]
+[JsonSerializable(typeof(OperatorInsightsToolFrequency))]
+[JsonSerializable(typeof(List<OperatorInsightsToolFrequency>))]
 [JsonSerializable(typeof(ObservabilitySeriesResponse))]
 [JsonSerializable(typeof(AuditExportManifest))]
+[JsonSerializable(typeof(TrajectoryExportRecord))]
 [JsonSerializable(typeof(UpstreamMigrationCompatibilityItem))]
 [JsonSerializable(typeof(List<UpstreamMigrationCompatibilityItem>))]
 [JsonSerializable(typeof(UpstreamMigrationSkillItem))]

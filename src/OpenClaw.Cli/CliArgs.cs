@@ -7,6 +7,7 @@ internal sealed class CliArgs
 
     public List<string> Positionals { get; } = [];
     public List<string> Files { get; } = [];
+    public List<string> Images { get; } = [];
     public bool ShowHelp { get; private set; }
     public IReadOnlyDictionary<string, List<string>> Options => _options;
 
@@ -35,7 +36,7 @@ internal sealed class CliArgs
                 continue;
             }
 
-            if (a is "--no-stream" or "--apply" or "--non-interactive" or "--offline" or "--require-provider" or "--with-companion" or "--open-browser" or "--skip-verify" or "--json")
+            if (IsFlagOption(a))
             {
                 parsed._flags.Add(a);
                 continue;
@@ -43,12 +44,6 @@ internal sealed class CliArgs
 
             if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal))
             {
-                if (a is "--no-stream" or "--apply" or "--non-interactive" or "--offline" or "--require-provider" or "--with-companion" or "--open-browser" or "--skip-verify" or "--json")
-                {
-                    parsed._flags.Add(a);
-                    continue;
-                }
-
                 throw new ArgumentException($"Missing value for {a}");
             }
 
@@ -56,6 +51,12 @@ internal sealed class CliArgs
             if (a == "--file")
             {
                 parsed.Files.Add(value);
+                continue;
+            }
+
+            if (a == "--image")
+            {
+                parsed.Images.Add(value);
                 continue;
             }
 
@@ -75,4 +76,16 @@ internal sealed class CliArgs
 
     public string? GetOption(string name)
         => _options.TryGetValue(name, out var values) && values.Count > 0 ? values[^1] : null;
+
+    private static bool IsFlagOption(string value)
+        => value is "--no-stream"
+            or "--apply"
+            or "--non-interactive"
+            or "--offline"
+            or "--require-provider"
+            or "--with-companion"
+            or "--open-browser"
+            or "--skip-verify"
+            or "--json"
+            or "--anonymize";
 }

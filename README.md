@@ -73,6 +73,8 @@ openclaw maintenance scan --config ~/.openclaw/config/openclaw.settings.json
 openclaw maintenance fix --config ~/.openclaw/config/openclaw.settings.json --dry-run
 openclaw skills inspect ./skills/my-skill
 openclaw compatibility catalog
+openclaw insights
+openclaw admin trajectory export --anonymize --output ./trajectory.jsonl
 openclaw upgrade check --config ~/.openclaw/config/openclaw.settings.json --offline
 openclaw upgrade rollback --config ~/.openclaw/config/openclaw.settings.json --offline
 openclaw migrate upstream --source ./upstream-agent --target-config ~/.openclaw/config/openclaw.settings.json
@@ -81,7 +83,9 @@ openclaw migrate upstream --source ./upstream-agent --target-config ~/.openclaw/
 - Skill inventory: `/admin/skills`
 - Maintenance report: `/admin/maintenance`
 - Observability summary: `/admin/observability/summary`
+- Operator insights: `/admin/insights`
 - Audit export: `/admin/audit/export`
+- Trajectory export: `/admin/trajectory/export`
 - Compatibility matrix: [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 
 For local Ollama setups, prefer the native root endpoint and an explicit preset:
@@ -98,6 +102,8 @@ OpenClaw.NET now treats Ollama as a first-class native provider at `http://127.0
 
 When binding to a non-loopback address, the gateway **refuses to start** unless dangerous settings are explicitly hardened (auth token required, tooling roots restricted, signature validation enforced, `raw:` secret refs rejected). See [SECURITY.md](SECURITY.md) before exposing the gateway publicly.
 
+Outbound web fetches and browser navigations run through `OpenClaw:Tooling:UrlSafety` by default. The safe default blocks loopback, private/link-local, multicast, and metadata hosts; operators can disable the policy intentionally or add `BlockedHostGlobs` and `BlockedCidrs` for environment-specific deny lists.
+
 ## Docs
 
 The full documentation map lives at **[docs/README.md](docs/README.md)**. Starting points:
@@ -108,6 +114,7 @@ The full documentation map lives at **[docs/README.md](docs/README.md)**. Starti
 | [docs/QUICKSTART.md](docs/QUICKSTART.md) | Shortest supported path to a running local instance |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Providers, tools, skills, memory, channels, and day-to-day operation |
 | [docs/TOOLS_GUIDE.md](docs/TOOLS_GUIDE.md) | Native tool catalog and configuration |
+| [docs/CANVAS_A2UI.md](docs/CANVAS_A2UI.md) | Supported Canvas and A2UI visual workspace behavior |
 | [docs/MODEL_PROFILES.md](docs/MODEL_PROFILES.md) | Provider-agnostic named model profiles (including Gemma) |
 | [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) | Supported upstream skill, plugin, and channel surface |
 | [SECURITY.md](SECURITY.md) | Hardening guidance for public deployments |
