@@ -1,13 +1,17 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using OpenClaw.Core.Setup;
 
 namespace OpenClaw.Companion.Services;
 
 public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
 {
+    private const string ProviderApiKeyEnvironmentVariable = "OPENCLAW_MODEL_PROVIDER_KEY";
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private Process? _gatewayProcess;
+    private string? _providerApiKey;
 
     public ManagedGatewayService(
         string? baseDirectory = null,
@@ -17,6 +21,7 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
     {
         BaseDirectory = Path.GetFullPath(baseDirectory ?? AppContext.BaseDirectory);
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+        _ownsHttpClient = httpClient is null;
         ConfigPath = configPath ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".openclaw",
@@ -44,14 +49,12 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
 
     public string WebSocketUrl
     {
-        get
-        {
-            var builder = new UriBuilder(BaseUrl.TrimEnd('/') + "/ws")
-            {
-                Scheme = BaseUrl.StartsWith("https:", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws"
-            };
-            return builder.Uri.ToString();
-        }
+        get => BuildWebSocketUrl(BaseUrl);
+    }
+
+    public void SetProviderApiKey(string? apiKey)
+    {
+        _providerApiKey = string.IsNullOrWhiteSpace(apiKey) ? null : apiKey.Trim();
     }
 
     public async Task<ManagedGatewaySetupResult> RunSetupAsync(ManagedGatewaySetupRequest request, CancellationToken ct)
@@ -88,13 +91,22 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             args.Add("--api-key");
-            args.Add(apiKey);
+            args.Add($"env:{ProviderApiKeyEnvironmentVariable}");
         }
 
-        var result = await RunProcessToCompletionAsync(CliExecutable, args, TimeSpan.FromMinutes(2), ct);
-        return result.ExitCode == 0
-            ? ManagedGatewaySetupResult.Success(result.Output)
-            : ManagedGatewaySetupResult.Fail(string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error);
+        var environment = string.IsNullOrWhiteSpace(apiKey)
+            ? null
+            : new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [ProviderApiKeyEnvironmentVariable] = apiKey
+            };
+
+        var result = await RunProcessToCompletionAsync(CliExecutable, args, environment, TimeSpan.FromMinutes(2), ct);
+        if (result.ExitCode != 0)
+            return ManagedGatewaySetupResult.Fail(string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error);
+
+        SetProviderApiKey(apiKey);
+        return ManagedGatewaySetupResult.Success(result.Output);
     }
 
     public async Task<ManagedGatewayStartResult> StartAsync(string? authToken, CancellationToken ct)
@@ -108,26 +120,32 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
 
         if (_gatewayProcess is { HasExited: false })
             return await WaitForReadyAsync(authToken, "Gateway is starting.", ct);
+        DisposeExitedGatewayProcess();
 
         var startInfo = CreateStartInfo(GatewayExecutable, ["--config", ConfigPath]);
         startInfo.RedirectStandardOutput = false;
         startInfo.RedirectStandardError = false;
+        ApplyProviderApiKeyEnvironment(startInfo);
 
-        _gatewayProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
+        _gatewayProcess = process;
         try
         {
-            _gatewayProcess.Start();
+            process.Start();
         }
         catch (ObjectDisposedException ex)
         {
+            ClearFailedStartProcess(process);
             return ManagedGatewayStartResult.Fail($"Gateway launch failed: {ex.Message}");
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
+            ClearFailedStartProcess(process);
             return ManagedGatewayStartResult.Fail($"Gateway launch failed: {ex.Message}");
         }
         catch (InvalidOperationException ex)
         {
+            ClearFailedStartProcess(process);
             return ManagedGatewayStartResult.Fail($"Gateway launch failed: {ex.Message}");
         }
 
@@ -148,14 +166,17 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
                 await process.WaitForExitAsync(ct);
             }
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException ex)
         {
+            TraceIgnoredProcessException("stop", ex);
         }
-        catch (System.ComponentModel.Win32Exception)
+        catch (System.ComponentModel.Win32Exception ex)
         {
+            TraceIgnoredProcessException("stop", ex);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
+            TraceIgnoredProcessException("stop", ex);
         }
         finally
         {
@@ -175,7 +196,19 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
             using var response = await _httpClient.SendAsync(request, ct);
             return response.IsSuccessStatusCode;
         }
-        catch
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (UriFormatException)
         {
             return false;
         }
@@ -191,14 +224,16 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await StopAsync(CancellationToken.None);
-        _httpClient.Dispose();
+        await StopAsync(CancellationToken.None).ConfigureAwait(false);
+        if (_ownsHttpClient)
+            _httpClient.Dispose();
     }
 
     public void Dispose()
     {
-        StopAsync(CancellationToken.None).GetAwaiter().GetResult();
-        _httpClient.Dispose();
+        StopForDispose();
+        if (_ownsHttpClient)
+            _httpClient.Dispose();
     }
 
     internal static ManagedExecutable? ResolveGatewayExecutable(string baseDirectory)
@@ -246,6 +281,7 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
     private async Task<ProcessRunResult> RunProcessToCompletionAsync(
         ManagedExecutable executable,
         IReadOnlyList<string> args,
+        IReadOnlyDictionary<string, string>? environment,
         TimeSpan timeout,
         CancellationToken ct)
     {
@@ -259,6 +295,11 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
         };
         process.StartInfo.RedirectStandardOutput = true;
         process.StartInfo.RedirectStandardError = true;
+        if (environment is not null)
+        {
+            foreach (var (key, value) in environment)
+                process.StartInfo.Environment[key] = value;
+        }
 
         try
         {
@@ -268,12 +309,29 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
             await process.WaitForExitAsync(timeoutCts.Token);
             return new ProcessRunResult(process.ExitCode, await stdout, await stderr);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             TryKill(process);
             return new ProcessRunResult(124, "", "Command timed out.");
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+        catch (ObjectDisposedException ex)
+        {
+            return new ProcessRunResult(1, "", ex.Message);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            return new ProcessRunResult(1, "", ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ProcessRunResult(1, "", ex.Message);
+        }
+        catch (IOException ex)
         {
             return new ProcessRunResult(1, "", ex.Message);
         }
@@ -296,6 +354,12 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
         return startInfo;
     }
 
+    private void ApplyProviderApiKeyEnvironment(ProcessStartInfo startInfo)
+    {
+        if (!string.IsNullOrWhiteSpace(_providerApiKey))
+            startInfo.Environment[ProviderApiKeyEnvironmentVariable] = _providerApiKey;
+    }
+
     private string? ReadBaseUrlFromConfig()
     {
         if (!File.Exists(ConfigPath))
@@ -313,15 +377,67 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
             var port = openClaw.TryGetProperty("Port", out var portProperty) && portProperty.TryGetInt32(out var parsedPort)
                 ? parsedPort
                 : 18789;
-            var host = string.IsNullOrWhiteSpace(bind) || bind is "0.0.0.0" or "::"
-                ? "127.0.0.1"
-                : bind;
-            return $"http://{host}:{port}";
+            return GatewaySetupArtifacts.BuildReachableBaseUrl(
+                string.IsNullOrWhiteSpace(bind) ? "127.0.0.1" : bind,
+                port);
         }
-        catch
+        catch (JsonException ex)
         {
+            Trace.TraceWarning("Managed gateway config read ignored JSON error for '{0}': {1}", ConfigPath, ex.Message);
             return null;
         }
+        catch (IOException ex)
+        {
+            Trace.TraceWarning("Managed gateway config read ignored IO error for '{0}': {1}", ConfigPath, ex.Message);
+            return null;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            Trace.TraceWarning("Managed gateway config read ignored access error for '{0}': {1}", ConfigPath, ex.Message);
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            Trace.TraceWarning("Managed gateway config read ignored invalid state for '{0}': {1}", ConfigPath, ex.Message);
+            return null;
+        }
+    }
+
+    internal static string BuildWebSocketUrl(string baseUrl)
+    {
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri))
+            return baseUrl;
+
+        var scheme = uri.Scheme.ToLowerInvariant() switch
+        {
+            "https" => "wss",
+            "http" => "ws",
+            "wss" => "wss",
+            "ws" => "ws",
+            _ => "ws"
+        };
+
+        var normalizedPath = uri.AbsolutePath.TrimEnd('/');
+        string path;
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+        {
+            path = "/ws";
+        }
+        else if (normalizedPath.EndsWith("/ws", StringComparison.OrdinalIgnoreCase))
+        {
+            path = normalizedPath;
+        }
+        else
+        {
+            path = normalizedPath + "/ws";
+        }
+
+        var builder = new UriBuilder(uri)
+        {
+            Scheme = scheme,
+            Path = path
+        };
+        return builder.Uri.ToString();
     }
 
     private static ManagedExecutable? ResolveExecutable(
@@ -383,9 +499,91 @@ public sealed class ManagedGatewayService : IAsyncDisposable, IDisposable
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch
+        catch (ObjectDisposedException ex)
         {
+            TraceIgnoredProcessException("kill", ex);
         }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            TraceIgnoredProcessException("kill", ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            TraceIgnoredProcessException("kill", ex);
+        }
+    }
+
+    private void DisposeExitedGatewayProcess()
+    {
+        var process = _gatewayProcess;
+        if (process is null)
+            return;
+
+        try
+        {
+            if (!process.HasExited)
+                return;
+        }
+        catch (ObjectDisposedException ex)
+        {
+            TraceIgnoredProcessException("dispose exited process state check", ex);
+        }
+        catch (InvalidOperationException ex)
+        {
+            TraceIgnoredProcessException("dispose exited process state check", ex);
+        }
+
+        if (ReferenceEquals(_gatewayProcess, process))
+            _gatewayProcess = null;
+        process.Dispose();
+    }
+
+    private void ClearFailedStartProcess(Process process)
+    {
+        if (ReferenceEquals(_gatewayProcess, process))
+            _gatewayProcess = null;
+        process.Dispose();
+    }
+
+    private void StopForDispose()
+    {
+        var process = _gatewayProcess;
+        _gatewayProcess = null;
+        if (process is null)
+            return;
+
+        using (process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5000);
+                }
+            }
+            catch (ObjectDisposedException ex)
+            {
+                TraceIgnoredProcessException("dispose stop", ex);
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                TraceIgnoredProcessException("dispose stop", ex);
+            }
+            catch (InvalidOperationException ex)
+            {
+                TraceIgnoredProcessException("dispose stop", ex);
+            }
+        }
+    }
+
+    private static void TraceIgnoredProcessException(string operation, Exception ex)
+    {
+        Trace.TraceWarning(
+            "Managed gateway process cleanup ignored {0} during {1}: {2}",
+            ex.GetType().Name,
+            operation,
+            ex.Message);
     }
 
     private sealed record ProcessRunResult(int ExitCode, string Output, string Error);
