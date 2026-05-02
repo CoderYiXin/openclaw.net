@@ -51,7 +51,12 @@ internal static class CoreServicesExtensions
         if (string.Equals(config.Memory.Provider, "mempalace", StringComparison.OrdinalIgnoreCase))
         {
             services.AddSingleton<IKnowledgeGraph>(sp =>
-                ((MempalaceMemoryStore)sp.GetRequiredService<IMemoryStore>()).KnowledgeGraph);
+            {
+                var memory = sp.GetRequiredService<IMemoryStore>();
+                return memory is MempalaceMemoryStore mempalaceStore
+                    ? mempalaceStore.KnowledgeGraph
+                    : throw new InvalidOperationException("The mempalace memory provider must resolve a MempalaceMemoryStore.");
+            });
         }
         services.AddSingleton<ISessionAdminStore>(sp =>
         {

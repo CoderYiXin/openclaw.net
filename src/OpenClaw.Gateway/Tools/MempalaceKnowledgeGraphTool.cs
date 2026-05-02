@@ -50,9 +50,9 @@ internal sealed class MempalaceKnowledgeGraphTool : ITool
 
     private async ValueTask<string> AddAsync(JsonElement root, CancellationToken ct)
     {
-        var subject = ReadEntity(root, "subject", required: true);
+        var subject = ReadEntity(root, "subject");
         var predicate = ReadString(root, "predicate");
-        var obj = ReadEntity(root, "object", required: true);
+        var obj = ReadEntity(root, "object");
         if (subject is null || obj is null || string.IsNullOrWhiteSpace(predicate))
             return "Error: add requires subject, predicate, and object.";
 
@@ -72,9 +72,9 @@ internal sealed class MempalaceKnowledgeGraphTool : ITool
     private async ValueTask<string> QueryAsync(JsonElement root, CancellationToken ct)
     {
         var pattern = new TriplePattern(
-            ReadEntity(root, "subject", required: false),
+            ReadEntity(root, "subject"),
             ReadString(root, "predicate"),
-            ReadEntity(root, "object", required: false));
+            ReadEntity(root, "object"));
         var at = ReadDate(root, "at");
         var results = await _knowledgeGraph.QueryAsync(pattern, at, ct);
         if (results.Count == 0)
@@ -101,7 +101,7 @@ internal sealed class MempalaceKnowledgeGraphTool : ITool
 
     private async ValueTask<string> TimelineAsync(JsonElement root, CancellationToken ct)
     {
-        var entity = ReadEntity(root, "entity", required: true);
+        var entity = ReadEntity(root, "entity");
         if (entity is null)
             return "Error: timeline requires entity.";
 
@@ -130,11 +130,11 @@ internal sealed class MempalaceKnowledgeGraphTool : ITool
         return sb.ToString().TrimEnd();
     }
 
-    private static EntityRef? ReadEntity(JsonElement root, string propertyName, bool required)
+    private static EntityRef? ReadEntity(JsonElement root, string propertyName)
     {
         var value = ReadString(root, propertyName);
         if (string.IsNullOrWhiteSpace(value))
-            return required ? null : null;
+            return null;
 
         try
         {
