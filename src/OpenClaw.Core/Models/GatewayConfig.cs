@@ -128,7 +128,7 @@ public sealed class PromptCacheTraceConfig
 
 public sealed class MemoryConfig
 {
-    /// <summary>Memory backend provider: "file" (default) or "sqlite".</summary>
+    /// <summary>Memory backend provider: "file" (default), "sqlite", or "mempalace".</summary>
     public string Provider { get; set; } = "file";
 
     public string StoragePath { get; set; } = "./memory";
@@ -136,6 +136,7 @@ public sealed class MemoryConfig
     public int? MaxCachedSessions { get; set; }
 
     public MemorySqliteConfig Sqlite { get; set; } = new();
+    public MemoryMempalaceConfig Mempalace { get; set; } = new();
     public MemoryRecallConfig Recall { get; set; } = new();
     public MemoryRetentionConfig Retention { get; set; } = new();
 
@@ -176,6 +177,21 @@ public sealed class MemorySqliteConfig
 
     /// <summary>Embedding vector dimensions. Defaults to 1536 (OpenAI text-embedding-3-small).</summary>
     public int EmbeddingDimensions { get; set; } = 1536;
+}
+
+public sealed class MemoryMempalaceConfig
+{
+    public string BasePath { get; set; } = "./memory/mempalace";
+    public string PalaceId { get; set; } = "openclaw";
+    public string? Namespace { get; set; }
+    public string CollectionName { get; set; } = "memories";
+    public int EmbeddingDimensions { get; set; } = 384;
+    public string EmbedderIdentity { get; set; } = "openclaw:mempalace:hash-v1";
+    public string DefaultWing { get; set; } = "openclaw";
+    public string DefaultRoom { get; set; } = "notes";
+    public string SessionDbPath { get; set; } = "./memory/mempalace/openclaw-sessions.db";
+    public string KnowledgeGraphDbPath { get; set; } = "./memory/mempalace/kg.db";
+    public int MaxSearchCandidates { get; set; } = 200;
 }
 
 /// <summary>

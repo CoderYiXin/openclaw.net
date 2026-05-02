@@ -19,6 +19,8 @@ using OpenClaw.Gateway.Pipeline;
 using OpenClaw.Gateway.PromptCaching;
 using OpenClaw.Core.Validation;
 using TickerQ.DependencyInjection;
+using MemPalace.KnowledgeGraph;
+using OpenClaw.Gateway.Memory;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -46,6 +48,11 @@ internal static class CoreServicesExtensions
             config,
             sp.GetRequiredService<RuntimeMetrics>(),
             sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore")));
+        if (string.Equals(config.Memory.Provider, "mempalace", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IKnowledgeGraph>(sp =>
+                ((MempalaceMemoryStore)sp.GetRequiredService<IMemoryStore>()).KnowledgeGraph);
+        }
         services.AddSingleton<ISessionAdminStore>(sp =>
         {
             var memory = sp.GetRequiredService<IMemoryStore>();
@@ -210,6 +217,9 @@ internal static class CoreServicesExtensions
 
     private static IMemoryStore CreateMemoryStore(OpenClaw.Core.Models.GatewayConfig config, RuntimeMetrics metrics, ILogger logger)
     {
+        if (string.Equals(config.Memory.Provider, "mempalace", StringComparison.OrdinalIgnoreCase))
+            return new MempalaceMemoryStore(config, metrics);
+
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
             var sqliteConfig = config.Memory.Sqlite;

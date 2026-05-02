@@ -311,6 +311,7 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(Dictionary<string, TokenCostRateConfig>))]
 [JsonSerializable(typeof(MemoryConfig))]
 [JsonSerializable(typeof(MemorySqliteConfig))]
+[JsonSerializable(typeof(MemoryMempalaceConfig))]
 [JsonSerializable(typeof(MemoryRecallConfig))]
 [JsonSerializable(typeof(MemoryRetentionConfig))]
 [JsonSerializable(typeof(SecurityConfig))]
