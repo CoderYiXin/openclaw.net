@@ -1,6 +1,7 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Agent.Execution;
@@ -49,7 +50,9 @@ internal static class CoreServicesExtensions
             startup,
             config,
             sp.GetRequiredService<RuntimeMetrics>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore")));
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore"),
+            ResolveStartupCancellationToken(sp),
+            ResolveBlockedPluginIds(sp)));
         services.AddSingleton<ISessionAdminStore>(sp =>
         {
             var memory = sp.GetRequiredService<IMemoryStore>();
@@ -212,10 +215,16 @@ internal static class CoreServicesExtensions
         return Path.GetFullPath(dbPath);
     }
 
-    private static IMemoryStore CreateMemoryStore(GatewayStartupContext startup, GatewayConfig config, RuntimeMetrics metrics, ILogger logger)
+    private static IMemoryStore CreateMemoryStore(
+        GatewayStartupContext startup,
+        GatewayConfig config,
+        RuntimeMetrics metrics,
+        ILogger logger,
+        CancellationToken startupCancellationToken,
+        IReadOnlyCollection<string> blockedPluginIds)
     {
         if (string.Equals(config.Memory.Provider, "mempalace", StringComparison.OrdinalIgnoreCase))
-            return CreateDynamicNativeMemoryStore(startup, config, metrics, logger);
+            return CreateDynamicNativeMemoryStore(startup, config, metrics, logger, startupCancellationToken, blockedPluginIds);
 
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
@@ -245,7 +254,9 @@ internal static class CoreServicesExtensions
         GatewayStartupContext startup,
         GatewayConfig config,
         RuntimeMetrics metrics,
-        ILogger logger)
+        ILogger logger,
+        CancellationToken startupCancellationToken,
+        IReadOnlyCollection<string> blockedPluginIds)
     {
         if (!config.Plugins.DynamicNative.Enabled)
         {
@@ -254,8 +265,8 @@ internal static class CoreServicesExtensions
                 "Enable OpenClaw:Plugins:DynamicNative:Enabled and load the OpenClaw.Plugins.Mempalace native plugin, or choose 'file' or 'sqlite'.");
         }
 
-        var host = new NativeDynamicPluginHost(config.Plugins.DynamicNative, startup.RuntimeState, logger);
-        var providers = host.LoadMemoryProvidersAsync(startup.WorkspacePath, CancellationToken.None)
+        var host = new NativeDynamicPluginHost(config.Plugins.DynamicNative, startup.RuntimeState, logger, blockedPluginIds);
+        var providers = host.LoadMemoryProvidersAsync(startup.WorkspacePath, startupCancellationToken)
             .GetAwaiter()
             .GetResult();
         startup.NativeDynamicPluginHost = host;
@@ -277,4 +288,10 @@ internal static class CoreServicesExtensions
             Logger = logger
         });
     }
+
+    private static CancellationToken ResolveStartupCancellationToken(IServiceProvider services)
+        => services.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+
+    private static IReadOnlyCollection<string> ResolveBlockedPluginIds(IServiceProvider services)
+        => services.GetService<PluginHealthService>()?.GetBlockedPluginIds() ?? [];
 }
