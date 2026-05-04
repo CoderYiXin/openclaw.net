@@ -196,7 +196,10 @@ internal sealed class WhatsAppWebhookHandler
             if (!AllowlistPolicy.IsAllowed(effective.AllowedFrom, payload.From, _allowlistSemantics))
                 return WebhookResult.Unauthorized();
 
-            var text = payload.Text ?? "";
+            var text = BuildBridgeInboundText(payload);
+            if (string.IsNullOrWhiteSpace(text))
+                return WebhookResult.Ok();
+
             if (text.Length > _config.MaxInboundChars)
             {
                 _logger.LogWarning("Truncating WhatsApp Bridge message from {Sender} (exceeds {Max} chars).", payload.From, _config.MaxInboundChars);
@@ -208,8 +211,19 @@ internal sealed class WhatsAppWebhookHandler
                 ChannelId = "whatsapp",
                 SenderId = payload.From,
                 Text = text,
+                AccountId = payload.AccountId,
+                SessionId = payload.SessionId,
                 SenderName = payload.SenderName,
-                MessageId = payload.MessageId
+                MessageId = payload.MessageId,
+                ReplyToMessageId = payload.ReplyToMessageId,
+                IsGroup = payload.IsGroup,
+                GroupId = payload.GroupId,
+                GroupName = payload.GroupName,
+                MentionedIds = payload.MentionedIds,
+                MediaType = payload.MediaType,
+                MediaUrl = payload.MediaUrl,
+                MediaMimeType = payload.MediaMimeType,
+                MediaFileName = payload.MediaFileName
             };
 
             await enqueue(msg, ct);
@@ -220,6 +234,48 @@ internal sealed class WhatsAppWebhookHandler
             _logger.LogError(ex, "Failed to parse WhatsApp Bridge webhook.");
             return WebhookResult.BadRequest("Invalid JSON");
         }
+    }
+
+    private static string BuildBridgeInboundText(WhatsAppBridgeInboundPayload payload)
+    {
+        var lines = new List<string>();
+        if (payload.Attachments is { Length: > 0 })
+        {
+            foreach (var attachment in payload.Attachments)
+            {
+                var marker = BuildMediaMarker(attachment.Type, attachment.Url);
+                if (!string.IsNullOrWhiteSpace(marker))
+                    lines.Add(marker);
+            }
+        }
+        else
+        {
+            var marker = BuildMediaMarker(payload.MediaType, payload.MediaUrl);
+            if (!string.IsNullOrWhiteSpace(marker))
+                lines.Add(marker);
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.Text))
+            lines.Add(payload.Text);
+
+        return string.Join('\n', lines);
+    }
+
+    private static string? BuildMediaMarker(string? mediaType, string? mediaUrl)
+    {
+        if (string.IsNullOrWhiteSpace(mediaType) || string.IsNullOrWhiteSpace(mediaUrl))
+            return null;
+
+        return mediaType.Trim().ToLowerInvariant() switch
+        {
+            "image" => $"[IMAGE_URL:{mediaUrl}]",
+            "video" => $"[VIDEO_URL:{mediaUrl}]",
+            "audio" => $"[AUDIO_URL:{mediaUrl}]",
+            "document" => $"[DOCUMENT_URL:{mediaUrl}]",
+            "file" => $"[FILE_URL:{mediaUrl}]",
+            "sticker" => $"[STICKER_URL:{mediaUrl}]",
+            _ => $"[FILE_URL:{mediaUrl}]"
+        };
     }
 
     private static async Task<byte[]?> ReadBodyWithLimitAsync(HttpContext context, int maxBytes, CancellationToken ct)

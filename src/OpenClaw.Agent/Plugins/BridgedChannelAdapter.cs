@@ -337,10 +337,10 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
     private static string MarkerKindToMediaType(MediaMarkerKind kind) => kind switch
     {
         MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath or MediaMarkerKind.TelegramImageFileId => "image",
-        MediaMarkerKind.VideoUrl => "video",
-        MediaMarkerKind.AudioUrl => "audio",
-        MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath => "document",
-        MediaMarkerKind.StickerUrl => "sticker",
+        MediaMarkerKind.VideoUrl or MediaMarkerKind.TelegramVideoFileId => "video",
+        MediaMarkerKind.AudioUrl or MediaMarkerKind.TelegramAudioFileId => "audio",
+        MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath or MediaMarkerKind.TelegramDocumentFileId => "document",
+        MediaMarkerKind.StickerUrl or MediaMarkerKind.TelegramStickerFileId => "sticker",
         _ => "document",
     };
 }

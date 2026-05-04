@@ -372,8 +372,9 @@ They also include a security posture section covering public-bind approval mode,
 ### Media Marker Protocol (Telegram + WebChat)
 The gateway/channels support portable attachment markers embedded in text (one per line):
 - `[IMAGE_URL:https://...]` (Telegram sends a real photo; WebChat renders inline)
-- `[FILE_URL:https://...]` (WebChat renders as a link)
+- `[VIDEO_URL:https://...]`, `[AUDIO_URL:https://...]`, `[DOCUMENT_URL:https://...]`, `[FILE_URL:https://...]`, `[STICKER_URL:https://...]` (Telegram sends through the matching Bot API media method where supported; WebChat renders files as links)
 - `[IMAGE:telegram:file_id=<id>]` (Telegram inbound photos are represented this way; the agent can reference it)
+- `[VIDEO:telegram:file_id=<id>]`, `[AUDIO:telegram:file_id=<id>]`, `[DOCUMENT:telegram:file_id=<id>]`, `[STICKER:telegram:file_id=<id>]` (Telegram inbound media file IDs)
 
 ## ⏰ Scheduled Tasks (Cron)
 OpenClaw.NET can run scheduled prompts via `OpenClaw:Cron`. For delivery, set a `ChannelId` and `RecipientId` on the job so the agent’s response is sent through that channel adapter.
@@ -393,7 +394,7 @@ Cron job delivery fields:
 **RecipientId quick reference**
 - `ChannelId="email"` → `RecipientId="you@example.com"`
 - `ChannelId="sms"` → `RecipientId="+15551234567"` (must be in `AllowedToNumbers`)
-- `ChannelId="telegram"` → `RecipientId="<numeric chat id>"` (see “Telegram Webhook channel” in `../README.md`)
+- `ChannelId="telegram"` → `RecipientId="<numeric chat id>"` or `RecipientId="@channelusername"` (see “Telegram Webhook channel” in `../README.md`)
 - `ChannelId="whatsapp"` → `RecipientId="<phone number>"` (Meta Cloud API “to”; format depends on your WhatsApp setup)
 - `ChannelId="websocket"` → `RecipientId="<connection id>"` (only works while that client is connected)
 
