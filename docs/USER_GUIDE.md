@@ -573,7 +573,7 @@ Enable them under the `Channels` block in your config.
 Scheduled jobs (Cron) and outbound delivery require a `RecipientId` that is specific to each channel:
 - **Email** (`ChannelId="email"`): the destination email address (e.g. `you@example.com`)
 - **SMS** (`ChannelId="sms"`): an E.164 number (e.g. `+15551234567`)
-- **Telegram** (`ChannelId="telegram"`): a numeric Telegram `chat.id` (not `from.id`)
+- **Telegram** (`ChannelId="telegram"`): a numeric Telegram `chat.id` (not `from.id`) or a public channel username such as `@openclaw_updates`
 
 To discover a Telegram `chat.id`:
 1. Enable the Telegram channel and temporarily set `DmPolicy="open"` (or approve the pairing).

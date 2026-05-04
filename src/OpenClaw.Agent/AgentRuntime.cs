@@ -1717,9 +1717,9 @@ public sealed class AgentRuntime : IAgentRuntime
             var mediaType = marker.Kind switch
             {
                 MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath or MediaMarkerKind.TelegramImageFileId => "image/*",
-                MediaMarkerKind.AudioUrl => "audio/*",
-                MediaMarkerKind.VideoUrl => "video/*",
-                MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath => "application/octet-stream",
+                MediaMarkerKind.AudioUrl or MediaMarkerKind.TelegramAudioFileId => "audio/*",
+                MediaMarkerKind.VideoUrl or MediaMarkerKind.TelegramVideoFileId => "video/*",
+                MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath or MediaMarkerKind.TelegramDocumentFileId => "application/octet-stream",
                 _ => "application/octet-stream"
             };
 
