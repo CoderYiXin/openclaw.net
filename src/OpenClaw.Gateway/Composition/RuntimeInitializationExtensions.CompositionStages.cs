@@ -197,12 +197,20 @@ internal static partial class RuntimeInitializationExtensions
 
         if (config.Plugins.DynamicNative.Enabled)
         {
-            nativeDynamicPluginHost = new NativeDynamicPluginHost(
-                config.Plugins.DynamicNative,
-                startup.RuntimeState,
-                loggerFactory.CreateLogger<NativeDynamicPluginHost>(),
-                blockedPluginIds);
-            nativeDynamicTools = await nativeDynamicPluginHost.LoadAsync(startup.WorkspacePath, app.Lifetime.ApplicationStopping);
+            nativeDynamicPluginHost = startup.NativeDynamicPluginHost;
+            if (nativeDynamicPluginHost is null)
+            {
+                nativeDynamicPluginHost = new NativeDynamicPluginHost(
+                    config.Plugins.DynamicNative,
+                    startup.RuntimeState,
+                    loggerFactory.CreateLogger<NativeDynamicPluginHost>(),
+                    blockedPluginIds);
+                nativeDynamicTools = await nativeDynamicPluginHost.LoadAsync(startup.WorkspacePath, app.Lifetime.ApplicationStopping);
+            }
+            else
+            {
+                nativeDynamicTools = nativeDynamicPluginHost.Tools;
+            }
 
             RegisterNativeDynamicChannels(channelAdapters, nativeDynamicPluginHost, runtimeDiagnostics);
             RegisterNativeDynamicCommands(services.CommandProcessor, nativeDynamicPluginHost, runtimeDiagnostics);
