@@ -278,7 +278,7 @@ public sealed class PaymentRuntimeTests
     [Fact]
     public async Task FileMemoryStore_RedactsPersistedSessionWithoutMutatingLiveSession()
     {
-        var root = Path.Combine(Path.GetTempPath(), Path.Combine("openclaw-payment-tests", Guid.NewGuid().ToString("N")));
+        var root = Path.Combine(Path.GetTempPath(), "openclaw-payment-tests", Guid.NewGuid().ToString("N"));
         using var store = new FileMemoryStore(
             root,
             redaction: new RedactionPipeline([new PaymentSensitiveDataRedactor()]));
