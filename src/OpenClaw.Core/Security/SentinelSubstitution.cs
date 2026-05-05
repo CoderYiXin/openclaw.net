@@ -9,6 +9,8 @@ public sealed record SentinelSubstitutionContext
     public string? SenderId { get; init; }
     public string? CorrelationId { get; init; }
     public string? WorkspaceId { get; init; }
+    public string? PaymentProviderId { get; init; }
+    public string? PaymentEnvironment { get; init; }
 }
 
 public sealed record SentinelSubstitutionResult

@@ -22,7 +22,10 @@ public sealed class DefaultPaymentPolicy : IPaymentPolicy
     {
         ct.ThrowIfCancellationRequested();
 
-        var live = string.Equals(request.Environment, PaymentEnvironments.Live, StringComparison.OrdinalIgnoreCase);
+        if (!PaymentEnvironments.TryNormalize(request.Environment, out var environment))
+            return ValueTask.FromResult(Deny($"Unsupported payment environment '{request.Environment}'."));
+
+        var live = string.Equals(environment, PaymentEnvironments.Live, StringComparison.Ordinal);
         if (live && _maxLiveAmountMinor is { } max && request.AmountMinor is { } amount && amount > max)
         {
             return ValueTask.FromResult(Deny($"Live payment amount {amount} exceeds configured limit {max}."));

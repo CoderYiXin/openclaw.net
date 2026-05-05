@@ -183,8 +183,8 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         if (session is null)
             throw new ArgumentNullException(nameof(session));
 
-        _redaction?.RedactSessionInPlace(session);
-        var json = JsonSerializer.Serialize(session, CoreJsonContext.Default.Session);
+        var persistedSession = _redaction?.RedactSession(session) ?? session;
+        var json = JsonSerializer.Serialize(persistedSession, CoreJsonContext.Default.Session);
         var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         await using var conn = new SqliteConnection(ConnectionString);
@@ -203,7 +203,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
 
         await cmd.ExecuteNonQueryAsync(ct);
-        await SyncSessionSearchIndexAsync(conn, session, ct);
+        await SyncSessionSearchIndexAsync(conn, persistedSession, ct);
     }
 
     public async ValueTask<string?> LoadNoteAsync(string key, CancellationToken ct)
@@ -546,8 +546,8 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         if (branch is null)
             throw new ArgumentNullException(nameof(branch));
 
-        RedactBranchInPlace(branch);
-        var json = JsonSerializer.Serialize(branch, CoreJsonContext.Default.SessionBranch);
+        var persistedBranch = _redaction?.RedactBranch(branch) ?? branch;
+        var json = JsonSerializer.Serialize(persistedBranch, CoreJsonContext.Default.SessionBranch);
         var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         await using var conn = new SqliteConnection(ConnectionString);
@@ -570,21 +570,6 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
 
         await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    private void RedactBranchInPlace(SessionBranch branch)
-    {
-        if (_redaction is null)
-            return;
-
-        var session = new Session
-        {
-            Id = branch.SessionId,
-            ChannelId = "",
-            SenderId = "",
-            History = branch.History
-        };
-        _redaction.RedactSessionInPlace(session);
     }
 
     public async ValueTask<SessionBranch?> LoadBranchAsync(string branchId, CancellationToken ct)

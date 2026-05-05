@@ -134,7 +134,6 @@ public sealed class OpenClawToolExecutor
         using var activity = Telemetry.ActivitySource.StartActivity("Agent.ExecuteTool");
         activity?.SetTag("tool.name", toolName);
         var persistedArgsJson = _redaction.Redact(argsJson);
-        var executionArgsJson = argsJson;
 
         if (!_toolsByName.TryGetValue(toolName, out var tool))
         {
@@ -277,7 +276,7 @@ public sealed class OpenClawToolExecutor
                 SenderId = session.SenderId,
                 CorrelationId = turnCtx.CorrelationId
             }, ct);
-            executionArgsJson = substitution.ExecutionArgumentsJson;
+            var executionArgsJson = substitution.ExecutionArgumentsJson;
             persistedArgsJson = _redaction.Redact(substitution.PersistedArgumentsJson);
             afterHookCtx = hookCtx with { ArgumentsJson = persistedArgsJson };
 
@@ -464,14 +463,14 @@ public sealed class OpenClawToolExecutor
 
         const int MaxChars = 1_000_000;
         var sb = new StringBuilder();
+        var chunks = new List<string>();
 
         await foreach (var chunk in tool.ExecuteStreamingAsync(argsJson, effectiveCt).WithCancellation(effectiveCt))
         {
             if (chunk is null)
                 continue;
 
-            await onDelta(chunk);
-
+            chunks.Add(chunk);
             if (sb.Length < MaxChars)
             {
                 var remaining = MaxChars - sb.Length;
@@ -482,7 +481,19 @@ public sealed class OpenClawToolExecutor
         if (sb.Length >= MaxChars)
             sb.Append("…");
 
-        return sb.ToString();
+        var result = sb.ToString();
+        var redactedResult = _redaction.Redact(result);
+        if (string.Equals(redactedResult, result, StringComparison.Ordinal))
+        {
+            foreach (var chunk in chunks)
+                await onDelta(chunk);
+        }
+        else if (!string.IsNullOrEmpty(redactedResult))
+        {
+            await onDelta(redactedResult);
+        }
+
+        return result;
     }
 
     private async Task<SandboxResult> ExecuteSandboxWithTimeoutAsync(

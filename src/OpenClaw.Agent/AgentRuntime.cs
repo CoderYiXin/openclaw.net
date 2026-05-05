@@ -555,9 +555,18 @@ public sealed class AgentRuntime : IAgentRuntime
             // We buffer events because C# doesn't allow yield in try/catch.
             var streamResult = await StreamLlmCollectAsync(session, messages, chatOptions, turnCtx, ct);
 
-            // Yield buffered text deltas
-            foreach (var delta in streamResult.TextDeltas)
-                yield return AgentStreamEvent.TextDelta(_redaction.Redact(delta));
+            // Redact the complete buffered text so secrets split across provider chunks cannot leak.
+            var fullText = streamResult.FullText;
+            var redactedText = _redaction.Redact(fullText);
+            if (string.Equals(redactedText, fullText, StringComparison.Ordinal))
+            {
+                foreach (var delta in streamResult.TextDeltas)
+                    yield return AgentStreamEvent.TextDelta(delta);
+            }
+            else if (!string.IsNullOrEmpty(redactedText))
+            {
+                yield return AgentStreamEvent.TextDelta(redactedText);
+            }
 
             // If streaming failed, yield error and stop
             if (streamResult.Error is not null)

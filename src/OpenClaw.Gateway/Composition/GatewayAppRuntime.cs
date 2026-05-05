@@ -37,12 +37,7 @@ internal sealed class GatewayAppRuntime
     public required ApprovalAuditStore ApprovalAuditStore { get; init; }
     public required RuntimeMetrics RuntimeMetrics { get; init; }
     public required ProviderUsageTracker ProviderUsage { get; init; }
-    public PaymentRuntimeService PaymentRuntime { get; init; } = new(
-        [new MockPaymentProvider()],
-        new InMemoryPaymentSecretVault(),
-        new DefaultPaymentPolicy(),
-        new InMemoryPaymentAuditSink(),
-        defaultProviderId: "mock");
+    public required PaymentRuntimeService PaymentRuntime { get; init; }
     public required HeartbeatService Heartbeat { get; init; }
     public required IReadOnlyList<SkillDefinition> LoadedSkills { get; set; }
     public required SkillWatcherService SkillWatcher { get; init; }

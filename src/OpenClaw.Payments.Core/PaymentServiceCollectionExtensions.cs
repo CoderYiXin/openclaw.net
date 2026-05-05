@@ -18,6 +18,7 @@ public static class PaymentServiceCollectionExtensions
         string mockProviderId = "mock",
         string mockFundingDisplay = "Mock Visa ending 4242")
     {
+        _ = PaymentEnvironments.Normalize(environment);
         services.TryAddSingleton<IPaymentSecretVault, InMemoryPaymentSecretVault>();
         services.TryAddSingleton<IPaymentAuditSink, InMemoryPaymentAuditSink>();
         services.TryAddSingleton<IPaymentPolicy>(_ => new DefaultPaymentPolicy(

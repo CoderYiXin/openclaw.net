@@ -36,7 +36,7 @@ public sealed class PaymentTool : IToolWithContext
             "funding_source_id": { "type": "string" },
             "merchant": { "type": "string" },
             "merchant_url": { "type": "string" },
-            "amount_minor": { "type": "integer" },
+            "amount_minor": { "type": "integer", "minimum": 1 },
             "currency": { "type": "string" },
             "purpose": { "type": "string" },
             "valid_minutes": { "type": "integer" },
@@ -57,24 +57,24 @@ public sealed class PaymentTool : IToolWithContext
 
     private async ValueTask<string> ExecuteCoreAsync(string argumentsJson, ToolExecutionContext? context, CancellationToken ct)
     {
-        using var doc = JsonDocument.Parse(argumentsJson);
-        var root = doc.RootElement;
-        var action = ReadString(root, "action");
-        if (string.IsNullOrWhiteSpace(action))
-            return Error("action is required.");
-
-        var provider = ReadString(root, "provider") ?? _defaultProviderId;
-        var executionContext = new PaymentExecutionContext
-        {
-            SessionId = context?.Session.Id,
-            ChannelId = context?.Session.ChannelId,
-            SenderId = context?.Session.SenderId,
-            CorrelationId = context?.TurnContext.CorrelationId,
-            Environment = ReadString(root, "environment") ?? _environment
-        };
-
         try
         {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            var root = doc.RootElement;
+            var action = ReadString(root, "action");
+            if (string.IsNullOrWhiteSpace(action))
+                return Error("action is required.");
+
+            var provider = ReadString(root, "provider") ?? _defaultProviderId;
+            var executionContext = new PaymentExecutionContext
+            {
+                SessionId = context?.Session.Id,
+                ChannelId = context?.Session.ChannelId,
+                SenderId = context?.Session.SenderId,
+                CorrelationId = context?.TurnContext.CorrelationId,
+                Environment = PaymentEnvironments.Normalize(ReadString(root, "environment") ?? _environment)
+            };
+
             return action switch
             {
                 PaymentActions.SetupStatus => Serialize(await _runtime.GetSetupStatusAsync(provider, ct), PaymentJsonContext.Default.PaymentSetupStatus),
@@ -89,9 +89,17 @@ public sealed class PaymentTool : IToolWithContext
         {
             return Error(ex.Message, "payment_policy_denied");
         }
-        catch (Exception ex)
+        catch (JsonException ex)
         {
-            return Error(ex.Message, "payment_error");
+            return Error(ex.Message);
+        }
+        catch (FormatException ex)
+        {
+            return Error(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            return Error(ex.Message);
         }
     }
 
@@ -102,7 +110,7 @@ public sealed class PaymentTool : IToolWithContext
             FundingSourceId = ReadString(root, "funding_source_id"),
             MerchantName = ReadRequiredString(root, "merchant"),
             MerchantUrl = ReadString(root, "merchant_url"),
-            AmountMinor = ReadLong(root, "amount_minor") ?? 0,
+            AmountMinor = ReadRequiredPositiveLong(root, "amount_minor"),
             Currency = ReadString(root, "currency") ?? "USD",
             Purpose = ReadString(root, "purpose"),
             ValidUntilUtc = DateTimeOffset.UtcNow.AddMinutes(Math.Clamp((int)(ReadLong(root, "valid_minutes") ?? 30), 1, 1440)),
@@ -123,7 +131,7 @@ public sealed class PaymentTool : IToolWithContext
                 Protocol = ReadString(root, "protocol") ?? "http-402",
                 ResourceUrl = ReadString(root, "resource_url"),
                 MerchantName = merchant,
-                AmountMinor = ReadLong(root, "amount_minor") ?? 0,
+                AmountMinor = ReadRequiredPositiveLong(root, "amount_minor"),
                 Currency = ReadString(root, "currency") ?? "USD",
                 ProviderId = provider
             }
@@ -142,7 +150,7 @@ public sealed class PaymentTool : IToolWithContext
         }, PaymentJsonContext.Default.DictionaryStringString);
 
     private static string ReadRequiredString(JsonElement element, string property)
-        => ReadString(element, property) ?? throw new InvalidOperationException($"{property} is required.");
+        => ReadString(element, property) ?? throw new ArgumentException($"{property} is required.");
 
     private static string? ReadString(JsonElement element, string property)
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
@@ -158,5 +166,15 @@ public sealed class PaymentTool : IToolWithContext
         if (value.ValueKind == JsonValueKind.String && long.TryParse(value.GetString(), out var parsed))
             return parsed;
         return null;
+    }
+
+    private static long ReadRequiredPositiveLong(JsonElement element, string property)
+    {
+        var value = ReadLong(element, property);
+        if (value is null)
+            throw new ArgumentException($"{property} is required and must be an integer.");
+        if (value <= 0)
+            throw new ArgumentException($"{property} must be greater than 0.");
+        return value.Value;
     }
 }

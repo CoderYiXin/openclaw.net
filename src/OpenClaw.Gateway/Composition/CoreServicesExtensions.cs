@@ -59,7 +59,7 @@ internal static class CoreServicesExtensions
             {
                 ProviderId = config.Payments.StripeLink.ProviderId,
                 CliPath = config.Payments.StripeLink.CliPath,
-                Mode = config.Payments.Environment,
+                Mode = PaymentEnvironments.Normalize(config.Payments.Environment),
                 Timeout = TimeSpan.FromSeconds(Math.Max(1, config.Payments.StripeLink.TimeoutSeconds)),
                 WorkingDirectory = config.Payments.StripeLink.WorkingDirectory,
                 EnvironmentVariables = config.Payments.StripeLink.EnvironmentVariables

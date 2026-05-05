@@ -37,7 +37,7 @@ internal sealed class PromptCacheTraceWriter
             StableSystemPrompt = ShouldIncludeSystem() ? _redaction.Redact(descriptor.StableSystemPrompt) : null,
             PromptText = ShouldIncludePrompt() ? _redaction.Redact(descriptor.VolatileSuffix) : null,
             MessageCount = messages.Count,
-            AdditionalProperties = options.AdditionalProperties?.ToDictionary(kvp => kvp.Key, kvp => (string?)_redaction.Redact(RenderPropertyValue(kvp.Value)))
+            AdditionalProperties = options.AdditionalProperties?.ToDictionary(kvp => kvp.Key, kvp => RedactRenderedProperty(RenderPropertyValue(kvp.Value)))
         });
     }
 
@@ -149,6 +149,9 @@ internal sealed class PromptCacheTraceWriter
             Uri uriValue => uriValue.ToString(),
             _ => "[OMITTED]"
         };
+
+    private string? RedactRenderedProperty(string? value)
+        => value is null ? null : _redaction.Redact(value);
 
     internal sealed class PromptCacheTraceEntry
     {

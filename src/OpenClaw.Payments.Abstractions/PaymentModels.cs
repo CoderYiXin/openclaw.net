@@ -7,6 +7,42 @@ public static class PaymentEnvironments
 {
     public const string Test = "test";
     public const string Live = "live";
+
+    public static bool TryNormalize(string? value, out string environment)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            environment = Test;
+            return true;
+        }
+
+        if (string.Equals(value, Test, StringComparison.OrdinalIgnoreCase))
+        {
+            environment = Test;
+            return true;
+        }
+
+        if (string.Equals(value, Live, StringComparison.OrdinalIgnoreCase))
+        {
+            environment = Live;
+            return true;
+        }
+
+        environment = "";
+        return false;
+    }
+
+    public static string Normalize(string? value, string fallback = Test)
+    {
+        var candidate = string.IsNullOrWhiteSpace(value) ? fallback : value;
+        return TryNormalize(candidate, out var environment)
+            ? environment
+            : throw new ArgumentException($"Unsupported payment environment '{value}'. Use 'test' or 'live'.", nameof(value));
+    }
+
+    public static bool IsLive(string? value)
+        => TryNormalize(value, out var environment) &&
+           string.Equals(environment, Live, StringComparison.Ordinal);
 }
 
 public static class PaymentActions
@@ -261,12 +297,14 @@ public sealed class PaymentSecret
         string? postalCode = null,
         string? authorizationToken = null,
         string? authorizationHeader = null,
-        DateTimeOffset? expiresAtUtc = null)
+        DateTimeOffset? expiresAtUtc = null,
+        string environment = PaymentEnvironments.Test)
     {
         HandleId = handleId;
         ProviderId = providerId;
         Last4 = pan is { Length: >= 4 } ? pan[^4..] : null;
         ExpiresAtUtc = expiresAtUtc;
+        Environment = PaymentEnvironments.Normalize(environment);
         _pan = pan;
         _cvv = cvv;
         _expMonth = NormalizeMonth(expMonth);
@@ -280,6 +318,7 @@ public sealed class PaymentSecret
     public string ProviderId { get; }
     public string? Last4 { get; }
     public DateTimeOffset? ExpiresAtUtc { get; }
+    public string Environment { get; }
 
     public string? Resolve(PaymentSecretField field)
         => field switch

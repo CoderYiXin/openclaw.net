@@ -65,8 +65,8 @@ public sealed class PaymentSentinelSubstitutionService : ISentinelSubstitutionSe
             {
                 Action = PaymentActions.BrowserSentinelFill,
                 Summary = $"Fill browser checkout field using payment handle {handleId}.",
-                ProviderId = "payment",
-                Environment = PaymentEnvironments.Live,
+                ProviderId = context.PaymentProviderId,
+                Environment = context.PaymentEnvironment ?? "",
                 SessionId = context.SessionId,
                 ChannelId = context.ChannelId,
                 SenderId = context.SenderId,

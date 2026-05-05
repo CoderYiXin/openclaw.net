@@ -63,7 +63,8 @@ public sealed class MockPaymentProvider : IPaymentProvider
             expMonth: "12",
             expYear: "2030",
             postalCode: "94107",
-            expiresAtUtc: validUntil);
+            expiresAtUtc: validUntil,
+            environment: context.Environment);
         var handle = new VirtualCardHandle
         {
             HandleId = handleId,
@@ -136,7 +137,8 @@ public sealed class MockPaymentProvider : IPaymentProvider
             ProviderId,
             authorizationToken: $"payment_mock_secret_token_{sequence:D6}",
             authorizationHeader: $"Payment payment_mock_secret_token_{sequence:D6}",
-            expiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(5));
+            expiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(5),
+            environment: context.Environment);
 
         return ValueTask.FromResult(new MachinePaymentProviderResult
         {

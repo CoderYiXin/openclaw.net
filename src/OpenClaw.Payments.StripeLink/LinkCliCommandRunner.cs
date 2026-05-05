@@ -115,7 +115,22 @@ public sealed class LinkCliProcessRunner : ILinkCliCommandRunner
 
     private static async Task<string> ReadBestEffortAsync(Task<string> task)
     {
-        try { return await task; } catch { return ""; }
+        try
+        {
+            return await task;
+        }
+        catch (ObjectDisposedException)
+        {
+            return "";
+        }
+        catch (InvalidOperationException)
+        {
+            return "";
+        }
+        catch (System.IO.IOException)
+        {
+            return "";
+        }
     }
 
     private static void TryKill(Process process)
@@ -125,7 +140,13 @@ public sealed class LinkCliProcessRunner : ILinkCliCommandRunner
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch
+        catch (InvalidOperationException)
+        {
+        }
+        catch (NotSupportedException)
+        {
+        }
+        catch (System.ComponentModel.Win32Exception)
         {
         }
     }

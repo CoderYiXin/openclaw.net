@@ -125,7 +125,7 @@ public sealed class StripeLinkPaymentProvider : IPaymentProvider
         if (result.ExitCode != 0)
             throw new InvalidOperationException($"Stripe Link machine payment failed: {result.Stderr}");
 
-        return ParseMachinePayment(result.Stdout, request);
+        return ParseMachinePayment(result.Stdout, request, context);
     }
 
     public async ValueTask<PaymentStatus> GetPaymentStatusAsync(string paymentIdOrHandleId, PaymentExecutionContext context, CancellationToken ct)
@@ -158,9 +158,13 @@ public sealed class StripeLinkPaymentProvider : IPaymentProvider
         var results = new List<FundingSource>();
         foreach (var item in items)
         {
+            var id = ReadString(item, "id") ?? ReadString(item, "fundingSourceId");
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+
             results.Add(new FundingSource
             {
-                FundingSourceId = ReadString(item, "id") ?? ReadString(item, "fundingSourceId") ?? "",
+                FundingSourceId = id,
                 ProviderId = ProviderId,
                 DisplayName = ReadString(item, "display_name") ?? ReadString(item, "displayName") ?? "Stripe Link funding source",
                 Type = ReadString(item, "type") ?? "link",
@@ -188,7 +192,8 @@ public sealed class StripeLinkPaymentProvider : IPaymentProvider
             expMonth: ReadString(root, "exp_month") ?? ReadString(root, "expMonth"),
             expYear: ReadString(root, "exp_year") ?? ReadString(root, "expYear"),
             postalCode: ReadString(root, "postal_code") ?? ReadString(root, "postalCode"),
-            expiresAtUtc: request.ValidUntilUtc);
+            expiresAtUtc: request.ValidUntilUtc,
+            environment: context.Environment);
 
         return new VirtualCardIssueResult
         {
@@ -208,7 +213,7 @@ public sealed class StripeLinkPaymentProvider : IPaymentProvider
         };
     }
 
-    private MachinePaymentProviderResult ParseMachinePayment(string json, MachinePaymentRequest request)
+    private MachinePaymentProviderResult ParseMachinePayment(string json, MachinePaymentRequest request, PaymentExecutionContext context)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -230,7 +235,13 @@ public sealed class StripeLinkPaymentProvider : IPaymentProvider
             },
             ScopedAuthorizationSecret = string.IsNullOrWhiteSpace(auth) && string.IsNullOrWhiteSpace(token)
                 ? null
-                : new PaymentSecret(paymentId, ProviderId, authorizationToken: token, authorizationHeader: auth)
+                : new PaymentSecret(
+                    paymentId,
+                    ProviderId,
+                    authorizationToken: token,
+                    authorizationHeader: auth,
+                    expiresAtUtc: DateTimeOffset.UtcNow.AddMinutes(5),
+                    environment: context.Environment)
         };
     }
 

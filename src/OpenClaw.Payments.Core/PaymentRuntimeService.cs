@@ -50,6 +50,7 @@ public sealed class PaymentRuntimeService
     {
         var provider = ResolveProvider(request.ProviderId);
         var effectiveContext = NormalizeContext(context, request.Environment);
+        ValidateVirtualCardRequest(request);
         var approval = BuildApprovalRequest(
             PaymentActions.IssueVirtualCard,
             $"Issue virtual card for {request.MerchantName} ({request.AmountMinor} {request.Currency}) using {provider.ProviderId}.",
@@ -73,7 +74,13 @@ public sealed class PaymentRuntimeService
             if (issue.Secret is null)
                 throw new InvalidOperationException("Payment provider did not return a vaultable virtual card secret.");
 
-            await _vault.StoreAsync(issue.Secret, ResolveSecretTtl(issue.Handle.ValidUntilUtc), retrieveOnce: false, ct);
+            var secret = PrepareSecretForVault(
+                issue.Secret,
+                issue.Handle.HandleId,
+                provider.ProviderId,
+                effectiveContext.Environment,
+                issue.Handle.ValidUntilUtc);
+            await _vault.StoreAsync(secret, ResolveSecretTtl(issue.Handle.ValidUntilUtc), retrieveOnce: false, ct);
             await _audit.RecordAsync(new PaymentAuditEvent
             {
                 EventType = "virtual_card_issued",
@@ -92,17 +99,16 @@ public sealed class PaymentRuntimeService
         }
         catch
         {
-            if (!string.IsNullOrWhiteSpace(request.ProviderId))
-                await _audit.RecordAsync(new PaymentAuditEvent
-                {
-                    EventType = "virtual_card_failed",
-                    ProviderId = provider.ProviderId,
-                    MerchantName = request.MerchantName,
-                    AmountMinor = request.AmountMinor,
-                    Currency = request.Currency,
-                    Status = "failed",
-                    Environment = effectiveContext.Environment
-                }, CancellationToken.None);
+            await _audit.RecordAsync(new PaymentAuditEvent
+            {
+                EventType = "virtual_card_failed",
+                ProviderId = provider.ProviderId,
+                MerchantName = request.MerchantName,
+                AmountMinor = request.AmountMinor,
+                Currency = request.Currency,
+                Status = "failed",
+                Environment = effectiveContext.Environment
+            }, CancellationToken.None);
             throw;
         }
     }
@@ -114,6 +120,7 @@ public sealed class PaymentRuntimeService
     {
         var provider = ResolveProvider(request.ProviderId ?? request.Challenge.ProviderId);
         var effectiveContext = NormalizeContext(context, request.Environment);
+        ValidateMachinePaymentRequest(request);
         var approval = BuildApprovalRequest(
             PaymentActions.ExecuteMachinePayment,
             $"Execute machine payment for {request.Challenge.MerchantName ?? request.Challenge.ResourceUrl ?? "paid resource"} ({request.Challenge.AmountMinor} {request.Challenge.Currency}) using {provider.ProviderId}.",
@@ -142,7 +149,15 @@ public sealed class PaymentRuntimeService
         }, effectiveContext, ct);
 
         if (providerResult.ScopedAuthorizationSecret is not null)
-            await _vault.StoreAsync(providerResult.ScopedAuthorizationSecret, TimeSpan.FromMinutes(5), retrieveOnce: true, ct);
+        {
+            var secret = PrepareSecretForVault(
+                providerResult.ScopedAuthorizationSecret,
+                providerResult.Result.PaymentId,
+                provider.ProviderId,
+                effectiveContext.Environment,
+                DateTimeOffset.UtcNow.AddMinutes(5));
+            await _vault.StoreAsync(secret, TimeSpan.FromMinutes(5), retrieveOnce: true, ct);
+        }
 
         await _audit.RecordAsync(new PaymentAuditEvent
         {
@@ -167,7 +182,8 @@ public sealed class PaymentRuntimeService
         CancellationToken ct)
     {
         var provider = ResolveProvider(providerId);
-        var status = await provider.GetPaymentStatusAsync(paymentIdOrHandleId, NormalizeContext(context), ct);
+        var effectiveContext = NormalizeContext(context);
+        var status = await provider.GetPaymentStatusAsync(paymentIdOrHandleId, effectiveContext, ct);
         await _audit.RecordAsync(new PaymentAuditEvent
         {
             EventType = "payment_status_checked",
@@ -177,7 +193,7 @@ public sealed class PaymentRuntimeService
             AmountMinor = status.AmountMinor,
             Currency = status.Currency,
             Status = status.Status,
-            Environment = context.Environment
+            Environment = effectiveContext.Environment
         }, ct);
         return status;
     }
@@ -188,12 +204,62 @@ public sealed class PaymentRuntimeService
         ApprovalRequest approval,
         CancellationToken ct)
     {
-        await RequireApprovalOrPolicyAllowAsync(approval, ct);
         var secret = await _vault.TryRetrieveAsync(handleId, "sentinel-substitution", ct)
             ?? throw new InvalidOperationException("Payment secret is missing, expired, or revoked.");
+        var effectiveApproval = approval with
+        {
+            ProviderId = string.IsNullOrWhiteSpace(approval.ProviderId) ? secret.ProviderId : approval.ProviderId,
+            Environment = string.IsNullOrWhiteSpace(approval.Environment)
+                ? secret.Environment
+                : PaymentEnvironments.Normalize(approval.Environment)
+        };
+
+        await _audit.RecordAsync(new PaymentAuditEvent
+        {
+            EventType = "browser_sentinel_substitution_attempted",
+            ProviderId = effectiveApproval.ProviderId ?? secret.ProviderId,
+            HandleId = handleId,
+            MerchantName = effectiveApproval.MerchantName,
+            AmountMinor = effectiveApproval.AmountMinor,
+            Currency = effectiveApproval.Currency,
+            Environment = effectiveApproval.Environment
+        }, ct);
+
+        try
+        {
+            await RequireApprovalOrPolicyAllowAsync(effectiveApproval, ct);
+        }
+        catch (PaymentPolicyDeniedException)
+        {
+            await _audit.RecordAsync(new PaymentAuditEvent
+            {
+                EventType = "browser_sentinel_substitution_denied",
+                ProviderId = effectiveApproval.ProviderId ?? secret.ProviderId,
+                HandleId = handleId,
+                MerchantName = effectiveApproval.MerchantName,
+                AmountMinor = effectiveApproval.AmountMinor,
+                Currency = effectiveApproval.Currency,
+                Status = "denied",
+                Environment = effectiveApproval.Environment
+            }, CancellationToken.None);
+            throw;
+        }
+
         var value = secret.Resolve(field);
         if (string.IsNullOrEmpty(value))
             throw new InvalidOperationException($"Payment secret field '{field}' is not available.");
+
+        await _audit.RecordAsync(new PaymentAuditEvent
+        {
+            EventType = "browser_sentinel_substitution_approved",
+            ProviderId = effectiveApproval.ProviderId ?? secret.ProviderId,
+            HandleId = handleId,
+            MerchantName = effectiveApproval.MerchantName,
+            AmountMinor = effectiveApproval.AmountMinor,
+            Currency = effectiveApproval.Currency,
+            Status = "approved",
+            Environment = effectiveApproval.Environment
+        }, ct);
         return value;
     }
 
@@ -279,9 +345,8 @@ public sealed class PaymentRuntimeService
     private PaymentExecutionContext NormalizeContext(PaymentExecutionContext context, string? environment = null)
         => context with
         {
-            Environment = string.IsNullOrWhiteSpace(environment)
-                ? (string.IsNullOrWhiteSpace(context.Environment) ? PaymentEnvironments.Test : context.Environment)
-                : environment
+            Environment = PaymentEnvironments.Normalize(
+                string.IsNullOrWhiteSpace(environment) ? context.Environment : environment)
         };
 
     private TimeSpan ResolveSecretTtl(DateTimeOffset? validUntilUtc)
@@ -289,8 +354,47 @@ public sealed class PaymentRuntimeService
         if (validUntilUtc is null)
             return _secretTtl;
         var ttl = validUntilUtc.Value - DateTimeOffset.UtcNow;
-        return ttl <= TimeSpan.Zero ? TimeSpan.FromMinutes(1) : ttl;
+        if (ttl <= TimeSpan.Zero)
+            return TimeSpan.FromMinutes(1);
+        return ttl < _secretTtl ? ttl : _secretTtl;
     }
+
+    private static void ValidateVirtualCardRequest(VirtualCardRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.MerchantName))
+            throw new ArgumentException("merchant is required.", nameof(request));
+        if (request.AmountMinor <= 0)
+            throw new ArgumentException("amount_minor must be greater than 0.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Currency))
+            throw new ArgumentException("currency is required.", nameof(request));
+    }
+
+    private static void ValidateMachinePaymentRequest(MachinePaymentRequest request)
+    {
+        if (request.Challenge.AmountMinor <= 0)
+            throw new ArgumentException("amount_minor must be greater than 0.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Challenge.Currency))
+            throw new ArgumentException("currency is required.", nameof(request));
+    }
+
+    private static PaymentSecret PrepareSecretForVault(
+        PaymentSecret secret,
+        string handleId,
+        string providerId,
+        string environment,
+        DateTimeOffset? expiresAtUtc)
+        => new(
+            handleId,
+            providerId,
+            pan: secret.Resolve(PaymentSecretField.Pan),
+            cvv: secret.Resolve(PaymentSecretField.Cvv),
+            expMonth: secret.Resolve(PaymentSecretField.ExpMonth),
+            expYear: secret.Resolve(PaymentSecretField.ExpYear),
+            postalCode: secret.Resolve(PaymentSecretField.PostalCode),
+            authorizationToken: secret.Resolve(PaymentSecretField.AuthorizationToken),
+            authorizationHeader: secret.Resolve(PaymentSecretField.AuthorizationHeader),
+            expiresAtUtc: expiresAtUtc ?? secret.ExpiresAtUtc,
+            environment: environment);
 
     private static ApprovalRequest BuildApprovalRequest(
         string action,

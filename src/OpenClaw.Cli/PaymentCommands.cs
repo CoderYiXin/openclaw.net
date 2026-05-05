@@ -25,7 +25,7 @@ internal static class PaymentCommands
         using var client = CreateClient(parsed);
         var ct = CancellationToken.None;
         var provider = parsed.GetOption("--provider");
-        var environment = parsed.HasFlag("--test") ? PaymentEnvironments.Test : parsed.GetOption("--environment");
+        var environment = ResolveEnvironment(parsed);
         var json = parsed.HasFlag("--json");
 
         switch (command)
@@ -53,11 +53,11 @@ internal static class PaymentCommands
                     FundingSourceId = parsed.GetOption("--funding-source"),
                     MerchantName = merchant,
                     MerchantUrl = parsed.GetOption("--merchant-url"),
-                    AmountMinor = ParseLong(parsed.GetOption("--amount-minor"), "--amount-minor"),
+                    AmountMinor = ParsePositiveLong(parsed.GetOption("--amount-minor"), "--amount-minor"),
                     Currency = parsed.GetOption("--currency") ?? "USD",
                     Purpose = parsed.GetOption("--purpose"),
                     ValidUntilUtc = DateTimeOffset.UtcNow.AddMinutes(ParseInt(parsed.GetOption("--valid-minutes"), "--valid-minutes", 30)),
-                    Environment = environment ?? PaymentEnvironments.Live
+                    Environment = environment ?? PaymentEnvironments.Test
                 };
                 RequireYesForLive(request.Environment, parsed.HasFlag("--yes"));
                 var handle = await client.IssueVirtualCardAsync(request, parsed.HasFlag("--yes"), ct);
@@ -67,7 +67,7 @@ internal static class PaymentCommands
 
             case "execute":
             {
-                var env = environment ?? PaymentEnvironments.Live;
+                var env = environment ?? PaymentEnvironments.Test;
                 RequireYesForLive(env, parsed.HasFlag("--yes"));
                 var request = new MachinePaymentRequest
                 {
@@ -80,7 +80,7 @@ internal static class PaymentCommands
                         Protocol = parsed.GetOption("--protocol") ?? "http-402",
                         ResourceUrl = parsed.GetOption("--resource-url"),
                         MerchantName = parsed.GetOption("--merchant"),
-                        AmountMinor = ParseLong(parsed.GetOption("--amount-minor"), "--amount-minor"),
+                        AmountMinor = ParsePositiveLong(parsed.GetOption("--amount-minor"), "--amount-minor"),
                         Currency = parsed.GetOption("--currency") ?? "USD",
                         ProviderId = provider
                     }
@@ -113,8 +113,27 @@ internal static class PaymentCommands
 
     private static void RequireYesForLive(string environment, bool yes)
     {
-        if (string.Equals(environment, PaymentEnvironments.Live, StringComparison.OrdinalIgnoreCase) && !yes)
+        if (PaymentEnvironments.IsLive(environment) && !yes)
             throw new InvalidOperationException("Live payment commands require --yes. Policy and approval checks still run.");
+    }
+
+    private static string? ResolveEnvironment(CliArgs parsed)
+    {
+        var explicitEnvironment = parsed.GetOption("--environment");
+        if (parsed.HasFlag("--test"))
+        {
+            if (!string.IsNullOrWhiteSpace(explicitEnvironment) &&
+                !string.Equals(explicitEnvironment, PaymentEnvironments.Test, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("--test cannot be combined with --environment live.");
+            }
+
+            return PaymentEnvironments.Test;
+        }
+
+        return string.IsNullOrWhiteSpace(explicitEnvironment)
+            ? null
+            : PaymentEnvironments.Normalize(explicitEnvironment);
     }
 
     private static string Required(CliArgs parsed, string name)
@@ -122,6 +141,12 @@ internal static class PaymentCommands
 
     private static long ParseLong(string? value, string name)
         => long.TryParse(value, out var parsed) ? parsed : throw new ArgumentException($"{name} is required and must be an integer.");
+
+    private static long ParsePositiveLong(string? value, string name)
+    {
+        var parsed = ParseLong(value, name);
+        return parsed > 0 ? parsed : throw new ArgumentException($"{name} must be greater than 0.");
+    }
 
     private static int ParseInt(string? value, string name, int fallback)
         => string.IsNullOrWhiteSpace(value) ? fallback : int.TryParse(value, out var parsed) ? parsed : throw new ArgumentException($"{name} must be an integer.");
@@ -166,12 +191,13 @@ internal static class PaymentCommands
 
             Usage:
               openclaw payment setup [--provider <id>] [--json]
-              openclaw payment funding list [--provider <id>] [--test] [--json]
+              openclaw payment funding list [--provider <id>] [--test|--environment live] [--json]
               openclaw payment virtual-card issue --merchant <name> --amount-minor <n> [--currency USD] [--funding-source <id>] [--provider <id>] [--test|--environment live] [--yes] [--json]
               openclaw payment execute --amount-minor <n> [--merchant <name>] [--resource-url <url>] [--currency USD] [--provider <id>] [--test|--environment live] [--yes] [--json]
               openclaw payment status --id <payment-or-handle-id> [--provider <id>] [--json]
 
             Notes:
+              - Money-moving commands default to test mode. Use --environment live --yes for live payment attempts.
               - Commands talk to the running gateway so handles remain usable by browser sentinel substitution.
               - Output is allow-listed safe metadata only.
             """);

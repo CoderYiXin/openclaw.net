@@ -195,7 +195,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (session is null)
             throw new ArgumentNullException(nameof(session));
 
-        _redaction?.RedactSessionInPlace(session);
+        var persistedSession = _redaction?.RedactSession(session) ?? session;
         var encodedId = EncodeKey(session.Id);
         var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -211,7 +211,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, session, CoreJsonContext.Default.Session, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedSession, CoreJsonContext.Default.Session, ct);
                 await stream.FlushAsync(ct);
             }
 
@@ -219,7 +219,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
             File.Move(tempPath, filePath, overwrite: true);
 
             // Update cache
-            await AddToCacheAsync(session.Id, session);
+            await AddToCacheAsync(session.Id, persistedSession);
         }
         catch
         {
@@ -413,7 +413,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (branch is null)
             throw new ArgumentNullException(nameof(branch));
 
-        RedactBranchInPlace(branch);
+        var persistedBranch = _redaction?.RedactBranch(branch) ?? branch;
         var encodedId = EncodeKey(branch.BranchId);
         var filePath = Path.Combine(_branchesPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -428,7 +428,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, branch, CoreJsonContext.Default.SessionBranch, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedBranch, CoreJsonContext.Default.SessionBranch, ct);
                 await stream.FlushAsync(ct);
             }
 
@@ -439,21 +439,6 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
             try { File.Delete(tempPath); } catch { /* ignore */ }
             throw;
         }
-    }
-
-    private void RedactBranchInPlace(SessionBranch branch)
-    {
-        if (_redaction is null)
-            return;
-
-        var session = new Session
-        {
-            Id = branch.SessionId,
-            ChannelId = "",
-            SenderId = "",
-            History = branch.History
-        };
-        _redaction.RedactSessionInPlace(session);
     }
 
     public async ValueTask<SessionBranch?> LoadBranchAsync(string branchId, CancellationToken ct)

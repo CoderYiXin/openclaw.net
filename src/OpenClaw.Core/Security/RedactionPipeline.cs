@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using OpenClaw.Core.Models;
 
@@ -13,6 +14,8 @@ public interface IRedactionPipeline
 {
     string Redact(string? value);
     void RedactSessionInPlace(Session session);
+    Session RedactSession(Session session);
+    SessionBranch RedactBranch(SessionBranch branch);
 }
 
 public sealed class RedactionPipeline : IRedactionPipeline
@@ -63,12 +66,39 @@ public sealed class RedactionPipeline : IRedactionPipeline
             };
         }
     }
+
+    public Session RedactSession(Session session)
+    {
+        var clone = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(session, CoreJsonContext.Default.Session),
+            CoreJsonContext.Default.Session) ?? throw new InvalidOperationException("Failed to clone session for redaction.");
+        RedactSessionInPlace(clone);
+        return clone;
+    }
+
+    public SessionBranch RedactBranch(SessionBranch branch)
+    {
+        var clone = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(branch, CoreJsonContext.Default.SessionBranch),
+            CoreJsonContext.Default.SessionBranch) ?? throw new InvalidOperationException("Failed to clone session branch for redaction.");
+        var session = new Session
+        {
+            Id = clone.SessionId,
+            ChannelId = "",
+            SenderId = "",
+            History = clone.History
+        };
+        RedactSessionInPlace(session);
+        return clone;
+    }
 }
 
 public sealed class NoopRedactionPipeline : IRedactionPipeline
 {
     public string Redact(string? value) => value ?? string.Empty;
     public void RedactSessionInPlace(Session session) { }
+    public Session RedactSession(Session session) => session;
+    public SessionBranch RedactBranch(SessionBranch branch) => branch;
 }
 
 public sealed class BaselineSecretRedactor : ISensitiveDataRedactor

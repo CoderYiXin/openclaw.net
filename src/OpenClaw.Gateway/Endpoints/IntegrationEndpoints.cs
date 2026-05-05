@@ -564,11 +564,18 @@ internal static class IntegrationEndpoints
                 return PaymentDisabled();
 
             var provider = GetOptionalQueryString(ctx, "provider") ?? startup.Config.Payments.Provider;
-            var items = await runtime.PaymentRuntime.ListFundingSourcesAsync(
-                provider,
-                BuildPaymentContext(ctx, startup.Config),
-                ctx.RequestAborted);
-            return Results.Json(new List<FundingSource>(items), PaymentJsonContext.Default.ListFundingSource);
+            try
+            {
+                var items = await runtime.PaymentRuntime.ListFundingSourcesAsync(
+                    provider,
+                    BuildPaymentContext(ctx, startup.Config),
+                    ctx.RequestAborted);
+                return Results.Json(new List<FundingSource>(items), PaymentJsonContext.Default.ListFundingSource);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
         });
 
         group.MapPost("/payment/virtual-card", async (HttpContext ctx) =>
@@ -584,7 +591,7 @@ internal static class IntegrationEndpoints
             {
                 request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, PaymentJsonContext.Default.VirtualCardRequest, ctx.RequestAborted);
             }
-            catch
+            catch (JsonException)
             {
                 return BadPaymentRequest("Invalid JSON request body.");
             }
@@ -598,13 +605,17 @@ internal static class IntegrationEndpoints
                     request with
                     {
                         ProviderId = request.ProviderId ?? startup.Config.Payments.Provider,
-                        Environment = string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment
+                        Environment = NormalizePaymentEnvironment(string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment)
                     },
                     BuildPaymentContext(ctx, startup.Config),
                     ctx.RequestAborted);
                 return Results.Json(handle, PaymentJsonContext.Default.VirtualCardHandle);
             }
             catch (PaymentPolicyDeniedException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+            catch (ArgumentException ex)
             {
                 return BadPaymentRequest(ex.Message);
             }
@@ -623,7 +634,7 @@ internal static class IntegrationEndpoints
             {
                 request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, PaymentJsonContext.Default.MachinePaymentRequest, ctx.RequestAborted);
             }
-            catch
+            catch (JsonException)
             {
                 return BadPaymentRequest("Invalid JSON request body.");
             }
@@ -637,13 +648,17 @@ internal static class IntegrationEndpoints
                     request with
                     {
                         ProviderId = request.ProviderId ?? startup.Config.Payments.Provider,
-                        Environment = string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment
+                        Environment = NormalizePaymentEnvironment(string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment)
                     },
                     BuildPaymentContext(ctx, startup.Config),
                     ctx.RequestAborted);
                 return Results.Json(result, PaymentJsonContext.Default.MachinePaymentResult);
             }
             catch (PaymentPolicyDeniedException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+            catch (ArgumentException ex)
             {
                 return BadPaymentRequest(ex.Message);
             }
@@ -658,9 +673,16 @@ internal static class IntegrationEndpoints
                 return PaymentDisabled();
 
             var provider = GetOptionalQueryString(ctx, "provider") ?? startup.Config.Payments.Provider;
-            return Results.Json(
-                await runtime.PaymentRuntime.GetPaymentStatusAsync(id, provider, BuildPaymentContext(ctx, startup.Config), ctx.RequestAborted),
-                PaymentJsonContext.Default.PaymentStatus);
+            try
+            {
+                return Results.Json(
+                    await runtime.PaymentRuntime.GetPaymentStatusAsync(id, provider, BuildPaymentContext(ctx, startup.Config), ctx.RequestAborted),
+                    PaymentJsonContext.Default.PaymentStatus);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
         });
 
         group.MapPost("/messages", async (HttpContext ctx) =>
@@ -706,10 +728,13 @@ internal static class IntegrationEndpoints
             SessionId = GetOptionalQueryString(ctx, "sessionId"),
             ChannelId = GetOptionalQueryString(ctx, "channelId"),
             SenderId = GetOptionalQueryString(ctx, "senderId"),
-            Environment = GetOptionalQueryString(ctx, "environment") ?? config.Payments.Environment,
+            Environment = NormalizePaymentEnvironment(GetOptionalQueryString(ctx, "environment") ?? config.Payments.Environment),
             CliConfirmed = GetQueryBool(ctx, "yes") == true,
             AllowTestModeWithoutApproval = config.Payments.Policy.AllowTestModeWithoutApproval
         };
+
+    private static string NormalizePaymentEnvironment(string? environment)
+        => PaymentEnvironments.Normalize(environment);
 
     private static IResult PaymentDisabled()
         => Results.Json(

@@ -1,5 +1,7 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
+using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Security;
 using OpenClaw.Payments.Abstractions;
@@ -72,6 +74,40 @@ public sealed class PaymentRuntimeTests
     }
 
     [Fact]
+    public async Task PaymentTool_RejectsMissingOrZeroAmounts()
+    {
+        var runtime = CreateRuntime();
+        var tool = new PaymentTool(runtime, "mock", PaymentEnvironments.Test);
+
+        var missing = await tool.ExecuteAsync(
+            """{"action":"issue_virtual_card","merchant":"Example Store","currency":"USD","environment":"test"}""",
+            CancellationToken.None);
+        var zero = await tool.ExecuteAsync(
+            """{"action":"execute_machine_payment","merchant":"Paid API","amount_minor":0,"currency":"USD","environment":"test"}""",
+            CancellationToken.None);
+
+        Assert.Contains("\"status\":\"error\"", missing, StringComparison.Ordinal);
+        Assert.Contains("amount_minor", missing, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"error\"", zero, StringComparison.Ordinal);
+        Assert.Contains("greater than 0", zero, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PaymentPolicy_DeniesUnknownEnvironment()
+    {
+        var policy = new DefaultPaymentPolicy();
+
+        var decision = await policy.EvaluateAsync(new ApprovalRequest
+        {
+            Action = PaymentActions.IssueVirtualCard,
+            Summary = "Issue card",
+            Environment = "prod"
+        }, approvalServiceAvailable: false, ct: CancellationToken.None);
+
+        Assert.True(decision.Denied);
+    }
+
+    [Fact]
     public async Task LiveVirtualCard_RequiresApprovalAndDenialBlocksExecution()
     {
         var runtime = CreateRuntime(new StaticPaymentApprovalService(false));
@@ -115,6 +151,32 @@ public sealed class PaymentRuntimeTests
 
         var redacted = new PaymentSensitiveDataRedactor().Redact(result.ExecutionArgumentsJson);
         Assert.DoesNotContain("4242424242424242", redacted, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SentinelSubstitution_UsesStoredHandleEnvironment()
+    {
+        var runtime = CreateRuntime();
+        var handle = await runtime.IssueVirtualCardAsync(new VirtualCardRequest
+        {
+            MerchantName = "Example Store",
+            AmountMinor = 100,
+            Currency = "USD",
+            Environment = PaymentEnvironments.Test
+        }, new PaymentExecutionContext { Environment = PaymentEnvironments.Test }, CancellationToken.None);
+        var substitution = new PaymentSentinelSubstitutionService(runtime);
+
+        var result = await substitution.SubstituteAsync(new SentinelSubstitutionContext
+        {
+            ToolName = "browser",
+            ArgumentsJson = "{\"action\":\"fill\",\"selector\":\"#card\",\"value\":\"{{payment.vcard:" + handle.HandleId + ":exp_mm_yy}}\"}",
+            SessionId = "s1",
+            ChannelId = "web",
+            SenderId = "u1"
+        }, CancellationToken.None);
+
+        Assert.True(result.Substituted);
+        Assert.Contains("12/30", result.ExecutionArgumentsJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -187,11 +249,67 @@ public sealed class PaymentRuntimeTests
             new ChallengeThenOkHandler());
         using var client = new HttpClient(handler);
 
-        var response = await client.GetAsync("https://example.test/paid");
+        using var response = await client.GetAsync("https://example.test/paid");
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("paid", body);
+    }
+
+    [Fact]
+    public async Task PaymentAwareHttpHandler_RetryPreservesRequestContent()
+    {
+        var runtime = CreateRuntime(new StaticPaymentApprovalService(true));
+        var handler = new PaymentAwareHttpHandler(
+            runtime,
+            new PaymentExecutionContext { Environment = PaymentEnvironments.Test },
+            "mock",
+            new ChallengeThenOkHandler("payload=keep", HttpMethod.Post));
+        using var client = new HttpClient(handler);
+
+        using var response = await client.PostAsync(
+            "https://example.test/paid",
+            new StringContent("payload=keep", Encoding.UTF8, "application/x-www-form-urlencoded"));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("paid", body);
+    }
+
+    [Fact]
+    public async Task FileMemoryStore_RedactsPersistedSessionWithoutMutatingLiveSession()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "openclaw-payment-tests", Guid.NewGuid().ToString("N"));
+        var store = new FileMemoryStore(
+            root,
+            redaction: new RedactionPipeline([new PaymentSensitiveDataRedactor()]));
+        try
+        {
+            var session = new Session
+            {
+                Id = "s1",
+                ChannelId = "web",
+                SenderId = "u1"
+            };
+            session.History.Add(new ChatTurn
+            {
+                Role = "user",
+                Content = "card 4242424242424242"
+            });
+
+            await store.SaveSessionAsync(session, CancellationToken.None);
+
+            Assert.Contains("4242424242424242", session.History[0].Content, StringComparison.Ordinal);
+            var loaded = await store.GetSessionAsync("s1", CancellationToken.None);
+            Assert.NotNull(loaded);
+            Assert.DoesNotContain("4242424242424242", loaded!.History[0].Content, StringComparison.Ordinal);
+        }
+        finally
+        {
+            store.Dispose();
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
     }
 
     private static PaymentRuntimeService CreateRuntime(IPaymentApprovalService? approval = null)
@@ -231,25 +349,39 @@ public sealed class PaymentRuntimeTests
 
     private sealed class ChallengeThenOkHandler : HttpMessageHandler
     {
+        private readonly string? _expectedContent;
+        private readonly HttpMethod? _expectedMethod;
         private int _count;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        public ChallengeThenOkHandler(string? expectedContent = null, HttpMethod? expectedMethod = null)
+        {
+            _expectedContent = expectedContent;
+            _expectedMethod = expectedMethod;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (Interlocked.Increment(ref _count) == 1)
             {
-                var challenge = new HttpResponseMessage(HttpStatusCode.PaymentRequired)
+                return new HttpResponseMessage(HttpStatusCode.PaymentRequired)
                 {
                     Content = new StringContent("challenge=ch_1;merchant=Paid API;amount=42;currency=USD")
                 };
-                return Task.FromResult(challenge);
             }
 
+            if (_expectedMethod is not null)
+                Assert.Equal(_expectedMethod, request.Method);
+            if (_expectedContent is not null)
+            {
+                Assert.Equal("application/x-www-form-urlencoded", request.Content!.Headers.ContentType?.MediaType);
+                Assert.Equal(_expectedContent, await request.Content!.ReadAsStringAsync(cancellationToken));
+            }
             Assert.Equal("Payment", request.Headers.Authorization?.Scheme);
             Assert.DoesNotContain("payment_mock_secret_token", request.RequestUri!.ToString(), StringComparison.Ordinal);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent("paid")
-            });
+            };
         }
     }
 }
