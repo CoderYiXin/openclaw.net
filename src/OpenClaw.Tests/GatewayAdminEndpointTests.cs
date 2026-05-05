@@ -40,6 +40,7 @@ using OpenClaw.Gateway.Endpoints;
 using OpenClaw.Gateway.Extensions;
 using OpenClaw.Gateway.Mcp;
 using OpenClaw.Gateway.Models;
+using OpenClaw.Payments.Core;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -5176,6 +5177,12 @@ public sealed class GatewayAdminEndpointTests
             ApprovalAuditStore = approvalAuditStore,
             RuntimeMetrics = runtimeMetrics,
             ProviderUsage = providerUsage,
+            PaymentRuntime = new PaymentRuntimeService(
+                [new MockPaymentProvider()],
+                new InMemoryPaymentSecretVault(),
+                new DefaultPaymentPolicy(),
+                new InMemoryPaymentAuditSink(),
+                defaultProviderId: "mock"),
             Heartbeat = heartbeatService,
             LoadedSkills = Array.Empty<SkillDefinition>(),
             SkillWatcher = skillWatcher,

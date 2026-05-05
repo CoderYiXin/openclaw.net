@@ -14,6 +14,7 @@ using OpenClaw.Core.Sessions;
 using OpenClaw.Core.Skills;
 using OpenClaw.Gateway;
 using OpenClaw.Gateway.Extensions;
+using OpenClaw.Payments.Core;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -36,6 +37,7 @@ internal sealed class GatewayAppRuntime
     public required ApprovalAuditStore ApprovalAuditStore { get; init; }
     public required RuntimeMetrics RuntimeMetrics { get; init; }
     public required ProviderUsageTracker ProviderUsage { get; init; }
+    public required PaymentRuntimeService PaymentRuntime { get; init; }
     public required HeartbeatService Heartbeat { get; init; }
     public required IReadOnlyList<SkillDefinition> LoadedSkills { get; set; }
     public required SkillWatcherService SkillWatcher { get; init; }

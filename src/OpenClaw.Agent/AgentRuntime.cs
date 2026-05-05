@@ -10,6 +10,7 @@ using OpenClaw.Agent.Execution;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Security;
 using OpenClaw.Core.Skills;
 
 namespace OpenClaw.Agent;
@@ -65,6 +66,8 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly SkillsConfig? _skillsConfig;
     private readonly string? _skillWorkspacePath;
     private readonly IReadOnlyList<string> _pluginSkillDirs;
+    private readonly IRedactionPipeline _redaction;
+    private readonly ISentinelSubstitutionService _sentinelSubstitution;
     private readonly string? _memoryRecallPrefix;
     private readonly object _skillGate = new();
     private string[] _loadedSkillNames = [];
@@ -106,7 +109,9 @@ public sealed class AgentRuntime : IAgentRuntime
         Func<Session, bool>? isContractRuntimeBudgetExceeded = null,
         Action<Session, string, string, long, long>? recordContractTurnUsage = null,
         Action<Session, string>? appendContractSnapshot = null,
-        ToolAuditLog? toolAuditLog = null)
+        ToolAuditLog? toolAuditLog = null,
+        IRedactionPipeline? redaction = null,
+        ISentinelSubstitutionService? sentinelSubstitution = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -133,6 +138,8 @@ public sealed class AgentRuntime : IAgentRuntime
         _skillsConfig = skillsConfig;
         _skillWorkspacePath = skillWorkspacePath;
         _pluginSkillDirs = pluginSkillDirs ?? [];
+        _redaction = redaction ?? new NoopRedactionPipeline();
+        _sentinelSubstitution = sentinelSubstitution ?? new NoopSentinelSubstitutionService();
         _circuitBreaker = new CircuitBreaker(
             config.CircuitBreakerThreshold,
             TimeSpan.FromSeconds(config.CircuitBreakerCooldownSeconds),
@@ -151,6 +158,8 @@ public sealed class AgentRuntime : IAgentRuntime
             toolUsageTracker: toolUsageTracker,
             executionRouter: executionRouter,
             toolPresetResolver: toolPresetResolver,
+            redaction: _redaction,
+            sentinelSubstitution: _sentinelSubstitution,
             auditLog: toolAuditLog);
         _sessionTokenBudget = sessionTokenBudget;
         _estimateTokenBudgetAdmission = gatewayConfig?.EnableEstimatedTokenAdmissionControl ?? false;
@@ -220,6 +229,7 @@ public sealed class AgentRuntime : IAgentRuntime
             SessionId = session.Id,
             ChannelId = session.ChannelId
         };
+        userMessage = _redaction.Redact(userMessage);
 
         _metrics?.IncrementRequests();
         _logger?.LogInformation("[{CorrelationId}] Turn start session={SessionId} channel={ChannelId}",
@@ -394,7 +404,7 @@ public sealed class AgentRuntime : IAgentRuntime
             if (toolCalls.Count == 0)
             {
                 // Final text response
-                var text = response.Text ?? "";
+                var text = _redaction.Redact(response.Text ?? "");
                 session.History.Add(new ChatTurn { Role = "assistant", Content = text });
                 MarkCheckpointCompleted(session, SessionCheckpointStates.Completed, "final_response");
                 AppendContractSnapshot(session, "active");
@@ -447,6 +457,7 @@ public sealed class AgentRuntime : IAgentRuntime
             SessionId = session.Id,
             ChannelId = session.ChannelId
         };
+        userMessage = _redaction.Redact(userMessage);
 
         _metrics?.IncrementRequests();
         _logger?.LogInformation("[{CorrelationId}] Streaming turn start session={SessionId} channel={ChannelId}",
@@ -544,9 +555,18 @@ public sealed class AgentRuntime : IAgentRuntime
             // We buffer events because C# doesn't allow yield in try/catch.
             var streamResult = await StreamLlmCollectAsync(session, messages, chatOptions, turnCtx, ct);
 
-            // Yield buffered text deltas
-            foreach (var delta in streamResult.TextDeltas)
-                yield return AgentStreamEvent.TextDelta(delta);
+            // Redact the complete buffered text so secrets split across provider chunks cannot leak.
+            var fullText = streamResult.FullText;
+            var redactedText = _redaction.Redact(fullText);
+            if (string.Equals(redactedText, fullText, StringComparison.Ordinal))
+            {
+                foreach (var delta in streamResult.TextDeltas)
+                    yield return AgentStreamEvent.TextDelta(delta);
+            }
+            else if (!string.IsNullOrEmpty(redactedText))
+            {
+                yield return AgentStreamEvent.TextDelta(redactedText);
+            }
 
             // If streaming failed, yield error and stop
             if (streamResult.Error is not null)
@@ -589,7 +609,8 @@ public sealed class AgentRuntime : IAgentRuntime
             if (toolCalls.Count == 0)
             {
                 // Final text response
-                session.History.Add(new ChatTurn { Role = "assistant", Content = streamResult.FullText });
+                var finalText = _redaction.Redact(streamResult.FullText);
+                session.History.Add(new ChatTurn { Role = "assistant", Content = finalText });
                 MarkCheckpointCompleted(session, SessionCheckpointStates.Completed, "final_response");
                 yield return AgentStreamEvent.Complete();
                 AppendContractSnapshot(session, "active");
