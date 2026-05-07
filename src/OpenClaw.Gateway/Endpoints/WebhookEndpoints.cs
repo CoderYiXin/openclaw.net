@@ -103,6 +103,7 @@ internal static class WebhookEndpoints
 
         if (startup.Config.Channels.Telegram.Enabled)
         {
+            var telegramWebhookHandler = app.Services.GetRequiredService<TelegramWebhookHandler>();
             byte[]? telegramSecretBytes = null;
             if (startup.Config.Channels.Telegram.ValidateSignature)
             {
@@ -141,11 +142,7 @@ internal static class WebhookEndpoints
                     return;
                 }
 
-                using var document = JsonDocument.Parse(bodyText, new JsonDocumentOptions { MaxDepth = 64 });
-                var root = document.RootElement;
-                var deliveryKey = root.TryGetProperty("update_id", out var updateId)
-                    ? updateId.GetRawText()
-                    : WebhookDeliveryStore.HashDeliveryKey(bodyText);
+                var deliveryKey = TelegramWebhookHandler.ResolveDeliveryKey(bodyText);
                 if (!deliveries.TryBegin("telegram", deliveryKey, TimeSpan.FromHours(6)))
                 {
                     ctx.Response.StatusCode = StatusCodes.Status200OK;
@@ -157,71 +154,21 @@ internal static class WebhookEndpoints
 
                 try
                 {
-                    if (root.TryGetProperty("message", out var message) &&
-                        message.TryGetProperty("chat", out var chat) &&
-                        chat.TryGetProperty("id", out var chatId))
+                    var response = await telegramWebhookHandler.HandleAsync(
+                        bodyText,
+                        (msg, ct) =>
+                        {
+                            replayMessage = msg;
+                            return runtime.Pipeline.InboundWriter.WriteAsync(msg, ct);
+                        },
+                        ctx.RequestAborted);
+
+                    ctx.Response.StatusCode = response.StatusCode;
+                    if (response.Body is not null)
                     {
-                        var senderIdStr = chatId.GetRawText();
-
-                        await runtime.RecentSenders.RecordAsync("telegram", senderIdStr, senderName: null, ctx.RequestAborted);
-
-                        var effective = runtime.Allowlists.GetEffective("telegram", new ChannelAllowlistFile
-                        {
-                            AllowedFrom = startup.Config.Channels.Telegram.AllowedFromUserIds
-                        });
-
-                        if (!AllowlistPolicy.IsAllowed(effective.AllowedFrom, senderIdStr, runtime.AllowlistSemantics))
-                        {
-                            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-                            return;
-                        }
-
-                        string? text = null;
-                        if (message.TryGetProperty("text", out var textNode))
-                            text = textNode.GetString();
-
-                        string? marker = null;
-                        if (message.TryGetProperty("photo", out var photoNode) && photoNode.ValueKind == JsonValueKind.Array)
-                        {
-                            string? fileId = null;
-                            foreach (var photo in photoNode.EnumerateArray())
-                            {
-                                if (photo.TryGetProperty("file_id", out var idNode))
-                                    fileId = idNode.GetString();
-                            }
-
-                            if (!string.IsNullOrWhiteSpace(fileId))
-                                marker = $"[IMAGE:telegram:file_id={fileId}]";
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(marker))
-                        {
-                            var caption = message.TryGetProperty("caption", out var capNode) ? capNode.GetString() : null;
-                            text = string.IsNullOrWhiteSpace(caption) ? marker : marker + "\n" + caption;
-                        }
-
-                        if (!string.IsNullOrWhiteSpace(text) && text.Length > startup.Config.Channels.Telegram.MaxInboundChars)
-                            text = text[..startup.Config.Channels.Telegram.MaxInboundChars];
-
-                        if (string.IsNullOrWhiteSpace(text))
-                        {
-                            ctx.Response.StatusCode = StatusCodes.Status200OK;
-                            await ctx.Response.WriteAsync("OK");
-                            return;
-                        }
-
-                        replayMessage = new InboundMessage
-                        {
-                            ChannelId = "telegram",
-                            SenderId = senderIdStr,
-                            Text = text
-                        };
-
-                        await runtime.Pipeline.InboundWriter.WriteAsync(replayMessage, ctx.RequestAborted);
+                        ctx.Response.ContentType = response.ContentType;
+                        await ctx.Response.WriteAsync(response.Body, ctx.RequestAborted);
                     }
-
-                    ctx.Response.StatusCode = StatusCodes.Status200OK;
-                    await ctx.Response.WriteAsync("OK");
                 }
                 catch (Exception ex)
                 {

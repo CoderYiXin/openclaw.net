@@ -33,6 +33,7 @@ internal static class Program
                 "setup" => await SetupAsync(rest),
                 "upgrade" => await UpgradeAsync(rest),
                 "maintenance" => await MaintenanceAsync(rest),
+                "payment" => await PaymentCommands.RunAsync(rest),
                 "init" => InitCommand.Run(rest),
                 "migrate" => await MigrateAsync(rest),
                 "heartbeat" => await HeartbeatAsync(rest),
@@ -96,11 +97,13 @@ internal static class Program
               openclaw heartbeat <wizard|preview|status> [options]
               openclaw models <list|doctor|presets> [options]
               openclaw maintenance <scan|fix> [options]
+              openclaw payment <setup|funding list|virtual-card issue|execute|status> [options]
               openclaw eval <run|compare> [options]
               openclaw accounts <list|add|remove|probe> [options]
               openclaw backends <list|probe|run|session send> [options]
               openclaw admin <posture|incident export|trajectory export|approvals simulate> [options]
               openclaw compatibility <catalog> [options]
+              openclaw plugins <install|remove|list|search> [options]
               openclaw skills <inspect|install|list> [options]
               openclaw clawhub [wrapper options] [--] <clawhub args...>
 

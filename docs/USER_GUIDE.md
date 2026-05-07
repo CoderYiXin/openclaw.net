@@ -236,11 +236,13 @@ You can lock down the agent via the `Tooling` config block:
       "AllowedWriteRoots": ["/Users/telli/safe-dir"],
       "RequireToolApproval": true,
       "ApprovalRequiredTools": ["shell", "write_file"],
-      "EnableBrowserTool": true
+      "EnableBrowserTool": false
     }
   }
 }
 ```
+
+Setup-generated local profiles keep the browser tool disabled unless you explicitly configure a non-local execution backend or sandbox. Turn `EnableBrowserTool` on only after that backend is available.
 
 If you expose OpenClaw to the internet (a non-loopback bind address like `0.0.0.0`), the Gateway will **refuse to start** unless you explicitly harden these settings or opt-out of the safety checks.
 
@@ -571,7 +573,7 @@ Enable them under the `Channels` block in your config.
 Scheduled jobs (Cron) and outbound delivery require a `RecipientId` that is specific to each channel:
 - **Email** (`ChannelId="email"`): the destination email address (e.g. `you@example.com`)
 - **SMS** (`ChannelId="sms"`): an E.164 number (e.g. `+15551234567`)
-- **Telegram** (`ChannelId="telegram"`): a numeric Telegram `chat.id` (not `from.id`)
+- **Telegram** (`ChannelId="telegram"`): a numeric Telegram `chat.id` (not `from.id`) or a public channel username such as `@openclaw_updates`
 
 To discover a Telegram `chat.id`:
 1. Enable the Telegram channel and temporarily set `DmPolicy="open"` (or approve the pairing).

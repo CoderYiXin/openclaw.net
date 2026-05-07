@@ -383,6 +383,148 @@ public sealed class ChannelAdapterSecurityTests
         }
     }
 
+    [Fact]
+    public async Task WhatsAppWebhookHandler_BridgeWebhookMapsMediaAndGroupMetadata()
+    {
+        var root = Path.Join(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var recentSenders = new RecentSendersStore(root, NullLogger<RecentSendersStore>.Instance);
+            var allowlists = new AllowlistManager(root, NullLogger<AllowlistManager>.Instance);
+            var handler = new WhatsAppWebhookHandler(
+                new WhatsAppChannelConfig
+                {
+                    Enabled = true,
+                    Type = "bridge",
+                    BridgeToken = "bridge-secret"
+                },
+                allowlists,
+                recentSenders,
+                AllowlistSemantics.Legacy,
+                NullLogger<WhatsAppWebhookHandler>.Instance);
+
+            var body =
+                """
+                {
+                  "from": "15551234567@s.whatsapp.net",
+                  "account_id": "business",
+                  "session_id": "whatsapp:group:team@g.us",
+                  "sender_name": "Alice",
+                  "text": "caption",
+                  "message_id": "wamid-2",
+                  "reply_to_message_id": "wamid-1",
+                  "is_group": true,
+                  "group_id": "team@g.us",
+                  "group_name": "Team",
+                  "mentioned_ids": ["bot@s.whatsapp.net"],
+                  "media_type": "image",
+                  "media_url": "https://cdn.example.test/cat.jpg",
+                  "media_mime_type": "image/jpeg",
+                  "media_file_name": "cat.jpg"
+                }
+                """;
+
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Headers.Authorization = "Bearer bridge-secret";
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+
+            InboundMessage? captured = null;
+            var result = await handler.HandleAsync(
+                context,
+                (message, _) =>
+                {
+                    captured = message;
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None);
+
+            Assert.Equal(200, result.StatusCode);
+            Assert.NotNull(captured);
+            Assert.Equal("15551234567@s.whatsapp.net", captured!.SenderId);
+            Assert.Equal("business", captured.AccountId);
+            Assert.Equal("whatsapp:group:team@g.us", captured.SessionId);
+            Assert.Equal("Alice", captured.SenderName);
+            Assert.Equal("[IMAGE_URL:https://cdn.example.test/cat.jpg]\ncaption", captured.Text);
+            Assert.Equal("wamid-2", captured.MessageId);
+            Assert.Equal("wamid-1", captured.ReplyToMessageId);
+            Assert.True(captured.IsGroup);
+            Assert.Equal("team@g.us", captured.GroupId);
+            Assert.Equal("Team", captured.GroupName);
+            Assert.NotNull(captured.MentionedIds);
+            Assert.Equal(["bot@s.whatsapp.net"], captured.MentionedIds!);
+            Assert.Equal("image", captured.MediaType);
+            Assert.Equal("https://cdn.example.test/cat.jpg", captured.MediaUrl);
+            Assert.Equal("image/jpeg", captured.MediaMimeType);
+            Assert.Equal("cat.jpg", captured.MediaFileName);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WhatsAppWebhookHandler_BridgeAttachmentDerivesPrimaryMediaMetadata()
+    {
+        var root = Path.Join(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var handler = new WhatsAppWebhookHandler(
+                new WhatsAppChannelConfig
+                {
+                    Enabled = true,
+                    Type = "bridge"
+                },
+                new AllowlistManager(root, NullLogger<AllowlistManager>.Instance),
+                new RecentSendersStore(root, NullLogger<RecentSendersStore>.Instance),
+                AllowlistSemantics.Legacy,
+                NullLogger<WhatsAppWebhookHandler>.Instance);
+
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+                """
+                {
+                  "from": "15551234567@s.whatsapp.net",
+                  "text": "document caption",
+                  "attachments": [
+                    {
+                      "type": "document",
+                      "url": "https://cdn.example.test/report.pdf",
+                      "mimeType": "application/pdf",
+                      "fileName": "report.pdf"
+                    }
+                  ]
+                }
+                """));
+
+            InboundMessage? captured = null;
+            var result = await handler.HandleAsync(
+                context,
+                (message, _) =>
+                {
+                    captured = message;
+                    return ValueTask.CompletedTask;
+                },
+                CancellationToken.None);
+
+            Assert.Equal(200, result.StatusCode);
+            Assert.NotNull(captured);
+            Assert.Equal("[FILE_URL:https://cdn.example.test/report.pdf]\ndocument caption", captured!.Text);
+            Assert.Equal("document", captured.MediaType);
+            Assert.Equal("https://cdn.example.test/report.pdf", captured.MediaUrl);
+            Assert.Equal("application/pdf", captured.MediaMimeType);
+            Assert.Equal("report.pdf", captured.MediaFileName);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class CallbackHandler(Func<HttpRequestMessage, HttpResponseMessage> callback) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

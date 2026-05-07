@@ -1,15 +1,18 @@
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using OpenClaw.Channels;
 using OpenClaw.Agent;
 using OpenClaw.Agent.Execution;
+using OpenClaw.Agent.Plugins;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Features;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Pipeline;
+using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 using OpenClaw.Core.Sessions;
 using OpenClaw.Gateway.Bootstrap;
@@ -18,6 +21,10 @@ using OpenClaw.Gateway.Models;
 using OpenClaw.Gateway.Pipeline;
 using OpenClaw.Gateway.PromptCaching;
 using OpenClaw.Core.Validation;
+using OpenClaw.PluginKit;
+using OpenClaw.Payments.Abstractions;
+using OpenClaw.Payments.Core;
+using OpenClaw.Payments.StripeLink;
 using TickerQ.DependencyInjection;
 
 namespace OpenClaw.Gateway.Composition;
@@ -35,6 +42,35 @@ internal static class CoreServicesExtensions
         services.AddSingleton(startup);
         services.AddSingleton(config);
         services.AddSingleton(config.Learning);
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ISensitiveDataRedactor, BaselineSecretRedactor>());
+        services.AddOpenClawPaymentCore(
+            defaultProviderId: config.Payments.Provider,
+            environment: config.Payments.Environment,
+            secretTtl: TimeSpan.FromMinutes(Math.Max(1, config.Payments.SecretTtlMinutes)),
+            allowTestModeWithoutApproval: config.Payments.Policy.AllowTestModeWithoutApproval,
+            denyLiveWithoutApprovalService: config.Payments.Policy.DenyLiveWithoutApprovalService,
+            maxLiveAmountMinor: config.Payments.Policy.MaxLiveAmountMinor,
+            mockProviderId: config.Payments.Mock.ProviderId,
+            mockFundingDisplay: config.Payments.Mock.FundingSourceDisplayName);
+        if (string.Equals(config.Payments.Provider, "stripe-link", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<ILinkCliCommandRunner, LinkCliProcessRunner>();
+            services.AddSingleton<IPaymentProvider>(sp => new StripeLinkPaymentProvider(new StripeLinkOptions
+            {
+                ProviderId = config.Payments.StripeLink.ProviderId,
+                CliPath = config.Payments.StripeLink.CliPath,
+                Mode = PaymentEnvironments.Normalize(config.Payments.Environment),
+                Timeout = TimeSpan.FromSeconds(Math.Max(1, config.Payments.StripeLink.TimeoutSeconds)),
+                WorkingDirectory = config.Payments.StripeLink.WorkingDirectory,
+                EnvironmentVariables = config.Payments.StripeLink.EnvironmentVariables
+            }, sp.GetRequiredService<ILinkCliCommandRunner>()));
+        }
+        services.AddSingleton<IPaymentApprovalService, GatewayPaymentApprovalService>();
+        services.AddSingleton<IRedactionPipeline>(sp => new RedactionPipeline(sp.GetServices<ISensitiveDataRedactor>()));
+        services.AddSingleton<ISentinelSubstitutionService>(sp =>
+            config.Payments.Enabled
+                ? sp.GetRequiredService<PaymentSentinelSubstitutionService>()
+                : new NoopSentinelSubstitutionService());
         services.AddSingleton(typeof(AllowlistSemantics), AllowlistPolicy.ParseSemantics(config.Channels.AllowlistSemantics));
         services.AddSingleton(sp =>
             new RecentSendersStore(config.Memory.StoragePath, sp.GetRequiredService<ILogger<RecentSendersStore>>()));
@@ -43,16 +79,24 @@ internal static class CoreServicesExtensions
 
         services.AddSingleton<RuntimeMetrics>();
         services.AddSingleton<IMemoryStore>(sp => CreateMemoryStore(
+            startup,
             config,
             sp.GetRequiredService<RuntimeMetrics>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore")));
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger("MemoryStore"),
+            sp.GetRequiredService<IRedactionPipeline>(),
+            ResolveStartupCancellationToken(sp),
+            ResolveBlockedPluginIds(sp)));
         services.AddSingleton<ISessionAdminStore>(sp =>
         {
             var memory = sp.GetRequiredService<IMemoryStore>();
             return memory as ISessionAdminStore
                 ?? throw new InvalidOperationException($"{memory.GetType().Name} must implement ISessionAdminStore.");
         });
-        services.AddSingleton<ISessionSearchStore>(sp => (ISessionSearchStore)sp.GetRequiredService<IMemoryStore>());
+        services.AddSingleton<ISessionSearchStore>(sp =>
+        {
+            var memory = sp.GetRequiredService<IMemoryStore>();
+            return memory as ISessionSearchStore ?? EmptySessionSearchStore.Instance;
+        });
         AddFeatureStores(services, config);
         services.AddSingleton<ProviderUsageTracker>();
         services.AddSingleton<ToolUsageTracker>();
@@ -208,8 +252,18 @@ internal static class CoreServicesExtensions
         return Path.GetFullPath(dbPath);
     }
 
-    private static IMemoryStore CreateMemoryStore(OpenClaw.Core.Models.GatewayConfig config, RuntimeMetrics metrics, ILogger logger)
+    private static IMemoryStore CreateMemoryStore(
+        GatewayStartupContext startup,
+        GatewayConfig config,
+        RuntimeMetrics metrics,
+        ILogger logger,
+        IRedactionPipeline redaction,
+        CancellationToken startupCancellationToken,
+        IReadOnlyCollection<string> blockedPluginIds)
     {
+        if (string.Equals(config.Memory.Provider, "mempalace", StringComparison.OrdinalIgnoreCase))
+            return CreateDynamicNativeMemoryStore(startup, config, metrics, logger, startupCancellationToken, blockedPluginIds);
+
         if (string.Equals(config.Memory.Provider, "sqlite", StringComparison.OrdinalIgnoreCase))
         {
             var sqliteConfig = config.Memory.Sqlite;
@@ -223,7 +277,8 @@ internal static class CoreServicesExtensions
                 ResolveSqliteDbPath(config),
                 sqliteConfig.EnableFts,
                 embeddingGenerator: embeddingGen,
-                enableVectors: sqliteConfig.EnableVectors);
+                enableVectors: sqliteConfig.EnableVectors,
+                redaction: redaction);
 
             return store;
         }
@@ -231,6 +286,74 @@ internal static class CoreServicesExtensions
         return new FileMemoryStore(
             config.Memory.StoragePath,
             config.Memory.MaxCachedSessions ?? config.MaxConcurrentSessions,
-            metrics: metrics);
+            metrics: metrics,
+            redaction: redaction);
     }
+
+    private static IMemoryStore CreateDynamicNativeMemoryStore(
+        GatewayStartupContext startup,
+        GatewayConfig config,
+        RuntimeMetrics metrics,
+        ILogger logger,
+        CancellationToken startupCancellationToken,
+        IReadOnlyCollection<string> blockedPluginIds)
+    {
+        if (!config.Plugins.DynamicNative.Enabled)
+        {
+            throw new InvalidOperationException(
+                "Memory.Provider 'mempalace' is provided by a JIT-only dynamic native plugin. " +
+                "Enable OpenClaw:Plugins:DynamicNative:Enabled and load the OpenClaw.Plugins.Mempalace native plugin, or choose 'file' or 'sqlite'.");
+        }
+
+        var host = new NativeDynamicPluginHost(config.Plugins.DynamicNative, startup.RuntimeState, logger, blockedPluginIds);
+        try
+        {
+            var providers = host.LoadMemoryProvidersAsync(startup.WorkspacePath, startupCancellationToken)
+                .GetAwaiter()
+                .GetResult();
+            var provider = providers.FirstOrDefault(item => string.Equals(item.ProviderId, config.Memory.Provider, StringComparison.OrdinalIgnoreCase));
+            if (provider.Factory is null)
+            {
+                throw new InvalidOperationException(
+                    "Memory.Provider 'mempalace' was requested, but no dynamic native memory provider registered 'mempalace'. " +
+                    "Load the OpenClaw.Plugins.Mempalace native plugin via OpenClaw:Plugins:DynamicNative:Load:Paths.");
+            }
+
+            var memoryStore = provider.Factory(new NativeDynamicMemoryProviderContext
+            {
+                PluginId = provider.PluginId,
+                ProviderId = provider.ProviderId,
+                Config = provider.Config,
+                GatewayConfig = config,
+                Metrics = metrics,
+                Logger = logger
+            });
+
+            startup.NativeDynamicPluginHost = host;
+            return memoryStore;
+        }
+        catch
+        {
+            DisposeNativeDynamicPluginHostOnStartupFailure(host, logger);
+            throw;
+        }
+    }
+
+    private static void DisposeNativeDynamicPluginHostOnStartupFailure(NativeDynamicPluginHost host, ILogger logger)
+    {
+        try
+        {
+            host.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to dispose dynamic native plugin host after memory provider startup failure");
+        }
+    }
+
+    private static CancellationToken ResolveStartupCancellationToken(IServiceProvider services)
+        => services.GetService<IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
+
+    private static IReadOnlyCollection<string> ResolveBlockedPluginIds(IServiceProvider services)
+        => services.GetService<PluginHealthService>()?.GetBlockedPluginIds() ?? [];
 }

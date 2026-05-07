@@ -37,6 +37,13 @@ internal static class ChannelServicesExtensions
         {
             services.AddSingleton(config.Channels.Telegram);
             services.AddSingleton<TelegramChannel>();
+            services.AddSingleton<TelegramWebhookHandler>(sp =>
+                new TelegramWebhookHandler(
+                    config.Channels.Telegram,
+                    sp.GetRequiredService<OpenClaw.Core.Security.AllowlistManager>(),
+                    sp.GetRequiredService<OpenClaw.Core.Pipeline.RecentSendersStore>(),
+                    sp.GetRequiredService<OpenClaw.Core.Security.AllowlistSemantics>(),
+                    sp.GetRequiredService<ILogger<TelegramWebhookHandler>>()));
         }
 
         if (config.Channels.Teams.Enabled)

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Security;
 
 namespace OpenClaw.Core.Memory;
 
@@ -42,13 +43,20 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
     private readonly ConcurrentDictionary<string, NoteIndexEntry> _noteIndex = new(StringComparer.Ordinal);
     private readonly ILogger<FileMemoryStore>? _logger;
     private readonly RuntimeMetrics? _metrics;
+    private readonly IRedactionPipeline? _redaction;
     private int _noteIndexInitialized;
 
-    public FileMemoryStore(string basePath, int maxCachedSessions = 100, ILogger<FileMemoryStore>? logger = null, RuntimeMetrics? metrics = null)
+    public FileMemoryStore(
+        string basePath,
+        int maxCachedSessions = 100,
+        ILogger<FileMemoryStore>? logger = null,
+        RuntimeMetrics? metrics = null,
+        IRedactionPipeline? redaction = null)
     {
         _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
         _logger = logger;
         _metrics = metrics;
+        _redaction = redaction;
         
         _sessionsPath = Path.Combine(_basePath, "sessions");
         _notesPath = Path.Combine(_basePath, "notes");
@@ -187,6 +195,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (session is null)
             throw new ArgumentNullException(nameof(session));
 
+        var persistedSession = _redaction?.RedactSession(session) ?? session;
         var encodedId = EncodeKey(session.Id);
         var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -202,7 +211,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, session, CoreJsonContext.Default.Session, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedSession, CoreJsonContext.Default.Session, ct);
                 await stream.FlushAsync(ct);
             }
 
@@ -210,7 +219,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
             File.Move(tempPath, filePath, overwrite: true);
 
             // Update cache
-            await AddToCacheAsync(session.Id, session);
+            await AddToCacheAsync(session.Id, persistedSession);
         }
         catch
         {
@@ -255,10 +264,11 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
 
         try
         {
-            await File.WriteAllTextAsync(tempPath, content, ct);
+            var safeContent = _redaction?.Redact(content) ?? content;
+            await File.WriteAllTextAsync(tempPath, safeContent, ct);
             File.Move(tempPath, filePath, overwrite: true);
             await PersistOriginalNoteKeyAsync(key, keyPath, keyTempPath, ct);
-            UpsertNoteIndexEntry(key, content, nowUtc);
+            UpsertNoteIndexEntry(key, safeContent, nowUtc);
         }
         catch
         {
@@ -403,6 +413,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (branch is null)
             throw new ArgumentNullException(nameof(branch));
 
+        var persistedBranch = _redaction?.RedactBranch(branch) ?? branch;
         var encodedId = EncodeKey(branch.BranchId);
         var filePath = Path.Combine(_branchesPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -417,7 +428,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, branch, CoreJsonContext.Default.SessionBranch, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedBranch, CoreJsonContext.Default.SessionBranch, ct);
                 await stream.FlushAsync(ct);
             }
 

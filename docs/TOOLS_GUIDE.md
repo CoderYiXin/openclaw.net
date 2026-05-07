@@ -56,6 +56,8 @@ Allows basic file operations.
 Allows the agent to navigate and interact with websites using Playwright.
 - **Config**: `OpenClaw:Tooling:EnableBrowserTool` (bool)
 - **Options**: `BrowserHeadless` (default: true), `BrowserTimeoutSeconds` (default: 30).
+- **Runtime note**: source/setup-generated local profiles disable this tool by default because the NativeAOT-friendly gateway does not run local Playwright execution unless dynamic code or a configured non-local execution backend is available. Enable it only after configuring an execution backend or sandbox for browser automation.
+- **Payment sentinels**: when native payments are enabled, browser `fill` can resolve approved payment sentinels inside the execution boundary. Persisted tool arguments keep the sentinel text, not raw card values.
 
 ### 4. Memory Note Tool (`memory`)
 Stores and retrieves lightweight notes in the configured memory store.
@@ -79,6 +81,12 @@ Admin/ops tool to list active sessions, inspect recent history, or send a cross-
 
 ### 7. Delegate Agent Tool (`delegate_agent`)
 Spawns a “sub-agent” for multi-agent delegation (only present when `OpenClaw:Delegation:Enabled=true`).
+
+### 7a. Payment Tool (`payment`)
+Gateway-registered first-party payment tool over the native payment runtime. Disabled by default via `OpenClaw:Payments:Enabled=false`.
+- Actions: `setup_status`, `list_funding_sources`, `issue_virtual_card`, `execute_machine_payment`, `get_payment_status`.
+- Safety: money-moving actions are approval-gated by policy; tool results include safe metadata only.
+- Docs: [plugins/payment.md](plugins/payment.md) and [security/payments.md](security/payments.md).
 
 ### 7b. Canvas and A2UI Tools (`canvas_present`, `canvas_hide`, `canvas_navigate`, `canvas_snapshot`, `a2ui_push`, `a2ui_reset`, `a2ui_eval`)
 Control the current websocket session's Canvas visual workspace.
@@ -371,8 +379,9 @@ They also include a security posture section covering public-bind approval mode,
 ### Media Marker Protocol (Telegram + WebChat)
 The gateway/channels support portable attachment markers embedded in text (one per line):
 - `[IMAGE_URL:https://...]` (Telegram sends a real photo; WebChat renders inline)
-- `[FILE_URL:https://...]` (WebChat renders as a link)
+- `[VIDEO_URL:https://...]`, `[AUDIO_URL:https://...]`, `[DOCUMENT_URL:https://...]`, `[FILE_URL:https://...]`, `[STICKER_URL:https://...]` (Telegram sends through the matching Bot API media method where supported; WebChat renders files as links)
 - `[IMAGE:telegram:file_id=<id>]` (Telegram inbound photos are represented this way; the agent can reference it)
+- `[VIDEO:telegram:file_id=<id>]`, `[AUDIO:telegram:file_id=<id>]`, `[DOCUMENT:telegram:file_id=<id>]`, `[STICKER:telegram:file_id=<id>]` (Telegram inbound media file IDs)
 
 ## ⏰ Scheduled Tasks (Cron)
 OpenClaw.NET can run scheduled prompts via `OpenClaw:Cron`. For delivery, set a `ChannelId` and `RecipientId` on the job so the agent’s response is sent through that channel adapter.
@@ -392,7 +401,7 @@ Cron job delivery fields:
 **RecipientId quick reference**
 - `ChannelId="email"` → `RecipientId="you@example.com"`
 - `ChannelId="sms"` → `RecipientId="+15551234567"` (must be in `AllowedToNumbers`)
-- `ChannelId="telegram"` → `RecipientId="<numeric chat id>"` (see “Telegram Webhook channel” in `../README.md`)
+- `ChannelId="telegram"` → `RecipientId="<numeric chat id>"` or `RecipientId="@channelusername"` (see “Telegram Webhook channel” in `../README.md`)
 - `ChannelId="whatsapp"` → `RecipientId="<phone number>"` (Meta Cloud API “to”; format depends on your WhatsApp setup)
 - `ChannelId="websocket"` → `RecipientId="<connection id>"` (only works while that client is connected)
 

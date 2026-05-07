@@ -19,6 +19,7 @@ public sealed class GatewayConfig
     public WebSocketConfig WebSocket { get; set; } = new();
     public CanvasConfig Canvas { get; set; } = new();
     public ToolingConfig Tooling { get; set; } = new();
+    public PaymentConfig Payments { get; set; } = new();
     public SandboxConfig Sandbox { get; set; } = new();
     public ExecutionConfig Execution { get; set; } = new();
     public CodingBackendsConfig CodingBackends { get; set; } = new();
@@ -128,7 +129,7 @@ public sealed class PromptCacheTraceConfig
 
 public sealed class MemoryConfig
 {
-    /// <summary>Memory backend provider: "file" (default) or "sqlite".</summary>
+    /// <summary>Memory backend provider: "file" (default), "sqlite", or "mempalace".</summary>
     public string Provider { get; set; } = "file";
 
     public string StoragePath { get; set; } = "./memory";
@@ -136,6 +137,7 @@ public sealed class MemoryConfig
     public int? MaxCachedSessions { get; set; }
 
     public MemorySqliteConfig Sqlite { get; set; } = new();
+    public MemoryMempalaceConfig Mempalace { get; set; } = new();
     public MemoryRecallConfig Recall { get; set; } = new();
     public MemoryRetentionConfig Retention { get; set; } = new();
 
@@ -176,6 +178,21 @@ public sealed class MemorySqliteConfig
 
     /// <summary>Embedding vector dimensions. Defaults to 1536 (OpenAI text-embedding-3-small).</summary>
     public int EmbeddingDimensions { get; set; } = 1536;
+}
+
+public sealed class MemoryMempalaceConfig
+{
+    public string BasePath { get; set; } = "./memory/mempalace";
+    public string PalaceId { get; set; } = "openclaw";
+    public string? Namespace { get; set; }
+    public string CollectionName { get; set; } = "memories";
+    public int EmbeddingDimensions { get; set; } = 384;
+    public string EmbedderIdentifier { get; set; } = "openclaw:mempalace:hash-v1";
+    public string DefaultWing { get; set; } = "openclaw";
+    public string DefaultRoom { get; set; } = "notes";
+    public string SessionDbPath { get; set; } = "./memory/mempalace/openclaw-sessions.db";
+    public string KnowledgeGraphDbPath { get; set; } = "./memory/mempalace/kg.db";
+    public int MaxSearchCandidates { get; set; } = 200;
 }
 
 /// <summary>
@@ -371,6 +388,48 @@ public sealed class ToolingConfig
     public Dictionary<string, ToolsetConfig> Toolsets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, ToolPresetConfig> Presets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> SurfaceBindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class PaymentConfig
+{
+    /// <summary>Native payments are disabled by default and must be explicitly enabled.</summary>
+    public bool Enabled { get; set; } = false;
+
+    public bool ToolEnabled { get; set; } = true;
+    public string Provider { get; set; } = "mock";
+    public string Environment { get; set; } = "test";
+    public int SecretTtlMinutes { get; set; } = 30;
+    public PaymentPolicyConfig Policy { get; set; } = new();
+    public PaymentMockProviderConfig Mock { get; set; } = new();
+    public PaymentStripeLinkConfig StripeLink { get; set; } = new();
+    public PaymentMachineConfig MachinePayments { get; set; } = new();
+}
+
+public sealed class PaymentPolicyConfig
+{
+    public bool AllowTestModeWithoutApproval { get; set; } = true;
+    public bool DenyLiveWithoutApprovalService { get; set; } = true;
+    public long? MaxLiveAmountMinor { get; set; }
+}
+
+public sealed class PaymentMockProviderConfig
+{
+    public string ProviderId { get; set; } = "mock";
+    public string FundingSourceDisplayName { get; set; } = "Mock Visa ending 4242";
+}
+
+public sealed class PaymentStripeLinkConfig
+{
+    public string ProviderId { get; set; } = "stripe-link";
+    public string CliPath { get; set; } = "link-cli";
+    public int TimeoutSeconds { get; set; } = 30;
+    public string? WorkingDirectory { get; set; }
+    public Dictionary<string, string> EnvironmentVariables { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class PaymentMachineConfig
+{
+    public bool EnableHttp402Handler { get; set; } = false;
 }
 
 public sealed class ChannelsConfig

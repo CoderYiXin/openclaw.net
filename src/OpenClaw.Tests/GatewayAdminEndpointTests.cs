@@ -39,6 +39,8 @@ using OpenClaw.Gateway.Composition;
 using OpenClaw.Gateway.Endpoints;
 using OpenClaw.Gateway.Extensions;
 using OpenClaw.Gateway.Mcp;
+using OpenClaw.Gateway.Models;
+using OpenClaw.Payments.Core;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -1827,6 +1829,146 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task ChatCompletions_DefaultProfileWithoutTools_RunsPromptOnlyWhenNoPresetRequested()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, ConfigureNoToolDefaultProfile);
+        Session? capturedSession = null;
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo =>
+            {
+                capturedSession = callInfo.Arg<Session>();
+                return Task.FromResult("plain chat ok");
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"hello"}]}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(capturedSession);
+        Assert.Single(capturedSession!.RouteAllowedTools);
+        Assert.Contains("no_implicit_tools", capturedSession.RouteAllowedTools[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_DefaultProfileWithoutTools_KeepsPresetRequestsExplicit()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, ConfigureNoToolDefaultProfile);
+        Session? capturedSession = null;
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo =>
+            {
+                capturedSession = callInfo.Arg<Session>();
+                return Task.FromResult("preset chat ok");
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"use the configured preset"}]}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        request.Headers.Add("X-OpenClaw-Preset", "web");
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(capturedSession);
+        Assert.Empty(capturedSession!.RouteAllowedTools);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_DefaultProfileWithoutTools_DoesNotSuppressToolsForLiteralModelOverride()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, ConfigureNoToolDefaultProfile);
+        Session? capturedSession = null;
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo =>
+            {
+                capturedSession = callInfo.Arg<Session>();
+                return Task.FromResult("override chat ok");
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"model":"llama3.2:latest","messages":[{"role":"user","content":"hello"}]}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+
+        var response = await harness.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(capturedSession);
+        Assert.Equal("llama3.2:latest", capturedSession!.ModelOverride);
+        Assert.Empty(capturedSession.RouteAllowedTools);
+    }
+
+    [Fact]
+    public async Task ChatCompletions_DefaultProfileWithoutTools_KeepsPersistedPresetRequestsExplicit()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true, ConfigureNoToolDefaultProfile);
+        var capturedSessions = new List<Session>();
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(callInfo =>
+            {
+                capturedSessions.Add(callInfo.Arg<Session>());
+                return Task.FromResult("stable preset chat ok");
+            });
+
+        const string stableSessionId = "stable-preset-session";
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"set preset"}]}""")
+        };
+        firstRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        firstRequest.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+        firstRequest.Headers.Add("X-OpenClaw-Preset", "web");
+
+        using var firstResponse = await harness.Client.SendAsync(firstRequest);
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+
+        using var secondRequest = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = JsonContent("""{"messages":[{"role":"user","content":"follow up"}]}""")
+        };
+        secondRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        secondRequest.Headers.Add("X-OpenClaw-Session-Id", stableSessionId);
+
+        using var secondResponse = await harness.Client.SendAsync(secondRequest);
+
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+        Assert.Equal(2, capturedSessions.Count);
+        Assert.Empty(capturedSessions[1].RouteAllowedTools);
+
+        var activeSession = await FindStableSessionAsync(harness, stableSessionId);
+        Assert.NotNull(activeSession);
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession!.Id));
+    }
+
+    [Fact]
     public async Task ChatCompletions_StableSession_DoesNotDuplicatePersistedHistory()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
@@ -1973,6 +2115,56 @@ public sealed class GatewayAdminEndpointTests
         var activeSession = await FindStableSessionAsync(harness, "stable-save-failure");
         Assert.NotNull(activeSession);
         Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession!.Id));
+    }
+
+    [Fact]
+    public async Task ChatCompletions_StableSession_PersistsHistoryWhenRequestAborts()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var agentEntered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(async callInfo =>
+            {
+                var session = callInfo.Arg<Session>();
+                var userMessage = callInfo.ArgAt<string>(1);
+                var ct = callInfo.ArgAt<CancellationToken>(2);
+                session.History.Add(new ChatTurn { Role = "user", Content = userMessage });
+                session.History.Add(new ChatTurn { Role = "assistant", Content = "partial before abort" });
+                agentEntered.TrySetResult(session.Id);
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return "unreachable";
+            });
+
+        using var request = CreateStableChatCompletionRequest("stable-chat-abort", "hello", harness.AuthToken);
+        using var abortCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var responseTask = harness.Client.SendAsync(request, abortCts.Token);
+
+        var sessionId = await agentEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        abortCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => responseTask.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        var persisted = await WaitForPersistedSessionAsync(harness.MemoryStore, sessionId, TimeSpan.FromSeconds(2));
+        Assert.Equal("stable-chat-abort", persisted.StableSessionBinding?.ExternalSessionId);
+        Assert.Collection(
+            persisted.History,
+            turn =>
+            {
+                Assert.Equal("user", turn.Role);
+                Assert.Equal("hello", turn.Content);
+            },
+            turn =>
+            {
+                Assert.Equal("assistant", turn.Role);
+                Assert.Equal("partial before abort", turn.Content);
+            });
+
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(sessionId));
     }
 
     [Fact]
@@ -2329,6 +2521,61 @@ public sealed class GatewayAdminEndpointTests
         var activeSession = await FindStableSessionAsync(harness, "stable-responses-save-failure");
         Assert.NotNull(activeSession);
         Assert.True(harness.Runtime.SessionManager.RemoveActive(activeSession!.Id));
+    }
+
+    [Fact]
+    public async Task Responses_StableSession_PersistsHistoryWhenRequestAborts()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        var agentEntered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        harness.Runtime.AgentRuntime.RunAsync(
+                Arg.Any<Session>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>(),
+                Arg.Any<ToolApprovalCallback?>(),
+                Arg.Any<JsonElement?>())
+            .Returns(async callInfo =>
+            {
+                var session = callInfo.Arg<Session>();
+                var userMessage = callInfo.ArgAt<string>(1);
+                var ct = callInfo.ArgAt<CancellationToken>(2);
+                session.History.Add(new ChatTurn { Role = "user", Content = userMessage });
+                session.History.Add(new ChatTurn { Role = "assistant", Content = "partial response before abort" });
+                agentEntered.TrySetResult(session.Id);
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return "unreachable";
+            });
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/responses")
+        {
+            Content = JsonContent("""{"input":"hello"}""")
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", harness.AuthToken);
+        request.Headers.Add("X-OpenClaw-Session-Id", "stable-responses-abort");
+        using var abortCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var responseTask = harness.Client.SendAsync(request, abortCts.Token);
+
+        var sessionId = await agentEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        abortCts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => responseTask.WaitAsync(TimeSpan.FromSeconds(2)));
+
+        var persisted = await WaitForPersistedSessionAsync(harness.MemoryStore, sessionId, TimeSpan.FromSeconds(2));
+        Assert.Equal("stable-responses-abort", persisted.StableSessionBinding?.ExternalSessionId);
+        Assert.Collection(
+            persisted.History,
+            turn =>
+            {
+                Assert.Equal("user", turn.Role);
+                Assert.Equal("hello", turn.Content);
+            },
+            turn =>
+            {
+                Assert.Equal("assistant", turn.Role);
+                Assert.Equal("partial response before abort", turn.Content);
+            });
+
+        Assert.True(harness.Runtime.SessionManager.RemoveActive(sessionId));
     }
 
     [Fact]
@@ -4601,6 +4848,29 @@ public sealed class GatewayAdminEndpointTests
     private static StringContent JsonContent(string json)
         => new(json, Encoding.UTF8, "application/json");
 
+    private static void ConfigureNoToolDefaultProfile(GatewayConfig config)
+    {
+        config.Models.DefaultProfile = "ollama-general";
+        config.Models.Profiles =
+        [
+            new ModelProfileConfig
+            {
+                Id = "ollama-general",
+                Provider = "ollama",
+                Model = "llama3.2",
+                BaseUrl = "http://127.0.0.1:11434",
+                Capabilities = new ModelCapabilities
+                {
+                    SupportsTools = false,
+                    SupportsStreaming = true,
+                    SupportsSystemMessages = true,
+                    MaxContextTokens = 131_072,
+                    MaxOutputTokens = 4_096
+                }
+            }
+        ];
+    }
+
     private static async Task<HttpResponseMessage> PostWebhookAsync(HttpClient client, string name, string body, string secret)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/webhooks/{name}")
@@ -4753,6 +5023,21 @@ public sealed class GatewayAdminEndpointTests
     {
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
         await using var sessionLock = await harness.Runtime.SessionManager.AcquireSessionLockAsync(sessionId, cts.Token);
+    }
+
+    private static async Task<Session> WaitForPersistedSessionAsync(IMemoryStore store, string sessionId, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            var session = await store.GetSessionAsync(sessionId, CancellationToken.None);
+            if (session is not null)
+                return session;
+
+            await Task.Delay(10);
+        }
+
+        throw new TimeoutException($"Session '{sessionId}' was not persisted in time.");
     }
 
     private static void UpdateMax(ref int target, int value)
@@ -5012,12 +5297,21 @@ public sealed class GatewayAdminEndpointTests
             ApprovalAuditStore = approvalAuditStore,
             RuntimeMetrics = runtimeMetrics,
             ProviderUsage = providerUsage,
+            PaymentRuntime = new PaymentRuntimeService(
+                [new MockPaymentProvider()],
+                new InMemoryPaymentSecretVault(),
+                new DefaultPaymentPolicy(),
+                new InMemoryPaymentAuditSink(),
+                defaultProviderId: "mock"),
             Heartbeat = heartbeatService,
             LoadedSkills = Array.Empty<SkillDefinition>(),
             SkillWatcher = skillWatcher,
             PluginReports = Array.Empty<PluginLoadReport>(),
             Operations = new RuntimeOperationsState
             {
+                ModelProfiles = new ConfiguredModelProfileRegistry(
+                    config,
+                    NullLogger<ConfiguredModelProfileRegistry>.Instance),
                 ProviderPolicies = providerPolicies,
                 ProviderRegistry = providerRegistry,
                 LlmExecution = llmExecution,
