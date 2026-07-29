@@ -66,7 +66,7 @@ public sealed class AppsMcpProxyEndpointTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task CallTool_UnknownAppId_DoesNotThrowOrCrashGateway()
+    public async Task CallTool_UnknownAppId_ReturnsActionableErrorPayload()
     {
         var upstreamUrl = await StartFakeUpstreamAsync();
         await using var gateway = await StartGatewayWithProxyAsync("inventory-app", upstreamUrl);
@@ -75,8 +75,11 @@ public sealed class AppsMcpProxyEndpointTests : IAsyncDisposable
             new HttpClientTransport(new HttpClientTransportOptions { Endpoint = new Uri($"{gateway.BaseAddress}apps/mcp/nonexistent") }),
             cancellationToken: CancellationToken.None);
 
-        await Assert.ThrowsAnyAsync<Exception>(
-            () => mcpClient.CallToolAsync("echo_session", cancellationToken: CancellationToken.None).AsTask());
+        var result = await mcpClient.CallToolAsync("echo_session", cancellationToken: CancellationToken.None);
+
+        Assert.Equal(true, result.IsError);
+        var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+        Assert.Contains("nonexistent", text, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
