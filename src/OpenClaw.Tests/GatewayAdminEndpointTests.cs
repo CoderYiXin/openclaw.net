@@ -6194,6 +6194,20 @@ public sealed class GatewayAdminEndpointTests
     }
 
     [Fact]
+    public async Task OpenClawHttpClient_McpDiscover_Works()
+    {
+        await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);
+        using var client = new OpenClawHttpClient(harness.Client.BaseAddress!.ToString(), harness.AuthToken, harness.Client);
+
+        var discover = await client.DiscoverMcpAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(discover);
+        Assert.True(
+            !string.IsNullOrWhiteSpace(discover.ProtocolVersion) || discover.SupportedVersions.Count > 0,
+            "discover response should contain protocolVersion or supportedVersions");
+    }
+
+    [Fact]
     public async Task OpenClawHttpClient_AutomationAndLearningSurface_Works()
     {
         await using var harness = await CreateHarnessAsync(nonLoopbackBind: true);

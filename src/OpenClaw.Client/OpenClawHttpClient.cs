@@ -262,6 +262,30 @@ public sealed class OpenClawHttpClient : IDisposable
     public Task<McpInitializeResult> InitializeMcpAsync(McpInitializeRequest request, CancellationToken cancellationToken)
         => SendMcpAsync("initialize", request, McpJsonContext.Default.McpInitializeRequest, McpJsonContext.Default.McpInitializeResult, cancellationToken);
 
+    public async Task<McpDiscoverResult> DiscoverMcpAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendMcpAsync(
+                "server/discover",
+                new McpDiscoverRequest(),
+                McpJsonContext.Default.McpDiscoverRequest,
+                McpJsonContext.Default.McpDiscoverResult,
+                cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("server/discover", StringComparison.Ordinal))
+        {
+            var initialize = await InitializeMcpAsync(new McpInitializeRequest { ProtocolVersion = "2025-03-26" }, cancellationToken);
+            return new McpDiscoverResult
+            {
+                ProtocolVersion = initialize.ProtocolVersion,
+                SupportedVersions = [initialize.ProtocolVersion],
+                Capabilities = JsonSerializer.SerializeToElement(initialize.Capabilities, McpJsonContext.Default.McpCapabilities),
+                ServerInfo = initialize.ServerInfo
+            };
+        }
+    }
+
     public Task<McpToolListResult> ListMcpToolsAsync(CancellationToken cancellationToken)
         => SendMcpWithoutParamsAsync("tools/list", McpJsonContext.Default.McpToolListResult, cancellationToken);
 
@@ -1285,6 +1309,7 @@ public sealed class OpenClawHttpClient : IDisposable
         req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        req.Headers.TryAddWithoutValidation("mcp-protocol-version", ResolveMcpProtocolVersion(parameters));
 
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!resp.IsSuccessStatusCode)
@@ -1303,6 +1328,16 @@ public sealed class OpenClawHttpClient : IDisposable
             throw new InvalidOperationException("MCP response did not include a result payload.");
 
         return result;
+    }
+
+    private static string ResolveMcpProtocolVersion<TParams>(TParams? parameters)
+    {
+        return parameters switch
+        {
+            McpInitializeRequest { ProtocolVersion: { Length: > 0 } protocolVersion } => protocolVersion,
+            McpDiscoverRequest { ProtocolVersion: { Length: > 0 } protocolVersion } => protocolVersion,
+            _ => "2025-03-26"
+        };
     }
 
     private static async Task<string> ExtractMcpResponseJsonAsync(HttpResponseMessage resp, CancellationToken cancellationToken)
