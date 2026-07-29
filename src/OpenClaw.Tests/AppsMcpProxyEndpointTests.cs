@@ -22,6 +22,16 @@ public sealed class AppsMcpProxyEndpointTests : IAsyncDisposable
     private readonly List<string> _tempDirs = [];
 
     [Fact]
+    public void GatewayConfig_McpCompatibility_Defaults_AreStrictAndDiscoveryFirst()
+    {
+        var cfg = new GatewayConfig();
+        Assert.True(cfg.McpCompatibility.EnableDiscoveryFirst);
+        Assert.True(cfg.McpCompatibility.RequireOAuthIssuerValidation);
+        Assert.True(cfg.McpCompatibility.RequirePkceS256);
+        Assert.False(cfg.McpCompatibility.ForceLegacyInitialize);
+    }
+
+    [Fact]
     public async Task ToolsList_PassesThroughAllTools_NoVisibilityFiltering()
     {
         var upstreamUrl = await StartFakeUpstreamAsync();

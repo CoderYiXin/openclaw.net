@@ -39,7 +39,8 @@ internal static class McpServiceExtensions
             })
             .WithHttpTransport(options =>
             {
-                options.Stateless = true;
+                // v2 default is stateless/discovery-first; allow explicit legacy fallback.
+                options.Stateless = !startup.Config.McpCompatibility.ForceLegacyInitialize;
                 options.ConfigureSessionOptions = AppsMcpProxyEndpoint.ConfigureSessionOptionsAsync;
             })
             .WithTools<OpenClawMcpTools>()

@@ -42,6 +42,7 @@ public sealed class GatewayConfig
     public DynamicTurnRoutingConfig DynamicTurnRouting { get; set; } = new();
     public RoutingConfig Routing { get; set; } = new();
     public McpAppsConfig McpApps { get; set; } = new();
+    public McpCompatibilityConfig McpCompatibility { get; set; } = new();
     public DeploymentConfig Deployment { get; set; } = new();
     public TailscaleConfig Tailscale { get; set; } = new();
     public GmailPubSubConfig GmailPubSub { get; set; } = new();
@@ -79,6 +80,15 @@ public sealed class GatewayConfig
     /// Used when providers have asymmetric input/output pricing.
     /// </summary>
     public Dictionary<string, TokenCostRateConfig> TokenCostRateDetails { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class McpCompatibilityConfig
+{
+    public bool EnableDiscoveryFirst { get; set; } = true;
+    public bool ForceLegacyInitialize { get; set; } = false;
+    public bool RequireOAuthIssuerValidation { get; set; } = true;
+    public bool RequirePkceS256 { get; set; } = true;
+    public bool AllowRelaxedInputSchemaValidation { get; set; } = false;
 }
 
 public sealed class TokenCostRateConfig
