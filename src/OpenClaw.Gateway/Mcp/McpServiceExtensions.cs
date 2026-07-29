@@ -1,4 +1,5 @@
 using ModelContextProtocol;
+using ModelContextProtocol.Extensions.Tasks;
 using ModelContextProtocol.Protocol;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenClaw.Core.Abstractions;
@@ -43,6 +44,7 @@ internal static class McpServiceExtensions
                 options.Stateless = !startup.Config.McpCompatibility.ForceLegacyInitialize;
                 options.ConfigureSessionOptions = AppsMcpProxyEndpoint.ConfigureSessionOptionsAsync;
             })
+            .WithTasks(new InMemoryMcpTaskStore())
             .WithTools<OpenClawMcpTools>()
             .WithResources<OpenClawMcpResources>()
             .WithPrompts<OpenClawMcpPrompts>();

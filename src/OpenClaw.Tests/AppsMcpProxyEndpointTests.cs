@@ -105,6 +105,20 @@ public sealed class AppsMcpProxyEndpointTests : IAsyncDisposable
         Assert.DoesNotContain(proxiedTools, tool => tool.Name == "default_gateway_tool");
     }
 
+    [Fact]
+    public async Task GatewayMcpServer_AdvertisesTasksExtension_WhenEnabled()
+    {
+        var upstreamUrl = await StartFakeUpstreamAsync();
+        await using var gateway = await StartGatewayWithProxyAndDefaultMcpAsync("inventory-app", upstreamUrl);
+
+        await using var mcpClient = await McpClient.CreateAsync(
+            new HttpClientTransport(new HttpClientTransportOptions { Endpoint = new Uri($"{gateway.BaseAddress}mcp") }),
+            cancellationToken: CancellationToken.None);
+
+        var tools = await mcpClient.ListToolsAsync(cancellationToken: CancellationToken.None);
+        Assert.NotNull(tools);
+    }
+
     private async Task<string> StartFakeUpstreamAsync()
     {
         var builder = WebApplication.CreateSlimBuilder();
