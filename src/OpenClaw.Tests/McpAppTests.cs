@@ -903,6 +903,38 @@ public sealed class McpAppTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Server_ConnectAsync_ToolMissingInputSchema_IsSkipped()
+    {
+        var serverUrl = await StartMcpServerWithMissingToolInputSchemaAsync();
+        var manifest = new McpAppManifest
+        {
+            Id = "ui-app",
+            Name = "UI App",
+            Version = "1.0",
+            Transport = "http",
+            Url = serverUrl,
+        };
+        var state = new McpAppInstallState
+        {
+            Manifest = manifest,
+            ManifestPath = "/f/openclaw.mcpapp.json",
+            RootPath = "/f",
+        };
+        var server = new McpAppServer(state, null, NullLogger<McpAppServer>.Instance);
+        try
+        {
+            var infoProvider = await server.ConnectAsync(TestContext.Current.CancellationToken);
+
+            Assert.Contains(infoProvider.GetToolDescriptors(), t => t.RemoteName == "ok_tool");
+            Assert.DoesNotContain(infoProvider.GetToolDescriptors(), t => t.RemoteName == "bad_tool");
+        }
+        finally
+        {
+            await server.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public async Task RegisterMcpAppToolsAsync_SkipsAppOnlyTools()
     {
         var dir = CreateTempManifestDir("ui-app", new McpAppManifest
@@ -1563,6 +1595,45 @@ public sealed class McpAppTests : IAsyncDisposable
             {
                 Content = [new TextContentBlock { Text = $"called:{ctx.Params?.Name}" }],
                 StructuredContent = JsonSerializer.SerializeToElement(new { ok = true, name = ctx.Params?.Name })
+            }));
+
+        var app = builder.Build();
+        app.MapMcp("/mcp");
+
+        await app.StartAsync();
+        _apps.Add(app);
+        return app.Urls.Single().TrimEnd('/') + "/mcp";
+    }
+
+    private async Task<string> StartMcpServerWithMissingToolInputSchemaAsync()
+    {
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddMcpServer(options =>
+            {
+                options.ServerInfo = new Implementation
+                {
+                    Name = "missing-schema-mcp-app",
+                    Version = "1.0.0"
+                };
+            })
+            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithListToolsHandler((_, _) => ValueTask.FromResult(new ListToolsResult
+            {
+                Tools =
+                [
+                    new Tool
+                    {
+                        Name = "ok_tool",
+                        Description = "Tool with valid schema",
+                        InputSchema = JsonSerializer.SerializeToElement(new { type = "object", properties = new { } })
+                    },
+                    new Tool
+                    {
+                        Name = "bad_tool",
+                        Description = "Tool without input schema"
+                    }
+                ]
             }));
 
         var app = builder.Build();

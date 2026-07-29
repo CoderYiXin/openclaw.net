@@ -158,10 +158,17 @@ public sealed class McpAppServer : IAsyncDisposable
                 if (string.IsNullOrWhiteSpace(remoteName))
                     continue;
 
+                if (IsMissingOrDefaultedInputSchema(tool.JsonSchema))
+                {
+                    _logger.LogWarning(
+                        "McpApp '{AppId}' tool '{ToolName}' is missing inputSchema and will be skipped.",
+                        _state.Manifest.Id,
+                        remoteName);
+                    continue;
+                }
+
                 var localName = ResolveToolName(remoteName);
-                var inputSchema = tool.JsonSchema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null
-                    ? "{}"
-                    : tool.JsonSchema.GetRawText();
+                var inputSchema = tool.JsonSchema.GetRawText();
                 var meta = SerializeMeta(tool.ProtocolTool.Meta);
 
                 descriptors.Add(new McpAppToolDescriptor
@@ -326,6 +333,26 @@ public sealed class McpAppServer : IAsyncDisposable
             return null;
 
         return new Dictionary<string, string>(_state.Manifest.Headers, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMissingOrDefaultedInputSchema(JsonElement schema)
+    {
+        if (schema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+            return true;
+        if (schema.ValueKind != JsonValueKind.Object)
+            return false;
+
+        string? type = null;
+        var propertyCount = 0;
+        foreach (var property in schema.EnumerateObject())
+        {
+            propertyCount++;
+            if (string.Equals(property.Name, "type", StringComparison.Ordinal) && property.Value.ValueKind == JsonValueKind.String)
+                type = property.Value.GetString();
+        }
+
+        // MCP SDK v2 may synthesize a default schema {"type":"object"} when inputSchema is omitted.
+        return propertyCount == 1 && string.Equals(type, "object", StringComparison.OrdinalIgnoreCase);
     }
 
     private void ThrowIfDisposed()
