@@ -804,6 +804,14 @@ public sealed class TelegramChannelConfig
     public string DmPolicy { get; set; } = "pairing"; // open, pairing, closed
     public string? BotToken { get; set; }
     public string BotTokenRef { get; set; } = "env:TELEGRAM_BOT_TOKEN";
+    /// <summary>Inbound delivery mode: "webhook" or "long-polling".</summary>
+    public string UpdateMode { get; set; } = "webhook";
+    /// <summary>Telegram getUpdates long-poll timeout in seconds.</summary>
+    public int PollingTimeoutSeconds { get; set; } = 30;
+    /// <summary>Delay before retrying a failed long-poll request.</summary>
+    public int PollingRetryDelaySeconds { get; set; } = 5;
+    /// <summary>Discard updates queued by Telegram when long polling starts.</summary>
+    public bool DropPendingUpdatesOnStart { get; set; } = false;
     public string WebhookPath { get; set; } = "/telegram/inbound";
     public string? WebhookPublicBaseUrl { get; set; }
     public string[] AllowedFromUserIds { get; set; } = [];
