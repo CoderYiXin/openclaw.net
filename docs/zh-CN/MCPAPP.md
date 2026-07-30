@@ -220,7 +220,7 @@ src/mcpapp/
 | `ForceLegacyInitialize` | `false` | 强制使用 initialize-first 兼容模式。 |
 | `RequireOAuthIssuerValidation` | `true` | 在安全部署中启用严格 OAuth issuer 校验。 |
 | `RequirePkceS256` | `true` | 在使用 OAuth 流程时要求 PKCE S256。 |
-| `AllowRelaxedInputSchemaValidation` | `false` | 仅用于紧急回退的临时 schema 放宽开关。 |
+| `AllowRelaxedInputSchemaValidation` | `false` | 目前仅为预留开关；MCP App 枚举路径不会读取它，且在当前 SDK 下缺失 `inputSchema` 仍可能被归一化为 `{"type":"object"}`。 |
 
 ### Entries 覆盖
 

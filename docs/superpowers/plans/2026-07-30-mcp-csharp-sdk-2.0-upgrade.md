@@ -175,7 +175,7 @@ public sealed class McpCompatibilityConfig
     public bool ForceLegacyInitialize { get; set; } = false;
     public bool RequireOAuthIssuerValidation { get; set; } = true;
     public bool RequirePkceS256 { get; set; } = true;
-    public bool AllowRelaxedInputSchemaValidation { get; set; } = false;
+  public bool AllowRelaxedInputSchemaValidation { get; set; } = false; // reserved; MCP App enumeration still skips missing inputSchema
 }
 
 public sealed partial class GatewayConfig
@@ -217,7 +217,7 @@ git add src/OpenClaw.Core/Models/GatewayConfig.cs src/OpenClaw.Gateway/Mcp/McpSe
 git commit -m "feat(mcp): add gateway v2 compatibility config and defaults"
 ```
 
-### Task 3: 对齐 `/mcp` 与 `/apps/mcp/{serverId}` 代理行为与错误语义
+### Task 3: 对齐 `/mcp` 与 `/apps/mcp/{appId}` 代理行为与错误语义
 
 **Files:**
 - Modify: `src/OpenClaw.Gateway/Endpoints/AppsMcpProxyEndpoint.cs`
@@ -242,10 +242,11 @@ public async Task CallTool_UnknownAppId_ReturnsActionableErrorPayload()
         new HttpClientTransport(new HttpClientTransportOptions { Endpoint = new Uri($"{gateway.BaseAddress}apps/mcp/nonexistent") }),
         cancellationToken: CancellationToken.None);
 
-    var ex = await Assert.ThrowsAnyAsync<Exception>(
-        () => mcpClient.CallToolAsync("echo_session", cancellationToken: CancellationToken.None).AsTask());
+    var result = await mcpClient.CallToolAsync("echo_session", cancellationToken: CancellationToken.None);
 
-    Assert.Contains("nonexistent", ex.Message, StringComparison.OrdinalIgnoreCase);
+    Assert.Equal(true, result.IsError);
+    var text = Assert.IsType<TextContentBlock>(Assert.Single(result.Content)).Text;
+    Assert.Contains("nonexistent", text, StringComparison.OrdinalIgnoreCase);
 }
 ```
 
@@ -406,6 +407,8 @@ if (tool.JsonSchema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
 }
 var inputSchema = tool.JsonSchema.GetRawText();
 ```
+
+`AllowRelaxedInputSchemaValidation` 仍是预留开关；当前 MCP App 枚举路径不会读取它，而 SDK 归一化后缺失 `inputSchema` 仍可能呈现为 `{"type":"object"}`。
 
 - [x] **Step 3: 验证 structuredContent 抑制行为回归**
 

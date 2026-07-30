@@ -30,7 +30,7 @@ Compatibility switches (Gateway config):
 - `OpenClaw:McpCompatibility:ForceLegacyInitialize=true`
   - Forces legacy initialize-first behavior (disables stateless discover-first mode).
 - `OpenClaw:McpCompatibility:AllowRelaxedInputSchemaValidation=true`
-  - Reserved rollback flag for temporary schema strictness relaxation during incident response.
+  - Reserved flag only. It is not currently wired into MCP App enumeration; with the current SDK, omitted `inputSchema` may still surface as synthesized `{"type":"object"}` on that path.
 - `OpenClaw:McpCompatibility:EnableDiscoveryFirst=true`
   - Keeps discover-first path enabled (default).
 

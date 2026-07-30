@@ -159,17 +159,18 @@ public sealed class McpAppServer : IAsyncDisposable
                 if (string.IsNullOrWhiteSpace(remoteName))
                     continue;
 
-                if (IsMissingOrDefaultedInputSchema(tool.JsonSchema))
+                if (!TryGetSupportedInputSchema(tool.ProtocolTool.InputSchema, out var publishedSchema, out var schemaFailureReason))
                 {
                     _logger.LogWarning(
-                        "McpApp '{AppId}' tool '{ToolName}' is missing inputSchema and will be skipped.",
+                        "McpApp '{AppId}' tool '{ToolName}' {Reason} and will be skipped.",
                         _state.Manifest.Id,
-                        remoteName);
+                        remoteName,
+                        schemaFailureReason);
                     continue;
                 }
 
                 var localName = ResolveToolName(remoteName);
-                var inputSchema = tool.JsonSchema.GetRawText();
+                var inputSchema = publishedSchema.GetRawText();
                 var meta = SerializeMeta(tool.ProtocolTool.Meta);
 
                 descriptors.Add(new McpAppToolDescriptor
@@ -311,7 +312,8 @@ public sealed class McpAppServer : IAsyncDisposable
     }
 
     private static bool IsLlmToolNameChar(char ch)
-        => char.IsLetterOrDigit(ch) || ch is '_' or '-';
+        => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+           || ch is '_' or '-';
 
     private string ResolveTransport()
     {
@@ -383,24 +385,34 @@ public sealed class McpAppServer : IAsyncDisposable
         return new Dictionary<string, string>(_state.Manifest.Headers, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsMissingOrDefaultedInputSchema(JsonElement schema)
+    private static bool TryGetSupportedInputSchema(JsonElement schema, out JsonElement supportedSchema, out string failureReason)
     {
         if (schema.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
-            return true;
-        if (schema.ValueKind != JsonValueKind.Object)
-            return false;
-
-        string? type = null;
-        var propertyCount = 0;
-        foreach (var property in schema.EnumerateObject())
         {
-            propertyCount++;
-            if (string.Equals(property.Name, "type", StringComparison.Ordinal) && property.Value.ValueKind == JsonValueKind.String)
-                type = property.Value.GetString();
+            supportedSchema = default;
+            failureReason = "is missing required inputSchema";
+            return false;
         }
 
-        // MCP SDK v2 may synthesize a default schema {"type":"object"} when inputSchema is omitted.
-        return propertyCount == 1 && string.Equals(type, "object", StringComparison.OrdinalIgnoreCase);
+        if (schema.ValueKind != JsonValueKind.Object)
+        {
+            supportedSchema = default;
+            failureReason = "published a non-object inputSchema";
+            return false;
+        }
+
+        if (schema.TryGetProperty("type", out var typeProperty)
+            && typeProperty.ValueKind == JsonValueKind.String
+            && !string.Equals(typeProperty.GetString(), "object", StringComparison.OrdinalIgnoreCase))
+        {
+            supportedSchema = default;
+            failureReason = "published a non-object inputSchema";
+            return false;
+        }
+
+        supportedSchema = schema;
+        failureReason = string.Empty;
+        return true;
     }
 
     private void ThrowIfDisposed()

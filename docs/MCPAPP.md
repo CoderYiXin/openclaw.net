@@ -232,7 +232,7 @@ These settings live under `OpenClaw:McpCompatibility` and affect gateway MCP beh
 | `ForceLegacyInitialize` | `false` | Forces initialize-first behavior for legacy compatibility. |
 | `RequireOAuthIssuerValidation` | `true` | Enforces strict OAuth issuer checks for secured deployments. |
 | `RequirePkceS256` | `true` | Requires PKCE S256 where OAuth flows are used. |
-| `AllowRelaxedInputSchemaValidation` | `false` | Emergency rollback lever for temporary schema-relaxation scenarios. |
+| `AllowRelaxedInputSchemaValidation` | `false` | Reserved flag only; MCP App enumeration does not currently consult it, and SDK-normalized omitted schemas may still appear as `{"type":"object"}`. |
 
 ### Entries Overrides
 

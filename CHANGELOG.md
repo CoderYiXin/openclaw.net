@@ -2,7 +2,7 @@
 
 All notable changes to this project are tracked in this file.
 
-## [Unreleased] - 2026-03-04
+## [Unreleased]
 
 ### MCP v2 Upgrade
 

@@ -48,17 +48,17 @@ public sealed class McpInitializeResult
 
 public sealed class McpDiscoverRequest
 {
-    public string ProtocolVersion { get; init; } = "2025-11-25";
-    public IReadOnlyList<string> SupportedVersions { get; init; } = ["2025-11-25"];
-
     [System.Text.Json.Serialization.JsonPropertyName("_meta")]
     public McpDiscoverRequestMeta Meta { get; init; } = new();
 }
 
 public sealed class McpDiscoverRequestMeta
 {
-    public string ProtocolVersion { get; init; } = "2025-11-25";
-    public IReadOnlyList<string> SupportedVersions { get; init; } = ["2025-11-25"];
+    public const string PreferredProtocolVersion = "2025-11-25";
+    public static IReadOnlyList<string> DefaultSupportedVersions { get; } = ["2025-11-25", "2025-03-26"];
+
+    public string ProtocolVersion { get; init; } = PreferredProtocolVersion;
+    public IReadOnlyList<string> SupportedVersions { get; init; } = DefaultSupportedVersions;
 }
 
 public sealed class McpDiscoverResult

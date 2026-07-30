@@ -88,7 +88,7 @@
 ### 6.2 网关路由与代理层
 
 - 文件：`src/OpenClaw.Gateway/Program.cs`、`src/OpenClaw.Gateway/Endpoints/AppsMcpProxyEndpoint.cs`
-- 目标：`/mcp` 与 `/apps/mcp/{serverId}` 在协商、Header、错误语义上保持一致。
+- 目标：`/mcp` 与 `/apps/mcp/{appId}` 在协商、Header、错误语义上保持一致。
 
 ### 6.3 MCP App 托管层
 
