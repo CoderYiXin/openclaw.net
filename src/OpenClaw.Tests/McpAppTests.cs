@@ -1029,8 +1029,8 @@ public sealed class McpAppTests : IAsyncDisposable
 
             await registry.RegisterMcpAppToolsAsync(nativeRegistry, config, TestContext.Current.CancellationToken);
 
-            Assert.Contains(nativeRegistry.Tools, t => t.Name == "uiapp.show_dashboard");
-            Assert.DoesNotContain(nativeRegistry.Tools, t => t.Name == "uiapp.app_only_tool");
+            Assert.Contains(nativeRegistry.Tools, t => t.Name == "uiapp_show_dashboard");
+            Assert.DoesNotContain(nativeRegistry.Tools, t => t.Name == "uiapp_app_only_tool");
         }
         finally
         {
@@ -1065,7 +1065,7 @@ public sealed class McpAppTests : IAsyncDisposable
 
             await registry.RegisterMcpAppToolsAsync(nativeRegistry, config, TestContext.Current.CancellationToken);
 
-            var uiTool = Assert.Single(nativeRegistry.Tools, t => t.Name == "uiapp.show_dashboard");
+            var uiTool = Assert.Single(nativeRegistry.Tools, t => t.Name == "uiapp_show_dashboard");
             var result = await uiTool.ExecuteAsync("{}", TestContext.Current.CancellationToken);
 
             Assert.Contains("called:show_dashboard", result, StringComparison.Ordinal);
