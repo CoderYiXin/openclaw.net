@@ -86,9 +86,6 @@ public sealed class McpCompatibilityConfig
 {
     public bool EnableDiscoveryFirst { get; set; } = true;
     public bool ForceLegacyInitialize { get; set; } = false;
-    public bool RequireOAuthIssuerValidation { get; set; } = true;
-    public bool RequirePkceS256 { get; set; } = true;
-    public bool AllowRelaxedInputSchemaValidation { get; set; } = false;
 }
 
 public sealed class TokenCostRateConfig

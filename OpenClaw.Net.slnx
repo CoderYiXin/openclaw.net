@@ -5,7 +5,6 @@
     <Platform Name="x86" />
   </Configurations>
   <Folder Name="/mcpapp/">
-    <File Path="src/mcpapp/test-apps/GroceryInventory/openclaw.mcpapp.json" />
     <Project Path="src/mcpapp/OpenClaw.McpApp/OpenClaw.McpApp.csproj" />
   </Folder>
   <Folder Name="/mcpapp/test-apps/" />

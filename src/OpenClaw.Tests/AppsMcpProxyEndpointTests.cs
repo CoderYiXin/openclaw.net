@@ -26,8 +26,6 @@ public sealed class AppsMcpProxyEndpointTests : IAsyncDisposable
     {
         var cfg = new GatewayConfig();
         Assert.True(cfg.McpCompatibility.EnableDiscoveryFirst);
-        Assert.True(cfg.McpCompatibility.RequireOAuthIssuerValidation);
-        Assert.True(cfg.McpCompatibility.RequirePkceS256);
         Assert.False(cfg.McpCompatibility.ForceLegacyInitialize);
     }
 

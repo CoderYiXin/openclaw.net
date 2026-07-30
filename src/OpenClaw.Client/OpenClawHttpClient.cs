@@ -273,7 +273,7 @@ public sealed class OpenClawHttpClient : IDisposable
                 McpJsonContext.Default.McpDiscoverResult,
                 cancellationToken);
         }
-        catch (InvalidOperationException ex) when (ex.Message.Contains("server/discover", StringComparison.Ordinal))
+        catch (Exception ex) when (IsDiscoverNotSupported(ex))
         {
             var initialize = await InitializeMcpAsync(new McpInitializeRequest { ProtocolVersion = "2025-03-26" }, cancellationToken);
             return new McpDiscoverResult
@@ -285,6 +285,13 @@ public sealed class OpenClawHttpClient : IDisposable
             };
         }
     }
+
+    // server/discover is not supported when:
+    //   - the server returns a non-success HTTP status (HttpRequestException from CreateHttpErrorAsync)
+    //   - the server returns a JSON-RPC method-not-found error (code -32601)
+    private static bool IsDiscoverNotSupported(Exception ex) =>
+        ex is HttpRequestException
+        || (ex is InvalidOperationException ioe && ioe.Message.Contains("-32601", StringComparison.Ordinal));
 
     public Task<McpToolListResult> ListMcpToolsAsync(CancellationToken cancellationToken)
         => SendMcpWithoutParamsAsync("tools/list", McpJsonContext.Default.McpToolListResult, cancellationToken);
