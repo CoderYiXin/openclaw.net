@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
@@ -260,10 +261,57 @@ public sealed class McpAppServer : IAsyncDisposable
     {
         var prefix = _entryConfig?.ToolNamePrefix ?? _state.Manifest.ToolNamePrefix;
         if (string.IsNullOrWhiteSpace(prefix))
-            return remoteName;
+            return SanitizeLlmToolNamePart(remoteName);
 
-        return prefix + remoteName;
+        var name = SanitizeLlmToolNamePrefixPart(prefix) + SanitizeLlmToolNamePart(remoteName);
+        return name.Replace('.', '_');
     }
+
+    private static string SanitizeLlmToolNamePrefixPart(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "mcp";
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (IsLlmToolNameChar(ch))
+                sb.Append(char.ToLowerInvariant(ch));
+            else if (ch > 0x7F)
+                sb.Append($"_u{(int)ch:x4}");
+            else
+                sb.Append('_');
+        }
+
+        return sb.Length == 0 ? "mcp" : sb.ToString();
+    }
+
+    /// <summary>
+    /// Sanitizes a string so every character satisfies the LLM tool-name pattern <c>^[a-zA-Z0-9_-]+$</c>.
+    /// Dots are replaced with <c>_</c>; other non-conforming ASCII characters are also replaced with <c>_</c>;
+    /// non-ASCII characters are replaced with <c>_uXXXX</c> (lowercase hex code point).
+    /// </summary>
+    private static string SanitizeLlmToolNamePart(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return value;
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if (IsLlmToolNameChar(ch))
+                sb.Append(ch);
+            else if (ch > 0x7F)
+                sb.Append($"_u{(int)ch:x4}");
+            else
+                sb.Append('_');
+        }
+
+        return sb.Length == 0 ? "_" : sb.ToString();
+    }
+
+    private static bool IsLlmToolNameChar(char ch)
+        => char.IsLetterOrDigit(ch) || ch is '_' or '-';
 
     private string ResolveTransport()
     {

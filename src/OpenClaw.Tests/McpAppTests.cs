@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.ComponentModel;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -895,6 +896,41 @@ public sealed class McpAppTests : IAsyncDisposable
             var uiTool = Assert.Single(infoProvider.GetToolDescriptors(), t => t.RemoteName == "show_dashboard");
             Assert.Equal("ui://inventory/dashboard.html", uiTool.UiResourceUri);
             Assert.True(uiTool.Meta.ContainsKey("ui"));
+        }
+        finally
+        {
+            await server.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Server_ConnectAsync_SanitizesLlmToolNames()
+    {
+        var (serverUrl, _) = await StartMcpServerAsync<GroceryMcpTools>();
+        var manifest = new McpAppManifest
+        {
+            Id = "test-grocery",
+            Name = "Test Grocery",
+            Version = "1.0",
+            Transport = "http",
+            Url = serverUrl,
+            ToolNamePrefix = "grocery.",
+        };
+        var state = new McpAppInstallState
+        {
+            Manifest = manifest,
+            ManifestPath = "/f/openclaw.mcpapp.json",
+            RootPath = "/f",
+        };
+        var server = new McpAppServer(state, null, NullLogger<McpAppServer>.Instance);
+        try
+        {
+            var infoProvider = await server.ConnectAsync(TestContext.Current.CancellationToken);
+            var tool = Assert.Single(infoProvider.GetToolDescriptors(), t => t.RemoteName == "get_stores");
+
+            Assert.DoesNotContain('.', tool.LocalName);
+            Assert.Matches("^[a-zA-Z0-9_-]+$", tool.LocalName);
+            Assert.Equal("grocery_get_stores", tool.LocalName);
         }
         finally
         {
