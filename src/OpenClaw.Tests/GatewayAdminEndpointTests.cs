@@ -6315,7 +6315,7 @@ public sealed class GatewayAdminEndpointTests
             seenMethods.Add(method);
             return Task.FromResult(method switch
             {
-                "server/discover" => new HttpResponseMessage(HttpStatusCode.NotFound),
+                "server/discover" => CreateJsonResponse("{}", HttpStatusCode.NotFound),
                 "initialize" => CreateJsonResponse("""
                 {"jsonrpc":"2.0","id":"2","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false},"resources":{"listChanged":false,"supportsTemplates":false},"prompts":{"listChanged":false}},"serverInfo":{"name":"legacy","version":"1.0.0"}}}
                 """),
