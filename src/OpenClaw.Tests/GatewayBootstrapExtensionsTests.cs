@@ -33,6 +33,28 @@ public sealed class GatewayBootstrapExtensionsTests
     }
 
     [Fact]
+    public void LoadGatewayConfig_ConfiguredTelegramPollingSettings_AreBound()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OpenClaw:Channels:Telegram:UpdateMode"] = " Long-Polling ",
+                ["OpenClaw:Channels:Telegram:PollingTimeoutSeconds"] = "45",
+                ["OpenClaw:Channels:Telegram:PollingRetryDelaySeconds"] = "12",
+                ["OpenClaw:Channels:Telegram:DropPendingUpdatesOnStart"] = "true"
+            })
+            .Build();
+
+        var telegram = GatewayBootstrapExtensions.LoadGatewayConfig(configuration).Channels.Telegram;
+
+        Assert.True(telegram.UsesLongPolling());
+        Assert.False(telegram.UsesWebhook());
+        Assert.Equal(45, telegram.PollingTimeoutSeconds);
+        Assert.Equal(12, telegram.PollingRetryDelaySeconds);
+        Assert.True(telegram.DropPendingUpdatesOnStart);
+    }
+
+    [Fact]
     public void LoadGatewayConfig_ConfiguredToolRootsReplaceWildcardDefaults()
     {
         var configuration = new ConfigurationBuilder()

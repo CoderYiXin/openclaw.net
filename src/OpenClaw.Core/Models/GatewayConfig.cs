@@ -806,6 +806,8 @@ public sealed class TelegramChannelConfig
     public string BotTokenRef { get; set; } = "env:TELEGRAM_BOT_TOKEN";
     /// <summary>Inbound delivery mode: "webhook" or "long-polling".</summary>
     public string UpdateMode { get; set; } = "webhook";
+    public bool UsesWebhook() => MatchesUpdateMode("webhook");
+    public bool UsesLongPolling() => MatchesUpdateMode("long-polling");
     /// <summary>Telegram getUpdates long-poll timeout in seconds.</summary>
     public int PollingTimeoutSeconds { get; set; } = 30;
     /// <summary>Delay before retrying a failed long-poll request.</summary>
@@ -826,6 +828,9 @@ public sealed class TelegramChannelConfig
 
     /// <summary>Secret token reference (env: or raw:). Used when WebhookSecretToken is null.</summary>
     public string WebhookSecretTokenRef { get; set; } = "env:TELEGRAM_WEBHOOK_SECRET";
+
+    private bool MatchesUpdateMode(string expected)
+        => string.Equals(UpdateMode?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class SlackChannelConfig

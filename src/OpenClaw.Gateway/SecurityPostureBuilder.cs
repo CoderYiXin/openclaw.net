@@ -74,7 +74,7 @@ internal static class SecurityPostureBuilder
 
         if (publicBind &&
             config.Channels.Telegram.Enabled &&
-            string.Equals(config.Channels.Telegram.UpdateMode, "webhook", StringComparison.OrdinalIgnoreCase) &&
+            config.Channels.Telegram.UsesWebhook() &&
             !config.Channels.Telegram.ValidateSignature)
         {
             riskFlags.Add("public_bind_unsigned_telegram_webhooks");
@@ -145,7 +145,7 @@ internal static class SecurityPostureBuilder
     {
         return (!config.Channels.Sms.Twilio.Enabled || config.Channels.Sms.Twilio.ValidateSignature)
             && (!config.Channels.Telegram.Enabled ||
-                !string.Equals(config.Channels.Telegram.UpdateMode, "webhook", StringComparison.OrdinalIgnoreCase) ||
+                !config.Channels.Telegram.UsesWebhook() ||
                 config.Channels.Telegram.ValidateSignature)
             && (!config.Channels.WhatsApp.Enabled || !string.Equals(config.Channels.WhatsApp.Type, "official", StringComparison.OrdinalIgnoreCase) || config.Channels.WhatsApp.ValidateSignature)
             && (!config.Channels.Teams.Enabled || config.Channels.Teams.ValidateToken)

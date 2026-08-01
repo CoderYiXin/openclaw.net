@@ -291,8 +291,7 @@ public static class ConfigValidator
             errors.Add($"Channels.Telegram.MaxInboundChars must be >= 1 (got {config.Channels.Telegram.MaxInboundChars}).");
         if (config.Channels.Telegram.MaxRequestBytes < 1024)
             errors.Add($"Channels.Telegram.MaxRequestBytes must be >= 1024 (got {config.Channels.Telegram.MaxRequestBytes}).");
-        if (!string.Equals(config.Channels.Telegram.UpdateMode, "webhook", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(config.Channels.Telegram.UpdateMode, "long-polling", StringComparison.OrdinalIgnoreCase))
+        if (!config.Channels.Telegram.UsesWebhook() && !config.Channels.Telegram.UsesLongPolling())
             errors.Add("Channels.Telegram.UpdateMode must be 'webhook' or 'long-polling'.");
         if (config.Channels.Telegram.PollingTimeoutSeconds is < 1 or > 50)
             errors.Add($"Channels.Telegram.PollingTimeoutSeconds must be between 1 and 50 (got {config.Channels.Telegram.PollingTimeoutSeconds}).");

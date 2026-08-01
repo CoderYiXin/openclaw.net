@@ -39,7 +39,7 @@ public sealed class ConfigValidatorTests
             {
                 Telegram = new TelegramChannelConfig
                 {
-                    UpdateMode = "Long-Polling"
+                    UpdateMode = " Long-Polling "
                 }
             }
         };

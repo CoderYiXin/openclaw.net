@@ -78,7 +78,7 @@ public sealed class TelegramChannel : IChannelAdapter
 
     public async Task StartAsync(CancellationToken ct)
     {
-        if (!IsLongPolling())
+        if (!_config.UsesLongPolling())
             return;
 
         if (_updateProcessor is null)
@@ -235,9 +235,6 @@ public sealed class TelegramChannel : IChannelAdapter
         response.EnsureSuccessStatusCode();
         _logger.LogInformation("Sent Telegram message to {ChatId}", chatId);
     }
-
-    private bool IsLongPolling()
-        => string.Equals(_config.UpdateMode, "long-polling", StringComparison.OrdinalIgnoreCase);
 
     private async Task DeleteWebhookAsync(CancellationToken ct)
     {

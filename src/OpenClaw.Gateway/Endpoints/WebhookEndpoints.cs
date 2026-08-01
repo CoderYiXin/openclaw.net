@@ -101,8 +101,7 @@ internal static class WebhookEndpoints
             });
         }
 
-        if (startup.Config.Channels.Telegram.Enabled &&
-            string.Equals(startup.Config.Channels.Telegram.UpdateMode, "webhook", StringComparison.OrdinalIgnoreCase))
+        if (startup.Config.Channels.Telegram.Enabled && startup.Config.Channels.Telegram.UsesWebhook())
         {
             var telegramWebhookHandler = app.Services.GetRequiredService<TelegramWebhookHandler>();
             byte[]? telegramSecretBytes = null;

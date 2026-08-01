@@ -116,7 +116,7 @@ internal static class ChannelSetupCommand
             "--update-mode",
             "Telegram update mode (webhook|long-polling)",
             channel.UpdateMode,
-            nonInteractive).ToLowerInvariant();
+            nonInteractive).Trim().ToLowerInvariant();
         if (updateMode is not ("webhook" or "long-polling"))
             throw new ArgumentException("Telegram update mode must be 'webhook' or 'long-polling'.");
 
@@ -223,7 +223,7 @@ internal static class ChannelSetupCommand
     {
         return channelId switch
         {
-            "telegram" when string.Equals(config.Channels.Telegram.UpdateMode, "long-polling", StringComparison.OrdinalIgnoreCase) =>
+            "telegram" when config.Channels.Telegram.UsesLongPolling() =>
                 ["Telegram long polling uses outbound HTTPS only; any existing webhook is removed on startup."],
             "telegram" => [$"Register Telegram webhook: {TrimTrailingSlash(config.Channels.Telegram.WebhookPublicBaseUrl) + config.Channels.Telegram.WebhookPath}"],
             "slack" => [

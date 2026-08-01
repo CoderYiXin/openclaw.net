@@ -108,7 +108,7 @@ internal static class ChannelReadinessEvaluator
         var missing = new List<string>();
         var warnings = new List<string>();
         var guidance = new List<ChannelFixGuidance>();
-        var usesWebhook = string.Equals(telegram.UpdateMode, "webhook", StringComparison.OrdinalIgnoreCase);
+        var usesWebhook = telegram.UsesWebhook();
 
         if (string.IsNullOrWhiteSpace(ResolveTelegramToken(telegram)))
         {
