@@ -6,7 +6,6 @@ namespace OpenClaw.Client;
 [JsonSerializable(typeof(McpJsonRpcError))]
 [JsonSerializable(typeof(McpInitializeRequest))]
 [JsonSerializable(typeof(McpDiscoverRequest))]
-[JsonSerializable(typeof(McpDiscoverRequestMeta))]
 [JsonSerializable(typeof(McpClientCapabilities))]
 [JsonSerializable(typeof(McpClientInfo))]
 [JsonSerializable(typeof(McpInitializeResult))]

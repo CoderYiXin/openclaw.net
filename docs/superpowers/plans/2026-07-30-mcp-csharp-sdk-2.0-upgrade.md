@@ -561,10 +561,7 @@ Expected: FAIL（扩展尚未注册）。
 ```csharp
 services.AddMcpServer(options => { /* ... */ })
     .WithHttpTransport(options => { /* ... */ })
-    .WithTasks(tasks =>
-    {
-        tasks.EnableProtocol = true;
-    })
+    .WithTasks(new InMemoryMcpTaskStore())
     .WithTools<OpenClawMcpTools>()
     .WithResources<OpenClawMcpResources>()
     .WithPrompts<OpenClawMcpPrompts>();

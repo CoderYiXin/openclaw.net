@@ -6215,13 +6215,12 @@ public sealed class GatewayAdminEndpointTests
 
         using var http = new HttpClient(new RecordingHttpMessageHandler(async request =>
         {
-            var body = await request.Content!.ReadAsStringAsync();
             if (request.Headers.TryGetValues("Mcp-Method", out var methods)
                 && string.Equals(methods.Single(), "server/discover", StringComparison.Ordinal))
             {
                 discoverRequest = await CloneRequestAsync(request);
                 return CreateJsonResponse("""
-                {"jsonrpc":"2.0","id":"1","result":{"protocolVersion":"2025-11-25","supportedVersions":["2025-11-25","2025-03-26"],"capabilities":{},"serverInfo":{"name":"test","version":"1.0.0"}}}
+                {"jsonrpc":"2.0","id":"1","result":{"supportedVersions":["2025-11-25","2026-07-28"],"capabilities":{}}}
                 """);
             }
 
@@ -6245,15 +6244,19 @@ public sealed class GatewayAdminEndpointTests
 
         var discoverJson = JsonDocument.Parse(await discoverRequest!.Content!.ReadAsStringAsync());
         var discoverParams = discoverJson.RootElement.GetProperty("params");
-        Assert.False(discoverParams.TryGetProperty("protocolVersion", out _));
-        Assert.False(discoverParams.TryGetProperty("supportedVersions", out _));
-        Assert.Equal("2025-11-25", discoverParams.GetProperty("_meta").GetProperty("protocolVersion").GetString());
+        var discoverMeta = discoverParams.GetProperty("_meta");
+        Assert.Equal("2026-07-28", discoverMeta.GetProperty("io.modelcontextprotocol/protocolVersion").GetString());
+        Assert.Equal("openclaw-client", discoverMeta.GetProperty("io.modelcontextprotocol/clientInfo").GetProperty("name").GetString());
+        Assert.Equal(JsonValueKind.Object, discoverMeta.GetProperty("io.modelcontextprotocol/clientCapabilities").ValueKind);
         Assert.Equal("server/discover", discoverRequest.Headers.GetValues("Mcp-Method").Single());
-        Assert.Equal("2025-11-25", discoverRequest.Headers.GetValues("mcp-protocol-version").Single());
+        Assert.Equal("2026-07-28", discoverRequest.Headers.GetValues("mcp-protocol-version").Single());
 
         Assert.Equal("tools/call", toolRequest!.Headers.GetValues("Mcp-Method").Single());
         Assert.Equal("demo_tool", toolRequest.Headers.GetValues("Mcp-Name").Single());
-        Assert.Equal(discover.ProtocolVersion, toolRequest.Headers.GetValues("mcp-protocol-version").Single());
+        Assert.Equal("2026-07-28", toolRequest.Headers.GetValues("mcp-protocol-version").Single());
+        var toolJson = JsonDocument.Parse(await toolRequest.Content!.ReadAsStringAsync());
+        var toolMeta = toolJson.RootElement.GetProperty("params").GetProperty("_meta");
+        Assert.Equal("2026-07-28", toolMeta.GetProperty("io.modelcontextprotocol/protocolVersion").GetString());
     }
 
     [Fact]
@@ -6300,6 +6303,35 @@ public sealed class GatewayAdminEndpointTests
         Assert.Equal(["server/discover", "initialize", "tools/call"], seenMethods);
         Assert.Equal("2025-03-26", discover.ProtocolVersion);
         Assert.Equal("2025-03-26", toolProtocolVersion);
+    }
+
+    [Fact]
+    public async Task OpenClawHttpClient_McpDiscover_FallsBackOnHttpNotFound()
+    {
+        var seenMethods = new List<string>();
+        using var http = new HttpClient(new RecordingHttpMessageHandler(request =>
+        {
+            var method = request.Headers.GetValues("Mcp-Method").Single();
+            seenMethods.Add(method);
+            return Task.FromResult(method switch
+            {
+                "server/discover" => new HttpResponseMessage(HttpStatusCode.NotFound),
+                "initialize" => CreateJsonResponse("""
+                {"jsonrpc":"2.0","id":"2","result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":false},"resources":{"listChanged":false,"supportsTemplates":false},"prompts":{"listChanged":false}},"serverInfo":{"name":"legacy","version":"1.0.0"}}}
+                """),
+                _ => throw new InvalidOperationException($"Unexpected MCP method {method}")
+            });
+        }))
+        {
+            BaseAddress = new Uri("http://localhost/")
+        };
+
+        using var client = new OpenClawHttpClient("http://localhost/", authToken: null, httpClient: http);
+
+        var discover = await client.DiscoverMcpAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["server/discover", "initialize"], seenMethods);
+        Assert.Equal("2025-11-25", discover.ProtocolVersion);
     }
 
     [Fact]

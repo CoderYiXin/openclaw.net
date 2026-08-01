@@ -46,20 +46,7 @@ public sealed class McpInitializeResult
     public required McpServerInfo ServerInfo { get; init; }
 }
 
-public sealed class McpDiscoverRequest
-{
-    [System.Text.Json.Serialization.JsonPropertyName("_meta")]
-    public McpDiscoverRequestMeta Meta { get; init; } = new();
-}
-
-public sealed class McpDiscoverRequestMeta
-{
-    public const string PreferredProtocolVersion = "2025-11-25";
-    public static IReadOnlyList<string> DefaultSupportedVersions { get; } = ["2025-11-25", "2025-03-26"];
-
-    public string ProtocolVersion { get; init; } = PreferredProtocolVersion;
-    public IReadOnlyList<string> SupportedVersions { get; init; } = DefaultSupportedVersions;
-}
+public sealed class McpDiscoverRequest;
 
 public sealed class McpDiscoverResult
 {
