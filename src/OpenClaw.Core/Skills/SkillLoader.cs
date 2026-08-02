@@ -160,8 +160,9 @@ public static class SkillLoader
 
     /// <summary>
     /// Scan a directory for subdirectories containing SKILL.md.
-    /// When <paramref name="scanSubdirectories"/> is true, descends into nested
-    /// subdirectories (e.g. subskills/docx/SKILL.md) so that parent skill
+    /// Owner-qualified ClawHub paths (for example @owner/skill/SKILL.md) are
+    /// always recognized. When <paramref name="scanSubdirectories"/> is true,
+    /// also descends into arbitrary nested subdirectories so parent skill
     /// directories can bundle sub-skills.
     /// </summary>
     private static void ScanDirectory(
@@ -193,11 +194,14 @@ public static class SkillLoader
                 }
             }
 
-            var searchOption = scanSubdirectories
-                ? SearchOption.AllDirectories
-                : SearchOption.TopDirectoryOnly;
+            var skillDirectories = scanSubdirectories
+                ? Directory.GetDirectories(rootDir, "*", SearchOption.AllDirectories)
+                : Directory.GetDirectories(rootDir, "*", SearchOption.TopDirectoryOnly)
+                    .Concat(Directory.GetDirectories(rootDir, "@*", SearchOption.TopDirectoryOnly)
+                        .SelectMany(ownerDir => Directory.GetDirectories(ownerDir, "*", SearchOption.TopDirectoryOnly)))
+                    .Distinct(StringComparer.Ordinal);
 
-            foreach (var skillDir in Directory.GetDirectories(rootDir, "*", searchOption))
+            foreach (var skillDir in skillDirectories)
             {
                 var skillFile = Path.Combine(skillDir, "SKILL.md");
                 if (!File.Exists(skillFile))

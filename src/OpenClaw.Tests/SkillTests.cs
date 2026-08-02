@@ -1407,6 +1407,43 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void LoadAll_DefaultScanSubdirectories_LoadsOwnerQualifiedSkills()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"openclaw-test-skills-owner-qualified-{Guid.NewGuid():N}");
+        var skillDir = Path.Combine(tempDir, "skills", "@steipete", "peekaboo");
+        Directory.CreateDirectory(skillDir);
+
+        try
+        {
+            File.WriteAllText(Path.Combine(skillDir, "SKILL.md"), """
+                ---
+                name: peekaboo
+                description: Owner-qualified ClawHub skill
+                ---
+                Peekaboo instructions.
+                """);
+
+            var config = new SkillsConfig
+            {
+                Enabled = true,
+                Load = new SkillLoadConfig { IncludeBundled = false, IncludeManaged = false }
+            };
+            var logger = new TestLogger();
+
+            var skills = SkillLoader.LoadAll(config, tempDir, logger);
+
+            var skill = Assert.Single(skills);
+            Assert.Equal("peekaboo", skill.Name);
+            Assert.Equal(SkillSource.Workspace, skill.Source);
+            Assert.Equal(skillDir, skill.Location);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void LoadAll_ScanSubdirectories_LoadsNestedWorkspaceSkills()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"openclaw-test-skills-recursive-{Guid.NewGuid():N}");

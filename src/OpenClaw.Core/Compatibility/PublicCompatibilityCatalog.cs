@@ -85,6 +85,7 @@ public static class PublicCompatibilityCatalog
             PackageName = entry.PackageName,
             PluginId = entry.PluginId,
             SkillSlug = entry.Slug,
+            SkillRef = entry.Ref,
             PackageVersion = entry.Version,
             ExpectedRelativePath = entry.ExpectedRelativePath,
             ConfigJsonExample = entry.ConfigJson,
@@ -100,11 +101,12 @@ public static class PublicCompatibilityCatalog
     {
         if (string.Equals(entry.Kind, "clawhub-skill", StringComparison.Ordinal))
         {
-            var slug = RequireField(entry.Slug, entry, "slug");
+            _ = RequireField(entry.Slug, entry, "slug");
+            var skillRef = RequireField(entry.Ref, entry, "ref");
             var suffix = string.IsNullOrWhiteSpace(entry.Version)
                 ? string.Empty
                 : $" --version {entry.Version}";
-            return $"openclaw clawhub install {slug}{suffix}";
+            return $"openclaw clawhub install {skillRef}{suffix}";
         }
 
         var spec = RequireField(entry.Spec, entry, "spec");
@@ -204,6 +206,7 @@ internal sealed class CompatibilityCatalogManifestEntry
     public string? PackageName { get; set; }
     public string? PluginId { get; set; }
     public string? Slug { get; set; }
+    public string? Ref { get; set; }
     public string? Version { get; set; }
     public string? ExpectedStatus { get; set; }
     public string? ExpectedRelativePath { get; set; }
