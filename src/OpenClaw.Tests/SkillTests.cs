@@ -1411,7 +1411,9 @@ public class SkillLoaderTests
     {
         var tempDir = Path.Join(Path.GetTempPath(), $"openclaw-test-skills-owner-qualified-{Guid.NewGuid():N}");
         var skillDir = Path.Join(tempDir, "skills", "@steipete", "peekaboo");
+        var nestedSkillDir = Path.Join(skillDir, "nested");
         Directory.CreateDirectory(skillDir);
+        Directory.CreateDirectory(nestedSkillDir);
 
         try
         {
@@ -1421,6 +1423,13 @@ public class SkillLoaderTests
                 description: Owner-qualified ClawHub skill
                 ---
                 Peekaboo instructions.
+                """);
+            File.WriteAllText(Path.Join(nestedSkillDir, "SKILL.md"), """
+                ---
+                name: nested-owner-skill
+                description: Must remain excluded from a shallow scan
+                ---
+                Nested instructions.
                 """);
 
             var config = new SkillsConfig
@@ -1436,6 +1445,7 @@ public class SkillLoaderTests
             Assert.Equal("peekaboo", skill.Name);
             Assert.Equal(SkillSource.Workspace, skill.Source);
             Assert.Equal(skillDir, skill.Location);
+            Assert.DoesNotContain(skills, item => item.Name == "nested-owner-skill");
         }
         finally
         {
