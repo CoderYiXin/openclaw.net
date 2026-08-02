@@ -35,6 +35,8 @@ public sealed class CompatibilityCatalogTests
         Assert.Equal("compatible", item.CompatibilityStatus);
         Assert.Equal("clawhub-skill", item.Kind);
         Assert.Equal("peekaboo", item.SkillSlug);
+        Assert.Equal("@steipete/peekaboo", item.SkillRef);
+        Assert.Equal("openclaw clawhub install @steipete/peekaboo --version 1.0.0", item.InstallCommand);
     }
 
     [Fact]
@@ -80,5 +82,27 @@ public sealed class CompatibilityCatalogTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => PublicCompatibilityCatalog.CreateCatalog(manifest));
         Assert.Contains("'slug'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateCatalog_SkillWithoutRef_FailsFast()
+    {
+        var manifest = new CompatibilityCatalogManifest
+        {
+            Version = 1,
+            Entries =
+            [
+                new CompatibilityCatalogManifestEntry
+                {
+                    Id = "missing-ref",
+                    Category = "pure-skill",
+                    Kind = "clawhub-skill",
+                    Slug = "example"
+                }
+            ]
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => PublicCompatibilityCatalog.CreateCatalog(manifest));
+        Assert.Contains("'ref'", ex.Message, StringComparison.Ordinal);
     }
 }

@@ -18,6 +18,7 @@ public sealed class CompatibilityCommandsTests
         var text = output.ToString();
         Assert.Contains("\"version\":2", text, StringComparison.Ordinal);
         Assert.Contains("\"skillSlug\":\"peekaboo\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"skillRef\":\"@steipete/peekaboo\"", text, StringComparison.Ordinal);
         Assert.DoesNotContain("\"kind\":\"npm-plugin\"", text, StringComparison.Ordinal);
         Assert.Equal(string.Empty, error.ToString());
     }

@@ -6,8 +6,9 @@
       "category": "pure-skill",
       "kind": "clawhub-skill",
       "slug": "peekaboo",
+      "ref": "@steipete/peekaboo",
       "version": "1.0.0",
-      "expectedRelativePath": "skills/peekaboo/SKILL.md"
+      "expectedRelativePath": "skills/@steipete/peekaboo/SKILL.md"
     },
     {
       "id": "agentseo",

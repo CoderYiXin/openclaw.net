@@ -53,6 +53,7 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
     private async Task VerifyClawHubSkillAsync(CompatibilityCatalogEntry entry)
     {
         Assert.False(string.IsNullOrWhiteSpace(entry.SkillSlug), $"Smoke entry '{entry.Id}' must declare a skill slug.");
+        Assert.False(string.IsNullOrWhiteSpace(entry.SkillRef), $"Smoke entry '{entry.Id}' must declare an owner-qualified skill ref.");
         Assert.False(string.IsNullOrWhiteSpace(entry.PackageVersion), $"Smoke entry '{entry.Id}' must declare a skill version.");
         Assert.False(string.IsNullOrWhiteSpace(entry.ExpectedRelativePath), $"Smoke entry '{entry.Id}' must declare expectedRelativePath.");
 
@@ -64,7 +65,7 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
             "--workdir", workdir,
             "--dir", "skills",
             "--no-input",
-            "install", entry.SkillSlug!,
+            "install", entry.SkillRef!,
             "--version", entry.PackageVersion!);
 
         var expectedPath = Path.Combine(workdir, entry.ExpectedRelativePath!

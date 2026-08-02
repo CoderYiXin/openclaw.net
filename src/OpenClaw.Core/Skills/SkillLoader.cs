@@ -160,8 +160,9 @@ public static class SkillLoader
 
     /// <summary>
     /// Scan a directory for subdirectories containing SKILL.md.
-    /// When <paramref name="scanSubdirectories"/> is true, descends into nested
-    /// subdirectories (e.g. subskills/docx/SKILL.md) so that parent skill
+    /// Owner-qualified ClawHub paths (for example @owner/skill/SKILL.md) are
+    /// always recognized. When <paramref name="scanSubdirectories"/> is true,
+    /// also descends into arbitrary nested subdirectories so parent skill
     /// directories can bundle sub-skills.
     /// </summary>
     private static void ScanDirectory(
@@ -193,11 +194,33 @@ public static class SkillLoader
                 }
             }
 
-            var searchOption = scanSubdirectories
-                ? SearchOption.AllDirectories
-                : SearchOption.TopDirectoryOnly;
+            var enumerationOptions = new EnumerationOptions
+            {
+                RecurseSubdirectories = scanSubdirectories,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            };
+            var topLevelDirectories = EnumerateSkillDirectories(rootDir, "*", enumerationOptions, logger);
+            var ownerQualifiedDirectories = scanSubdirectories
+                ? []
+                : EnumerateSkillDirectories(rootDir, "@*", enumerationOptions, logger)
+                    .SelectMany(ownerDir => EnumerateSkillDirectories(ownerDir, "*", enumerationOptions, logger))
+                    .ToArray();
+            var duplicateOwnerSlugs = ownerQualifiedDirectories
+                .GroupBy(Path.GetFileName, StringComparer.OrdinalIgnoreCase)
+                .Where(static group => group.Count() > 1)
+                .Select(static group => group.Key)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var skillDir in Directory.GetDirectories(rootDir, "*", searchOption))
+            foreach (var duplicateSlug in duplicateOwnerSlugs.OrderBy(static slug => slug, StringComparer.OrdinalIgnoreCase))
+                logger.LogWarning("Skipping duplicate owner-qualified skill slug '{Slug}' under {Dir}", duplicateSlug, rootDir);
+
+            var skillDirectories = topLevelDirectories
+                .Concat(ownerQualifiedDirectories.Where(dir => !duplicateOwnerSlugs.Contains(Path.GetFileName(dir))))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(static dir => dir, StringComparer.Ordinal);
+
+            foreach (var skillDir in skillDirectories)
             {
                 var skillFile = Path.Combine(skillDir, "SKILL.md");
                 if (!File.Exists(skillFile))
@@ -224,6 +247,23 @@ public static class SkillLoader
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to scan skill directory {Dir}", rootDir);
+        }
+    }
+
+    private static string[] EnumerateSkillDirectories(
+        string rootDir,
+        string searchPattern,
+        EnumerationOptions options,
+        ILogger logger)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(rootDir, searchPattern, options).ToArray();
+        }
+        catch (Exception ex) when (IsPathException(ex))
+        {
+            logger.LogWarning(ex, "Skipping inaccessible skill directory {Dir}", rootDir);
+            return [];
         }
     }
 

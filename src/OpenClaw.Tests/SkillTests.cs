@@ -1407,6 +1407,103 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void LoadAll_DefaultScanSubdirectories_LoadsOwnerQualifiedSkills()
+    {
+        var tempDir = Path.Join(Path.GetTempPath(), $"openclaw-test-skills-owner-qualified-{Guid.NewGuid():N}");
+        var skillDir = Path.Join(tempDir, "skills", "@steipete", "peekaboo");
+        var nestedSkillDir = Path.Join(skillDir, "nested");
+        Directory.CreateDirectory(skillDir);
+        Directory.CreateDirectory(nestedSkillDir);
+
+        try
+        {
+            File.WriteAllText(Path.Join(skillDir, "SKILL.md"), """
+                ---
+                name: peekaboo
+                description: Owner-qualified ClawHub skill
+                ---
+                Peekaboo instructions.
+                """);
+            File.WriteAllText(Path.Join(nestedSkillDir, "SKILL.md"), """
+                ---
+                name: nested-owner-skill
+                description: Must remain excluded from a shallow scan
+                ---
+                Nested instructions.
+                """);
+
+            var config = new SkillsConfig
+            {
+                Enabled = true,
+                Load = new SkillLoadConfig { IncludeBundled = false, IncludeManaged = false }
+            };
+            var logger = new TestLogger();
+
+            var skills = SkillLoader.LoadAll(config, tempDir, logger);
+
+            var skill = Assert.Single(skills);
+            Assert.Equal("peekaboo", skill.Name);
+            Assert.Equal(SkillSource.Workspace, skill.Source);
+            Assert.Equal(skillDir, skill.Location);
+            Assert.DoesNotContain(skills, item => item.Name == "nested-owner-skill");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void LoadAll_DuplicateOwnerQualifiedSlugs_AreRejectedDeterministically()
+    {
+        var tempDir = Path.Join(Path.GetTempPath(), $"openclaw-test-skills-owner-collision-{Guid.NewGuid():N}");
+        var firstSkillDir = Path.Join(tempDir, "skills", "@owner-a", "peekaboo");
+        var secondSkillDir = Path.Join(tempDir, "skills", "@owner-b", "peekaboo");
+        var unrelatedSkillDir = Path.Join(tempDir, "skills", "unrelated");
+        Directory.CreateDirectory(firstSkillDir);
+        Directory.CreateDirectory(secondSkillDir);
+        Directory.CreateDirectory(unrelatedSkillDir);
+
+        try
+        {
+            const string peekabooSkill = """
+                ---
+                name: peekaboo
+                description: Duplicate owner-qualified skill
+                ---
+                Peekaboo instructions.
+                """;
+            File.WriteAllText(Path.Join(firstSkillDir, "SKILL.md"), peekabooSkill);
+            File.WriteAllText(Path.Join(secondSkillDir, "SKILL.md"), peekabooSkill);
+            File.WriteAllText(Path.Join(unrelatedSkillDir, "SKILL.md"), """
+                ---
+                name: unrelated
+                description: Adjacent skill
+                ---
+                Unrelated instructions.
+                """);
+
+            var config = new SkillsConfig
+            {
+                Enabled = true,
+                Load = new SkillLoadConfig { IncludeBundled = false, IncludeManaged = false }
+            };
+            var logger = new CapturingTestLogger();
+
+            var skills = SkillLoader.LoadAll(config, tempDir, logger);
+
+            var skill = Assert.Single(skills);
+            Assert.Equal("unrelated", skill.Name);
+            Assert.Contains(logger.WarningMessages, message =>
+                message.Contains("duplicate owner-qualified skill slug 'peekaboo'", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void LoadAll_ScanSubdirectories_LoadsNestedWorkspaceSkills()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"openclaw-test-skills-recursive-{Guid.NewGuid():N}");
