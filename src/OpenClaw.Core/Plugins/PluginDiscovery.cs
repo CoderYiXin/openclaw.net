@@ -545,11 +545,11 @@ public static class PluginDiscovery
             "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts"
         ];
 
-        foreach (var path in candidates.Select(candidate => Path.Combine(pluginRoot, candidate)))
-        {
-            if (File.Exists(path))
-                return path;
-        }
+        var conventionalEntry = candidates
+            .Select(candidate => Path.Combine(pluginRoot, candidate))
+            .FirstOrDefault(File.Exists);
+        if (conventionalEntry is not null)
+            return conventionalEntry;
 
         // Fallback: any .ts, .js, or .mjs file in root
         foreach (var ext in new[] { "*.js", "*.mjs", "*.cjs", "*.ts" })

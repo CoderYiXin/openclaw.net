@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -151,7 +152,7 @@ internal static class PluginCliCommands
         {
             process.Start();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             return PluginCliDescribeResult.Failure($"Unable to start Node.js for plugin CLI discovery: {ex.Message}");
         }
@@ -185,7 +186,12 @@ internal static class PluginCliCommands
             TryKill(process);
             return PluginCliDescribeResult.Failure("Plugin CLI discovery timed out after 20 seconds.");
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            TryKill(process);
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or NotSupportedException)
         {
             TryKill(process);
             return PluginCliDescribeResult.Failure($"Plugin CLI discovery failed: {ex.Message}");
@@ -208,7 +214,7 @@ internal static class PluginCliCommands
         {
             process.Start();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
         {
             Console.Error.WriteLine($"Unable to start plugin CLI command: {ex.Message}");
             return 1;
@@ -284,7 +290,12 @@ internal static class PluginCliCommands
                     result.Add(state.PluginId);
             }
         }
-        catch
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or JsonException
+                                   or InvalidOperationException
+                                   or NotSupportedException
+                                   or ArgumentException)
         {
             // A malformed optional operator-state file must not activate a plugin.
             // Treat discovery as empty rather than bypassing a possible quarantine.
@@ -301,7 +312,7 @@ internal static class PluginCliCommands
             if (!process.HasExited)
                 process.Kill(entireProcessTree: true);
         }
-        catch
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {
         }
     }

@@ -630,7 +630,13 @@ internal static class PluginCommands
 
             return (true, null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or InvalidOperationException
+                                   or JsonException
+                                   or System.ComponentModel.Win32Exception
+                                   or NotSupportedException
+                                   or ArgumentException)
         {
             return (false, $"Plugin installation failed; the existing plugin was preserved when possible: {ex.Message}");
         }
@@ -1148,14 +1154,9 @@ internal static class PluginCommands
             }
         }
 
-        foreach (var path in new[] { "index.js", "index.mjs", "index.cjs", "index.ts", "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts" }
-                     .Select(candidate => Path.Combine(rootPath, candidate)))
-        {
-            if (File.Exists(path))
-                return path;
-        }
-
-        return null;
+        return new[] { "index.js", "index.mjs", "index.cjs", "index.ts", "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts" }
+            .Select(candidate => Path.Combine(rootPath, candidate))
+            .FirstOrDefault(File.Exists);
     }
 
     private static void InspectUnsupportedRuntimeSurfaces(
