@@ -98,6 +98,35 @@ public sealed class PluginCommandsTests
     }
 
     [Fact]
+    public void InspectCandidate_DoesNotFollowSourceDirectorySymlinks()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = CreateTempRoot();
+        var outside = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "index.js"), "module.exports = () => {};");
+            File.WriteAllText(
+                Path.Combine(outside, "outside.js"),
+                "module.exports = api => api.registerGatewayMethod('outside', () => {});");
+            Directory.CreateSymbolicLink(Path.Combine(root, "linked-source"), outside);
+
+            var inspection = PluginCommands.InspectCandidate(root, "./symlink-safe-plugin", sourceIsNpm: false);
+
+            Assert.True(inspection.Success);
+            Assert.True(inspection.CanInstall);
+            Assert.DoesNotContain(inspection.Diagnostics, item => item.Code == "unsupported_gateway_method");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
     public void InspectCandidate_WithNewerPluginApiFloor_BlocksInstall()
     {
         var root = CreateTempRoot();

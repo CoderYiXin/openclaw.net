@@ -1218,19 +1218,28 @@ internal static class PluginCommands
 
     private static IEnumerable<string> EnumeratePluginSourceFiles(string rootPath)
     {
-        var pending = new Stack<string>();
-        pending.Push(rootPath);
+        const int maxDepth = 16;
+        var enumerationOptions = new EnumerationOptions
+        {
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+        var pending = new Stack<(string Directory, int Depth)>();
+        pending.Push((rootPath, 0));
         while (pending.Count > 0)
         {
-            var directory = pending.Pop();
-            foreach (var child in Directory.EnumerateDirectories(directory))
+            var (directory, depth) = pending.Pop();
+            if (depth < maxDepth)
             {
-                var name = Path.GetFileName(child);
-                if (name is not "node_modules" and not ".git")
-                    pending.Push(child);
+                foreach (var child in Directory.EnumerateDirectories(directory, "*", enumerationOptions))
+                {
+                    var name = Path.GetFileName(child);
+                    if (name is not "node_modules" and not ".git")
+                        pending.Push((child, depth + 1));
+                }
             }
 
-            foreach (var file in Directory.EnumerateFiles(directory)
+            foreach (var file in Directory.EnumerateFiles(directory, "*", enumerationOptions)
                          .Where(file => Path.GetExtension(file) is ".js" or ".mjs" or ".cjs" or ".ts"))
                 yield return file;
         }
