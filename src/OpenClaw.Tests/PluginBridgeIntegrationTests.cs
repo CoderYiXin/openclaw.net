@@ -140,7 +140,6 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
                 parameters: { type: "object", properties: { text: { type: "string" } } },
                 outputSchema: { type: "object", properties: { echoed: { type: "string" } }, required: ["echoed"] },
                 execute: async (_pluginId, params) => ({
-                  content: [{ type: "text", text: `Echoed ${params.text}` }],
                   details: { echoed: params.text }
                 })
               });

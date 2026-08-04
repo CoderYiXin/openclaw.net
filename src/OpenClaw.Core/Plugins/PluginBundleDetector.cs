@@ -24,29 +24,33 @@ internal static class PluginBundleDetector
         if (bundleFormat is null)
             return false;
 
-        JsonDocument? manifestDocument = null;
-        try
+        JsonDocument? manifestDocument;
+        if (manifestRelativePath is not null)
         {
-            if (manifestRelativePath is not null)
+            var manifestPath = Path.Combine(rootPath, manifestRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            try
             {
-                var manifestPath = Path.Combine(rootPath, manifestRelativePath.Replace('/', Path.DirectorySeparatorChar));
-                try
-                {
-                    manifestDocument = JsonDocument.Parse(File.ReadAllText(manifestPath));
-                }
-                catch (Exception ex)
-                {
-                    diagnostic = new PluginCompatibilityDiagnostic
-                    {
-                        Code = "invalid_bundle_manifest",
-                        Message = $"Failed to parse {bundleFormat} bundle manifest '{manifestPath}': {ex.Message}",
-                        Surface = "bundle_manifest",
-                        Path = manifestPath
-                    };
-                    return true;
-                }
+                manifestDocument = JsonDocument.Parse(File.ReadAllText(manifestPath));
             }
+            catch (Exception ex)
+            {
+                diagnostic = new PluginCompatibilityDiagnostic
+                {
+                    Code = "invalid_bundle_manifest",
+                    Message = $"Failed to parse {bundleFormat} bundle manifest '{manifestPath}': {ex.Message}",
+                    Surface = "bundle_manifest",
+                    Path = manifestPath
+                };
+                return true;
+            }
+        }
+        else
+        {
+            manifestDocument = null;
+        }
 
+        using (manifestDocument)
+        {
             var manifestRoot = manifestDocument?.RootElement;
             var rawId = GetString(manifestRoot, "id")
                 ?? GetString(manifestRoot, "name")
@@ -100,10 +104,6 @@ internal static class PluginBundleDetector
                 BundleDetectedCapabilities = detectedOnly
             };
             return true;
-        }
-        finally
-        {
-            manifestDocument?.Dispose();
         }
     }
 
@@ -219,11 +219,9 @@ internal static class PluginBundleDetector
         if (property.ValueKind != JsonValueKind.Array)
             return;
 
-        foreach (var item in property.EnumerateArray())
-        {
-            if (item.ValueKind == JsonValueKind.String)
-                AddPath(item.GetString(), paths);
-        }
+        foreach (var item in property.EnumerateArray()
+                     .Where(static item => item.ValueKind == JsonValueKind.String))
+            AddPath(item.GetString(), paths);
     }
 
     private static void AddPath(string? path, ISet<string> paths)

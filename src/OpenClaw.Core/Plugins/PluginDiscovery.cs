@@ -545,9 +545,8 @@ public static class PluginDiscovery
             "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts"
         ];
 
-        foreach (var candidate in candidates)
+        foreach (var path in candidates.Select(candidate => Path.Combine(pluginRoot, candidate)))
         {
-            var path = Path.Combine(pluginRoot, candidate);
             if (File.Exists(path))
                 return path;
         }

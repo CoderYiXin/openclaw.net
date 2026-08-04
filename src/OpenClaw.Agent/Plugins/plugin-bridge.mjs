@@ -860,7 +860,7 @@ async function handleRequest(req) {
       try {
         const result = await tool.execute(pluginId, params ?? {});
 
-        if (result && Array.isArray(result.content)) {
+        if (result && (Array.isArray(result.content) || result.details !== undefined)) {
           return result;
         }
         if (typeof result === "string") {

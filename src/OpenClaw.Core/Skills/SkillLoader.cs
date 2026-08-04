@@ -269,11 +269,12 @@ public static class SkillLoader
         };
 
         foreach (var commandFile in Directory.EnumerateFiles(commandRoot, "*.md", options)
+                     .Where(static path => !string.Equals(
+                         Path.GetFileName(path),
+                         "SKILL.md",
+                         StringComparison.OrdinalIgnoreCase))
                      .OrderBy(static path => path, StringComparer.Ordinal))
         {
-            if (string.Equals(Path.GetFileName(commandFile), "SKILL.md", StringComparison.OrdinalIgnoreCase))
-                continue;
-
             try
             {
                 var commandName = Path.GetFileNameWithoutExtension(commandFile);

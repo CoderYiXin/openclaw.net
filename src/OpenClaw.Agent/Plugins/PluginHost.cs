@@ -440,10 +440,10 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
             string.Equals(item.Severity, "error", StringComparison.OrdinalIgnoreCase));
         if (!hasErrors)
         {
-            foreach (var skillDir in skillDirs)
+            foreach (var skillDir in skillDirs.Where(skillDir =>
+                         !_skillRoots.Contains(skillDir, StringComparer.Ordinal)))
             {
-                if (!_skillRoots.Contains(skillDir, StringComparer.Ordinal))
-                    _skillRoots.Add(skillDir);
+                _skillRoots.Add(skillDir);
             }
         }
 

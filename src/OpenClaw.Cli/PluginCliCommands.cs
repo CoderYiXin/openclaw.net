@@ -36,7 +36,7 @@ internal static class PluginCliCommands
         {
             config = loadedConfig ? GatewayConfigFile.Load(configPath) : new GatewayConfig();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException)
         {
             Console.Error.WriteLine($"Unable to load plugin CLI configuration from '{configPath}': {ex.Message}");
             return 1;

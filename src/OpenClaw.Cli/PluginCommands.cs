@@ -1148,9 +1148,9 @@ internal static class PluginCommands
             }
         }
 
-        foreach (var candidate in new[] { "index.js", "index.mjs", "index.cjs", "index.ts", "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts" })
+        foreach (var path in new[] { "index.js", "index.mjs", "index.cjs", "index.ts", "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts" }
+                     .Select(candidate => Path.Combine(rootPath, candidate)))
         {
-            var path = Path.Combine(rootPath, candidate);
             if (File.Exists(path))
                 return path;
         }
@@ -1192,11 +1192,9 @@ internal static class PluginCommands
                     pending.Push(child);
             }
 
-            foreach (var file in Directory.EnumerateFiles(directory))
-            {
-                if (Path.GetExtension(file) is ".js" or ".mjs" or ".cjs" or ".ts")
-                    yield return file;
-            }
+            foreach (var file in Directory.EnumerateFiles(directory)
+                         .Where(file => Path.GetExtension(file) is ".js" or ".mjs" or ".cjs" or ".ts"))
+                yield return file;
         }
     }
 

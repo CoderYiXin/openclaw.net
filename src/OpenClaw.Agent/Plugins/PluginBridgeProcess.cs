@@ -131,13 +131,16 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         if (response.Error is not null)
             return $"Error: {response.Error.Message}";
 
-        if (response.Result is { } result && result.TryGetProperty("content", out var contentArray))
+        if (response.Result is { } result)
         {
             if (result.TryGetProperty("details", out var details) &&
                 details.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
             {
                 return details.GetRawText();
             }
+
+            if (!result.TryGetProperty("content", out var contentArray))
+                return result.GetRawText();
 
             var sb = new StringBuilder();
             foreach (var item in contentArray.EnumerateArray())
