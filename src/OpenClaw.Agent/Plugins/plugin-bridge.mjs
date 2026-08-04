@@ -78,6 +78,9 @@ let resolveSocketReady = () => {};
 /** @type {(reason?: any) => void} */
 let rejectSocketReady = () => {};
 
+let pluginId = "unknown";
+let logger = createLogger(pluginId);
+
 if (transportMode === "socket" || transportMode === "hybrid") {
   socketReadyPromise = new Promise((resolve, reject) => {
     resolveSocketReady = resolve;
@@ -759,9 +762,6 @@ function findJiti(entryPath) {
 
   return null;
 }
-
-let pluginId = "unknown";
-let logger = createLogger(pluginId);
 
 async function handleRequest(req) {
   switch (req.method) {

@@ -298,6 +298,44 @@ public sealed class PluginCommandsTests
     }
 
     [Fact]
+    public async Task InstallPreparedDirectoryAsync_NativePluginDoesNotRunNpmLifecycleScripts()
+    {
+        if (!HasNode())
+            return;
+
+        var root = CreateTempRoot();
+        var targetParent = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(root, "openclaw.plugin.json"),
+                """{"id":"safe-native-plugin","configSchema":{"type":"object"}}""");
+            File.WriteAllText(
+                Path.Combine(root, "index.js"),
+                "module.exports = () => {};");
+            File.WriteAllText(
+                Path.Combine(root, "package.json"),
+                """{"name":"safe-native-plugin","scripts":{"install":"node -e \"require('fs').writeFileSync('lifecycle-ran','yes')\""}}""");
+            var target = Path.Combine(targetParent, "safe-native-plugin");
+
+            var result = await PluginCommands.InstallPreparedDirectoryAsync(
+                root,
+                target,
+                "./safe-native-plugin",
+                sourceIsNpm: false);
+
+            Assert.True(result.Success, result.Error);
+            Assert.True(Directory.Exists(target));
+            Assert.False(File.Exists(Path.Combine(target, "lifecycle-ran")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(targetParent, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task InstallPreparedDirectoryAsync_InvalidBundlePreservesExistingInstall()
     {
         var root = CreateTempRoot();

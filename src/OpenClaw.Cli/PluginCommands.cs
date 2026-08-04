@@ -567,7 +567,7 @@ internal static class PluginCommands
             if (File.Exists(packageJson) && stagedInspection.Format != PluginFormats.Bundle)
             {
                 Console.WriteLine("Installing dependencies in staging...");
-                var npmInstall = await RunNpmAsync("install --omit=dev --omit=optional", stagingDir);
+                var npmInstall = await RunNpmAsync("install --ignore-scripts --omit=dev --omit=optional", stagingDir);
                 if (npmInstall.ExitCode != 0)
                     return (false, $"Dependency installation failed; the existing plugin was preserved: {npmInstall.Stderr}");
 
@@ -586,7 +586,7 @@ internal static class PluginCommands
                 !HasLocalJiti(stagedInspection.EntryPath))
             {
                 Console.WriteLine("Installing the TypeScript runtime dependency jiti in staging...");
-                var jitiInstall = await RunNpmAsync("install --no-save --omit=dev --omit=optional jiti", stagingDir);
+                var jitiInstall = await RunNpmAsync("install --ignore-scripts --no-save --omit=dev --omit=optional jiti", stagingDir);
                 if (jitiInstall.ExitCode != 0)
                     return (false, $"TypeScript runtime dependency installation failed; the existing plugin was preserved: {jitiInstall.Stderr}");
             }
