@@ -1242,11 +1242,26 @@ public sealed class OpenClawToolExecutor
     internal static AIFunctionDeclaration CreateDeclaration(ITool tool)
     {
         using var doc = JsonDocument.Parse(tool.ParameterSchema);
+        JsonElement? returnSchema = null;
+        if (tool is IToolOutputSchema { OutputSchema: { Length: > 0 } outputSchema })
+        {
+            try
+            {
+                using var returnSchemaDocument = JsonDocument.Parse(outputSchema);
+                returnSchema = returnSchemaDocument.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                // A malformed optional return schema must not hide an otherwise valid tool.
+                returnSchema = null;
+            }
+        }
+
         return AIFunctionFactory.CreateDeclaration(
             tool.Name,
             tool.Description,
             doc.RootElement.Clone(),
-            returnJsonSchema: null);
+            returnJsonSchema: returnSchema);
     }
 
     private static string NormalizeApprovalToolName(string toolName) =>

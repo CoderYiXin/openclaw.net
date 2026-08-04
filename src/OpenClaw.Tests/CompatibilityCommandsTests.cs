@@ -29,13 +29,13 @@ public sealed class CompatibilityCommandsTests
         using var output = new StringWriter();
         using var error = new StringWriter();
 
-        var exitCode = CompatibilityCommands.Run(["catalog", "--category", "unsupported-surface-plugin"], output, error);
+        var exitCode = CompatibilityCommands.Run(["catalog", "--category", "cli-plugin"], output, error);
 
         Assert.Equal(0, exitCode);
         var text = output.ToString();
         Assert.Contains("supermemory", text, StringComparison.Ordinal);
-        Assert.Contains("unsupported upstream plugin surfaces fail explicitly", text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("unsupported_cli_registration", text, StringComparison.Ordinal);
+        Assert.Contains("lazy root CLI command", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("compatible", text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(string.Empty, error.ToString());
     }
 }

@@ -74,6 +74,7 @@ internal sealed class PluginHealthService
                 {
                     PluginId = report.PluginId,
                     Origin = report.Origin,
+                    BundleFormat = report.BundleFormat,
                     Loaded = report.Loaded,
                     BlockedByRuntimeMode = report.BlockedByRuntimeMode,
                     Disabled = state?.Disabled ?? false,
@@ -101,6 +102,7 @@ internal sealed class PluginHealthService
                     ToolCount = report.ToolCount,
                     ChannelCount = report.ChannelCount,
                     CommandCount = report.CommandCount,
+                    CliCommandCount = report.CliCommandCount,
                     ProviderCount = report.ProviderCount,
                     BudgetViolations = budgetViolations,
                     Diagnostics = report.Diagnostics
@@ -145,6 +147,7 @@ internal sealed class PluginHealthService
                     ToolCount = 0,
                     ChannelCount = 0,
                     CommandCount = 0,
+                    CliCommandCount = 0,
                     ProviderCount = 0,
                     BudgetViolations = [],
                     Diagnostics = []
@@ -392,6 +395,7 @@ internal sealed class PluginHealthService
             return ("third-party-reviewed", "Operator marked this plugin as reviewed for deployment.");
 
         if (!string.Equals(report.Origin, "bridge", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(report.Origin, PluginFormats.Bundle, StringComparison.OrdinalIgnoreCase) &&
             !string.Equals(report.Origin, "unknown", StringComparison.OrdinalIgnoreCase))
         {
             return ("first-party", "Plugin is loaded through a built-in or native runtime path.");
@@ -402,6 +406,7 @@ internal sealed class PluginHealthService
             report.ToolCount > 0 ||
             report.ChannelCount > 0 ||
             report.CommandCount > 0 ||
+            report.CliCommandCount > 0 ||
             report.ProviderCount > 0 ||
             report.SkillDirectories.Length > 0;
         var hasErrors = report.Diagnostics.Any(static diagnostic => string.Equals(diagnostic.Severity, "error", StringComparison.OrdinalIgnoreCase));
@@ -430,6 +435,8 @@ internal sealed class PluginHealthService
     private static string BuildDeclaredSurfaceSummary(PluginLoadReport report)
     {
         var items = new List<string>();
+        if (string.Equals(report.Origin, PluginFormats.Bundle, StringComparison.OrdinalIgnoreCase))
+            items.Add($"bundle={report.BundleFormat ?? "unknown"}");
         if (report.RequestedCapabilities.Length > 0)
             items.Add($"capabilities={string.Join(",", report.RequestedCapabilities)}");
         if (report.ToolCount > 0)
@@ -438,6 +445,8 @@ internal sealed class PluginHealthService
             items.Add($"channels={report.ChannelCount}");
         if (report.CommandCount > 0)
             items.Add($"commands={report.CommandCount}");
+        if (report.CliCommandCount > 0)
+            items.Add($"cli={report.CliCommandCount}");
         if (report.ProviderCount > 0)
             items.Add($"providers={report.ProviderCount}");
         if (report.SkillDirectories.Length > 0)

@@ -51,16 +51,24 @@ OpenClaw.NET keeps plugin compatibility explicit by runtime mode. The goal is to
 | Surface | Status | Notes |
 | --- | --- | --- |
 | `api.registerTool()` | Supported | Available in both `aot` and `jit`. Covered by hermetic bridge tests. |
+| Tool `outputSchema` and structured `details` | Supported | Output schemas are exposed to the model tool contract and structured results remain JSON instead of being flattened to text. |
 | `api.registerService()` | Supported | Available in both `aot` and `jit`, including `start` / `stop` lifecycle coverage. |
 | `api.registerChannel()` | Supported with caveats | `jit` only. `aot` fails fast with `jit_mode_required`. |
 | `api.registerCommand()` | Supported with caveats | `jit` only. Registered as dynamic chat commands. |
 | `api.on(...)` | Supported with caveats | `jit` only. `tool:before` / `tool:after` hooks are bridged with timeout protections. |
 | `api.registerProvider()` | Supported with caveats | `jit` only. Plugin-provided LLMs are wired through the dynamic provider seam. |
 | `OpenClaw.Providers.MicrosoftExtensionsAI` | Supported with caveats | `jit` only through native dynamic plugins. Use this to bring an arbitrary `IChatClient`; AOT users should use built-in providers or OpenAI-compatible endpoints. |
-| Standalone `.js`, `.mjs`, `.ts` in `.openclaw/extensions` | Supported with caveats | `.ts` requires local `jiti`. |
-| Manifest/package discovery via `Plugins:Load:Paths` | Supported | Includes `openclaw.plugin.json` and `package.json` `openclaw.extensions`. |
-| `openclaw plugins install --dry-run` trust inspection | Supported | Prints trust level, declared surface, diagnostics, and blocks install when compatibility errors are present. |
+| Standalone `.js`, `.mjs`, `.cjs`, `.ts` in `.openclaw/extensions` | Supported with caveats | CLI installs add local `jiti` when a TypeScript entry needs it; manually configured TypeScript paths still require `jiti` in their dependency tree. |
+| Manifest/package discovery via `Plugins:Load:Paths` | Supported | Includes `openclaw.plugin.json`; prefers `package.json` `openclaw.runtimeExtensions` and retains `openclaw.extensions` compatibility. Built JavaScript entries are preferred over TypeScript source. |
+| Package compatibility metadata | Supported with caveats | `openclaw.compat.pluginApi`, `compat.minGatewayVersion`, and `install.minHostVersion` are enforced before load. `install.expectedIntegrity` is discovered but fails closed because an extracted directory cannot yet be verified against package-manager integrity metadata. |
+| `openclaw plugins install --dry-run` trust inspection | Supported | Prints manifest/package/static compatibility rather than claiming runtime verification. Known unsupported registration APIs block installation. |
+| Staged plugin installation | Supported | Dependencies and any required `jiti` runtime are installed in a sibling staging directory with npm lifecycle scripts disabled, the bridge initializes the staged plugin, and only then is the existing install replaced atomically. A failed update preserves the previous plugin. |
+| Codex compatible bundles | Supported with caveats | Detects `.codex-plugin/plugin.json`; maps `skills/` into plugin skills. Hook packs, MCP metadata, and app metadata are reported as detected-only because OpenClaw.NET does not yet execute those bundle surfaces. |
+| Claude compatible bundles | Supported with caveats | Detects `.claude-plugin/plugin.json` and manifestless Claude layouts. Maps `skills/` and Markdown `commands/`; agents, hook automation, MCP, LSP, settings, and output styles are reported as detected-only. |
+| Cursor compatible bundles | Supported with caveats | Detects `.cursor-plugin/plugin.json` and `.cursor/` layouts. Maps `skills/` and `.cursor/commands/`; agents, rules, hooks, and MCP metadata are reported as detected-only. |
+| Bundle trust boundary | Supported | Native plugin detection has precedence. Bundle JavaScript is never loaded as a native plugin, bundle installs do not run npm dependency/lifecycle scripts, and all mapped content paths remain constrained to the bundle root. |
 | Plugin config validation | Supported with caveats | Validated against the documented JSON Schema subset below before startup. |
+| `api.registerCli()` | Supported with caveats | Root commands are discovered lazily and executed in a one-shot Node bridge with inherited terminal streams. Built-in CLI roots win; names are validated and duplicate plugin roots fail closed. The bridge implements the common Commander registration subset used by upstream plugins. |
 | Plugin diagnostics in `/doctor` | Supported | Discovery, load, config, and compatibility failures are reported explicitly. |
 | Plugin bridge runtime budgets | Supported | `OpenClaw:Plugins:RuntimeBudget` can auto-quarantine bridge plugins by restart count, working set, and compatibility error thresholds. |
 | `Plugins:Transport:Mode=stdio` | Supported | JSON-RPC over child process stdin/stdout. |
@@ -71,12 +79,11 @@ OpenClaw.NET keeps plugin compatibility explicit by runtime mode. The goal is to
 
 ## Unsupported Today
 
-These APIs are not bridged. If a plugin uses them, initialization fails fast with structured diagnostics instead of loading partially:
+This API is not bridged. Static install inspection and bridge initialization fail with structured diagnostics instead of loading the plugin partially:
 
 | Surface | Status | Failure code |
 | --- | --- | --- |
 | `api.registerGatewayMethod()` | Not supported | `unsupported_gateway_method` |
-| `api.registerCli()` | Not supported | `unsupported_cli_registration` |
 
 ## Canvas and A2UI Compatibility
 
@@ -112,9 +119,9 @@ The messaging channels below now share the same operator model for DM policy, re
 
 ## TypeScript Requirements
 
-TypeScript plugins are supported when `jiti` is available in the plugin dependency tree.
+TypeScript plugins are supported when `jiti` is available in the plugin dependency tree. `openclaw plugins install` installs it into the staged plugin automatically when necessary.
 
-Install it in the plugin directory or its parent workspace:
+For plugins loaded directly from manually configured paths, install it in the plugin directory or its parent workspace:
 
 ```bash
 npm install jiti
@@ -174,11 +181,13 @@ The catalog is scenario-based rather than marketing-based:
 - negative scenarios show pinned configs or packages expected to fail with explicit diagnostics
 - each entry includes install guidance, required config examples where relevant, and expected tools, skills, or diagnostics
 
+Pinned scenarios remain the release gate. The scheduled/manual `LatestCanary` lane separately installs the current npm release for each distinct catalog package and compares it with the pinned expectation. That moving probe is intentionally non-blocking: drift produces a workflow warning, test artifact, resolved package version, and diagnostics without making a known-good pinned release fail.
+
 ## Known Limitations
 
 - Public-bind setup defaults intentionally disable bridge plugins and shell until you opt into the relevant trust settings.
 - JIT-only capabilities remain JIT-only; `aot` does not attempt partial dynamic fallback.
-- TypeScript plugin loading depends on `jiti`; OpenClaw.NET does not bundle a TypeScript runtime automatically.
+- TypeScript plugin loading depends on `jiti`; CLI installs provision it when needed, while plugins loaded directly from configured paths must provide it locally.
 - Out-of-root plugin entry files, manifests, and native dynamic assemblies fail explicitly instead of being resolved elsewhere on disk.
 - Tool-name collisions are deterministic: the first tool wins, later duplicates are skipped and reported.
 
@@ -195,6 +204,18 @@ The compatibility claim is backed by automated validation in `src/OpenClaw.Tests
   - plugin-packaged skills
   - config validation, including `oneOf`
   - unsupported-surface failure modes
+  - bridge restart readiness across stdio, socket, and hybrid transports
+  - structured output-schema and result preservation
+- `PluginCommandsTests.cs`
+  - dry-run compatibility status and unsupported-surface rejection
+  - package API-floor rejection
+  - isolated runtime inspection diagnostics
+  - compatible bundle inspection and mapped/detected-only surface reporting
+- `PluginTests.cs` / `SkillTests.cs`
+  - Codex, Claude, and Cursor bundle detection
+  - native-plugin precedence over dual-format bundle markers
+  - bundle loading without bridge execution
+  - Claude/Cursor Markdown command mapping into user-invocable skills
 - `NativeDynamicPluginHostTests.cs`
   - JIT-mode in-process plugin loading
   - command and service lifecycle
@@ -207,4 +228,4 @@ The compatibility claim is backed by automated validation in `src/OpenClaw.Tests
   - pinned config-schema rejection case
   - pinned unsupported-surface plugin case
 
-The nightly/manual CI smoke lane runs those public packages with `OPENCLAW_PUBLIC_SMOKE=1`.
+The nightly/manual CI smoke lane runs pinned public packages with `OPENCLAW_PUBLIC_SMOKE=1`, then runs the non-blocking moving probe with `OPENCLAW_LATEST_CANARY=1`.

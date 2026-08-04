@@ -1085,6 +1085,8 @@ public sealed class SessionDelegationChildSummary
 [JsonSerializable(typeof(BridgeChannelRegistration[]))]
 [JsonSerializable(typeof(BridgeCommandRegistration))]
 [JsonSerializable(typeof(BridgeCommandRegistration[]))]
+[JsonSerializable(typeof(BridgeCliCommandRegistration))]
+[JsonSerializable(typeof(BridgeCliCommandRegistration[]))]
 [JsonSerializable(typeof(BridgeProviderRegistration))]
 [JsonSerializable(typeof(BridgeProviderRegistration[]))]
 [JsonSerializable(typeof(BridgeProviderRequest))]

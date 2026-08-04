@@ -2,6 +2,7 @@ using System.Text.Json;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Agent.Plugins;
+using OpenClaw.Core.Skills;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -41,6 +42,165 @@ public class PluginDiscoveryTests : IDisposable
         Assert.Single(discovered);
         Assert.Equal("test-plugin", discovered[0].Manifest.Id);
         Assert.EndsWith("index.ts", discovered[0].EntryPath);
+    }
+
+    [Fact]
+    public void Discover_PrefersBuiltRuntimeExtensionAndReadsCompatibilityMetadata()
+    {
+        var pluginDir = Path.Combine(_tempDir, "modern-plugin");
+        Directory.CreateDirectory(Path.Combine(pluginDir, "src"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "dist"));
+        File.WriteAllText(Path.Combine(pluginDir, "openclaw.plugin.json"), """{"id":"modern-plugin"}""");
+        File.WriteAllText(Path.Combine(pluginDir, "src", "index.ts"), "export default function() {}");
+        File.WriteAllText(Path.Combine(pluginDir, "dist", "index.js"), "module.exports = function() {};");
+        File.WriteAllText(
+            Path.Combine(pluginDir, "package.json"),
+            """
+            {
+              "name": "modern-plugin",
+              "openclaw": {
+                "extensions": ["./src/index.ts"],
+                "runtimeExtensions": ["./dist/index.js"],
+                "compat": {
+                  "pluginApi": ">=2026.5.4",
+                  "minGatewayVersion": ">=2026.5.4"
+                },
+                "install": { "expectedIntegrity": "sha512-example" }
+              }
+            }
+            """);
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        }));
+
+        Assert.EndsWith(Path.Combine("dist", "index.js"), plugin.EntryPath);
+        Assert.Equal(">=2026.5.4", plugin.PluginApiRange);
+        Assert.Equal(">=2026.5.4", plugin.MinHostVersion);
+        Assert.Equal("sha512-example", plugin.ExpectedIntegrity);
+        Assert.Contains(
+            PluginPackageCompatibility.Validate(plugin),
+            diagnostic => diagnostic.Code == "package_integrity_unverified");
+    }
+
+    [Theory]
+    [InlineData("codex", ".codex-plugin")]
+    [InlineData("claude", ".claude-plugin")]
+    [InlineData("cursor", ".cursor-plugin")]
+    public void Discover_DetectsCompatibleBundleManifests(string bundleFormat, string markerDirectory)
+    {
+        var bundleDir = Path.Combine(_tempDir, $"{bundleFormat}-bundle");
+        Directory.CreateDirectory(Path.Combine(bundleDir, markerDirectory));
+        Directory.CreateDirectory(Path.Combine(bundleDir, "skills", "bundle-skill"));
+        File.WriteAllText(
+            Path.Combine(bundleDir, markerDirectory, "plugin.json"),
+            $$"""{"name":"{{bundleFormat}}-sample","version":"1.0.0"}""");
+        File.WriteAllText(
+            Path.Combine(bundleDir, "skills", "bundle-skill", "SKILL.md"),
+            "---\nname: bundle-skill\ndescription: Bundle skill\n---\nUse the bundle.");
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [bundleDir] }
+        }));
+
+        Assert.Equal(PluginFormats.Bundle, plugin.Format);
+        Assert.Equal(bundleFormat, plugin.BundleFormat);
+        Assert.Contains("skills", plugin.BundleMappedCapabilities);
+        Assert.Empty(plugin.EntryPath);
+    }
+
+    [Fact]
+    public void Discover_ManifestlessClaudeBundle_MapsCommandsAndReportsOtherSurfaces()
+    {
+        var bundleDir = Path.Combine(_tempDir, "claude-default-bundle");
+        Directory.CreateDirectory(Path.Combine(bundleDir, "commands"));
+        Directory.CreateDirectory(Path.Combine(bundleDir, "agents"));
+        File.WriteAllText(Path.Combine(bundleDir, "commands", "review.md"), "Review this change carefully.");
+        File.WriteAllText(Path.Combine(bundleDir, ".mcp.json"), "{}");
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [bundleDir] }
+        }));
+
+        Assert.Equal("claude", plugin.BundleFormat);
+        Assert.Contains("commands", plugin.BundleMappedCapabilities);
+        Assert.Contains("agents", plugin.BundleDetectedCapabilities);
+        Assert.Contains("mcp", plugin.BundleDetectedCapabilities);
+    }
+
+    [Fact]
+    public void Discover_NativePluginTakesPrecedenceOverBundleMarkers()
+    {
+        var pluginDir = Path.Combine(_tempDir, "dual-format");
+        Directory.CreateDirectory(Path.Combine(pluginDir, ".claude-plugin"));
+        File.WriteAllText(Path.Combine(pluginDir, ".claude-plugin", "plugin.json"), "{\"name\":\"bundle-copy\"}");
+        File.WriteAllText(Path.Combine(pluginDir, "openclaw.plugin.json"), "{\"id\":\"native-wins\"}");
+        File.WriteAllText(Path.Combine(pluginDir, "index.js"), "module.exports = () => {};");
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        }));
+
+        Assert.Equal(PluginFormats.Native, plugin.Format);
+        Assert.Equal("native-wins", plugin.Manifest.Id);
+    }
+
+    [Fact]
+    public void Discover_StandaloneEntryWithWeakBundleFolders_RemainsNative()
+    {
+        var pluginDir = Path.Combine(_tempDir, "standalone-with-content");
+        Directory.CreateDirectory(Path.Combine(pluginDir, "skills"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "commands"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "agents"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "hooks"));
+        File.WriteAllText(Path.Combine(pluginDir, ".mcp.json"), "{}");
+        File.WriteAllText(Path.Combine(pluginDir, "settings.json"), "{}");
+        File.WriteAllText(Path.Combine(pluginDir, "index.js"), "module.exports = () => {};");
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        }));
+
+        Assert.Equal(PluginFormats.Native, plugin.Format);
+        Assert.EndsWith("index.js", plugin.EntryPath, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public void Discover_BundleManifestMustBeJsonObject(string manifestJson)
+    {
+        var bundleDir = Path.Combine(_tempDir, $"invalid-bundle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(bundleDir, ".codex-plugin"));
+        File.WriteAllText(Path.Combine(bundleDir, ".codex-plugin", "plugin.json"), manifestJson);
+
+        var result = PluginDiscovery.DiscoverWithDiagnostics(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [bundleDir] }
+        });
+
+        Assert.Empty(result.Plugins);
+        Assert.Contains(
+            result.Reports.SelectMany(static report => report.Diagnostics),
+            diagnostic => diagnostic.Code == "invalid_bundle_manifest");
+    }
+
+    [Theory]
+    [InlineData("^2026.5.0")]
+    [InlineData("~2026.5.0")]
+    [InlineData("2026")]
+    public void PackageCompatibility_NormalizesCommonNpmVersionRanges(string range)
+    {
+        Assert.Empty(PluginPackageCompatibility.Validate(
+            range,
+            null,
+            "range-plugin",
+            _tempDir));
     }
 
     [Fact]
@@ -352,6 +512,22 @@ public class BridgedPluginToolTests
 
         Assert.True(tool.Optional);
     }
+
+    [Fact]
+    public void Constructor_PreservesOutputSchema()
+    {
+        var reg = new PluginToolRegistration
+        {
+            Name = "structured-tool",
+            Description = "Structured tool",
+            Parameters = JsonDocument.Parse("{}").RootElement,
+            OutputSchema = JsonDocument.Parse("""{"type":"object","properties":{"value":{"type":"string"}}}""").RootElement
+        };
+
+        var tool = new BridgedPluginTool(null!, "test-plugin", reg);
+
+        Assert.Contains("\"value\"", tool.OutputSchema, StringComparison.Ordinal);
+    }
 }
 
 public class PluginHostTests
@@ -379,6 +555,49 @@ public class PluginHostTests
         var tools = await host.LoadAsync(null, TestContext.Current.CancellationToken);
 
         Assert.Empty(tools);
+    }
+
+    [Fact]
+    public async Task LoadAsync_BundleMapsSkillsWithoutStartingBridgeCode()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "openclaw-bundle-host-tests", Guid.NewGuid().ToString("n"));
+        var skillDir = Path.Combine(root, "skills", "bundle-value");
+        Directory.CreateDirectory(Path.Combine(root, ".codex-plugin"));
+        Directory.CreateDirectory(skillDir);
+        File.WriteAllText(Path.Combine(root, ".codex-plugin", "plugin.json"), "{\"name\":\"codex-value\"}");
+        File.WriteAllText(
+            Path.Combine(skillDir, "SKILL.md"),
+            "---\nname: bundle-value\ndescription: Adds value\n---\nDeliver useful value.");
+
+        try
+        {
+            var config = new PluginsConfig { Load = new PluginLoadConfig { Paths = [root] } };
+            await using var host = new PluginHost(config, "/nonexistent/bridge.mjs", new TestLogger());
+
+            var tools = await host.LoadAsync(null, TestContext.Current.CancellationToken);
+            var report = Assert.Single(host.Reports);
+
+            Assert.Empty(tools);
+            Assert.True(report.Loaded);
+            Assert.Equal(PluginFormats.Bundle, report.Origin);
+            Assert.Equal("codex", report.BundleFormat);
+            Assert.Contains(host.SkillRoots, path => path.EndsWith(Path.DirectorySeparatorChar + "skills", StringComparison.Ordinal));
+
+            var skills = SkillLoader.LoadAll(
+                new SkillsConfig
+                {
+                    Enabled = true,
+                    Load = new SkillLoadConfig { IncludeBundled = false, IncludeManaged = false, IncludeWorkspace = false }
+                },
+                null,
+                new TestLogger(),
+                host.SkillRoots);
+            Assert.Contains(skills, skill => skill.Name == "bundle-value");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     /// <summary>Minimal ILogger for testing without DI.</summary>

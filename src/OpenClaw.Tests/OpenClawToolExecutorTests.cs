@@ -12,6 +12,14 @@ namespace OpenClaw.Tests;
 public sealed class OpenClawToolExecutorTests
 {
     [Fact]
+    public void CreateDeclaration_MalformedOptionalOutputSchema_KeepsToolAvailable()
+    {
+        var declaration = OpenClawToolExecutor.CreateDeclaration(new MalformedOutputSchemaTool());
+
+        Assert.Equal("malformed_output", declaration.Name);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ApprovalRequiredWithoutCallback_DeniesExecution()
     {
         var tool = Substitute.For<ITool>();
@@ -624,5 +632,16 @@ public sealed class OpenClawToolExecutorTests
             Interlocked.Increment(ref _callCount);
             return ValueTask.FromResult(result);
         }
+    }
+
+    private sealed class MalformedOutputSchemaTool : ITool, IToolOutputSchema
+    {
+        public string Name => "malformed_output";
+        public string Description => "Tool with an invalid optional output schema";
+        public string ParameterSchema => """{"type":"object"}""";
+        public string? OutputSchema => "{not-json";
+
+        public ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct)
+            => ValueTask.FromResult("ok");
     }
 }

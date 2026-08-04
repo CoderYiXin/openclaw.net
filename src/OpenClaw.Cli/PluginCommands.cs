@@ -31,6 +31,7 @@ internal static class PluginCommands
             "install" => await InstallAsync(rest),
             "remove" or "uninstall" => await RemoveAsync(rest),
             "list" or "ls" => ListInstalled(rest),
+            "inspect" => await InspectAsync(rest),
             "search" => await SearchAsync(rest),
             _ => UnknownSubcommand(subcommand)
         };
@@ -128,24 +129,17 @@ internal static class PluginCommands
             // Step 4: Determine plugin name from manifest or package.json
             var pluginName = ResolvePluginName(packageDir) ?? SanitizePackageName(packageSpec);
 
-            // Step 5: Move to extensions directory
+            // Step 5: stage dependencies and atomically replace the installed plugin
             var targetDir = Path.Combine(extensionsDir, pluginName);
-            if (Directory.Exists(targetDir))
+            var installResult = await InstallPreparedDirectoryAsync(
+                packageDir,
+                targetDir,
+                packageSpec,
+                sourceIsNpm: true);
+            if (!installResult.Success)
             {
-                Console.WriteLine($"Replacing existing plugin '{pluginName}'...");
-                Directory.Delete(targetDir, recursive: true);
-            }
-
-            CopyDirectory(packageDir, targetDir);
-
-            // Step 6: Install npm dependencies if package.json exists
-            var packageJson = Path.Combine(targetDir, "package.json");
-            if (File.Exists(packageJson))
-            {
-                Console.WriteLine("Installing dependencies...");
-                var npmInstall = await RunNpmAsync("install --production --no-optional", targetDir);
-                if (npmInstall.ExitCode != 0)
-                    Console.Error.WriteLine($"Warning: npm install failed: {npmInstall.Stderr}");
+                Console.Error.WriteLine(installResult.Error);
+                return 1;
             }
 
             Console.WriteLine($"Installed '{pluginName}' to {targetDir}");
@@ -199,10 +193,16 @@ internal static class PluginCommands
 
                 var pluginName = ResolvePluginName(packageDir) ?? Path.GetFileNameWithoutExtension(localPath);
                 var targetDir = Path.Combine(extensionsDir, pluginName);
-                if (Directory.Exists(targetDir))
-                    Directory.Delete(targetDir, recursive: true);
-
-                CopyDirectory(packageDir, targetDir);
+                var installResult = await InstallPreparedDirectoryAsync(
+                    packageDir,
+                    targetDir,
+                    localPath,
+                    sourceIsNpm: false);
+                if (!installResult.Success)
+                {
+                    Console.Error.WriteLine(installResult.Error);
+                    return 1;
+                }
                 Console.WriteLine($"Installed '{pluginName}' from tarball to {targetDir}");
                 return 0;
             }
@@ -229,10 +229,16 @@ internal static class PluginCommands
 
             var pluginName = ResolvePluginName(sourcePath) ?? Path.GetFileName(sourcePath);
             var targetDir = Path.Combine(extensionsDir, pluginName);
-            if (Directory.Exists(targetDir))
-                Directory.Delete(targetDir, recursive: true);
-
-            CopyDirectory(sourcePath, targetDir);
+            var installResult = await InstallPreparedDirectoryAsync(
+                sourcePath,
+                targetDir,
+                localPath,
+                sourceIsNpm: false);
+            if (!installResult.Success)
+            {
+                Console.Error.WriteLine(installResult.Error);
+                return 1;
+            }
             Console.WriteLine($"Installed '{pluginName}' from local directory to {targetDir}");
             return 0;
         }
@@ -308,12 +314,73 @@ internal static class PluginCommands
             var trustLevel = DetermineTrustLevel(plugin.RootPath, sourceIsNpm: false, errorCount: 0, hasStructuredSurface);
             Console.WriteLine($"  {name} ({version}) - {desc}");
             Console.WriteLine($"    Path: {plugin.RootPath}");
+            Console.WriteLine($"    Format: {plugin.Format}");
+            if (plugin.Format == PluginFormats.Bundle)
+                Console.WriteLine($"    Bundle format: {plugin.BundleFormat}");
             Console.WriteLine($"    Trust: {trustLevel}");
             Console.WriteLine($"    Trust reason: {DetermineTrustReason(trustLevel, errorCount: 0, hasStructuredSurface)}");
-            Console.WriteLine($"    Declared: {BuildDeclaredSurfaceSummary(plugin.Manifest)}");
+            Console.WriteLine($"    Declared: {BuildDeclaredSurfaceSummary(plugin.Manifest, plugin)}");
         }
 
         return 0;
+    }
+
+    private static async Task<int> InspectAsync(string[] args)
+    {
+        var target = args.FirstOrDefault(arg => !arg.StartsWith("-", StringComparison.Ordinal));
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            Console.Error.WriteLine("Usage: openclaw plugins inspect <plugin-name|local-directory> [--runtime]");
+            return 2;
+        }
+
+        var candidatePath = target;
+        if (!Directory.Exists(candidatePath) &&
+            !File.Exists(candidatePath) &&
+            !Path.IsPathRooted(candidatePath))
+        {
+            var extensionsDir = ResolveExtensionsDir(args.Contains("--global") || args.Contains("-g"));
+            candidatePath = Path.Combine(extensionsDir, target);
+            if (!Directory.Exists(candidatePath))
+                candidatePath = Path.Combine(extensionsDir, SanitizePackageName(target));
+        }
+
+        if (!Directory.Exists(candidatePath) && !File.Exists(candidatePath))
+        {
+            Console.Error.WriteLine($"Plugin '{target}' was not found.");
+            return 1;
+        }
+
+        var rootPath = Directory.Exists(candidatePath)
+            ? Path.GetFullPath(candidatePath)
+            : Path.GetDirectoryName(Path.GetFullPath(candidatePath))!;
+        var inspection = InspectCandidate(rootPath, target, sourceIsNpm: false);
+        if (!inspection.Success)
+        {
+            Console.Error.WriteLine(inspection.ErrorMessage);
+            return 1;
+        }
+
+        PrintInspection(inspection);
+        if (!inspection.CanInstall)
+            return 1;
+        if (!args.Contains("--runtime"))
+            return 0;
+
+        if (inspection.Format == PluginFormats.Bundle)
+        {
+            Console.WriteLine("Runtime: content bundle; no arbitrary bundle module was executed.");
+            return 0;
+        }
+
+        var runtime = await InspectRuntimeAsync(inspection.EntryPath, inspection.PluginId, CancellationToken.None);
+        Console.WriteLine($"Runtime: {(runtime.Compatible ? "compatible" : "incompatible")}");
+        Console.WriteLine($"Registered: tools={runtime.ToolCount}, channels={runtime.ChannelCount}, commands={runtime.CommandCount}, cli={runtime.CliCommandCount}, providers={runtime.ProviderCount}");
+        foreach (var diagnostic in runtime.Diagnostics)
+            Console.WriteLine($"{(diagnostic.Severity == "error" ? "Error" : "Warning")}: [{diagnostic.Code}] {diagnostic.Message}");
+        if (!runtime.Compatible && !string.IsNullOrWhiteSpace(runtime.Error))
+            Console.Error.WriteLine(runtime.Error);
+        return runtime.Compatible ? 0 : 1;
     }
 
     private static async Task<int> SearchAsync(string[] args)
@@ -446,9 +513,12 @@ internal static class PluginCommands
             };
 
             process.Start();
-            var stdout = await process.StandardOutput.ReadToEndAsync();
-            var stderr = await process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+            await Task.WhenAll(stdoutTask, stderrTask);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
             return (process.ExitCode, stdout, stderr);
         }
         catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 2)
@@ -472,6 +542,312 @@ internal static class PluginCommands
         }
     }
 
+    internal static async Task<(bool Success, string? Error)> InstallPreparedDirectoryAsync(
+        string sourceDir,
+        string targetDir,
+        string sourceLabel,
+        bool sourceIsNpm)
+    {
+        var parentDir = Path.GetDirectoryName(targetDir)
+            ?? throw new InvalidOperationException($"Plugin target '{targetDir}' has no parent directory.");
+        Directory.CreateDirectory(parentDir);
+        var suffix = Guid.NewGuid().ToString("N")[..12];
+        var stagingDir = Path.Combine(parentDir, $".{Path.GetFileName(targetDir)}.installing-{suffix}");
+        var backupDir = Path.Combine(parentDir, $".{Path.GetFileName(targetDir)}.backup-{suffix}");
+
+        try
+        {
+            CopyDirectory(sourceDir, stagingDir);
+
+            var stagedInspection = InspectCandidate(stagingDir, sourceLabel, sourceIsNpm);
+            if (!stagedInspection.Success)
+                return (false, $"Staged plugin inspection failed; the existing plugin was preserved: {stagedInspection.ErrorMessage}");
+            if (!stagedInspection.CanInstall)
+            {
+                var codes = string.Join(", ", stagedInspection.Diagnostics.Select(static item => item.Code).Distinct(StringComparer.Ordinal));
+                return (false, $"Staged plugin compatibility failed; the existing plugin was preserved. Diagnostics: {codes}");
+            }
+
+            var packageJson = Path.Combine(stagingDir, "package.json");
+            if (File.Exists(packageJson) && stagedInspection.Format != PluginFormats.Bundle)
+            {
+                Console.WriteLine("Installing dependencies in staging...");
+                var npmInstall = await RunNpmAsync("install --ignore-scripts --omit=dev --omit=optional", stagingDir);
+                if (npmInstall.ExitCode != 0)
+                    return (false, $"Dependency installation failed; the existing plugin was preserved: {npmInstall.Stderr}");
+
+                stagedInspection = InspectCandidate(stagingDir, sourceLabel, sourceIsNpm);
+                if (!stagedInspection.Success)
+                    return (false, $"Post-dependency inspection failed; the existing plugin was preserved: {stagedInspection.ErrorMessage}");
+                if (!stagedInspection.CanInstall)
+                {
+                    var codes = string.Join(", ", stagedInspection.Diagnostics.Select(static item => item.Code).Distinct(StringComparer.Ordinal));
+                    return (false, $"Post-dependency compatibility inspection failed; the existing plugin was preserved. Diagnostics: {codes}");
+                }
+            }
+
+            if (Path.GetExtension(stagedInspection.EntryPath).Equals(".ts", StringComparison.OrdinalIgnoreCase) &&
+                stagedInspection.Format != PluginFormats.Bundle &&
+                !HasLocalJiti(stagedInspection.EntryPath, stagingDir))
+            {
+                Console.WriteLine("Installing the TypeScript runtime dependency jiti in staging...");
+                var jitiInstall = await RunNpmAsync("install --ignore-scripts --no-save --omit=dev --omit=optional jiti", stagingDir);
+                if (jitiInstall.ExitCode != 0)
+                    return (false, $"TypeScript runtime dependency installation failed; the existing plugin was preserved: {jitiInstall.Stderr}");
+            }
+
+            if (stagedInspection.Format != PluginFormats.Bundle)
+            {
+                var runtimeInspection = await InspectRuntimeAsync(
+                    stagedInspection.EntryPath,
+                    stagedInspection.PluginId,
+                    CancellationToken.None);
+                if (!runtimeInspection.Compatible)
+                {
+                    var details = runtimeInspection.Diagnostics.Count == 0
+                        ? runtimeInspection.Error ?? "unknown runtime inspection failure"
+                        : string.Join(", ", runtimeInspection.Diagnostics.Select(static item => item.Code).Distinct(StringComparer.Ordinal));
+                    return (false, $"Plugin runtime inspection failed; the existing plugin was preserved. Diagnostics: {details}");
+                }
+            }
+
+            if (Directory.Exists(targetDir))
+            {
+                Console.WriteLine($"Replacing existing plugin '{Path.GetFileName(targetDir)}' atomically...");
+                Directory.Move(targetDir, backupDir);
+            }
+
+            try
+            {
+                Directory.Move(stagingDir, targetDir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                if (Directory.Exists(backupDir) && !Directory.Exists(targetDir))
+                    Directory.Move(backupDir, targetDir);
+                throw;
+            }
+
+            if (Directory.Exists(backupDir))
+            {
+                try { Directory.Delete(backupDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Successful install; a stale backup is recoverable.
+                    Debug.WriteLine($"Unable to delete stale plugin backup '{backupDir}': {ex.Message}");
+                }
+            }
+
+            return (true, null);
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or InvalidOperationException
+                                   or JsonException
+                                   or System.ComponentModel.Win32Exception
+                                   or NotSupportedException
+                                   or ArgumentException)
+        {
+            return (false, $"Plugin installation failed; the existing plugin was preserved when possible: {ex.Message}");
+        }
+        finally
+        {
+            if (Directory.Exists(stagingDir))
+            {
+                try { Directory.Delete(stagingDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Debug.WriteLine($"Unable to delete plugin staging directory '{stagingDir}': {ex.Message}");
+                }
+            }
+
+            if (Directory.Exists(backupDir) && Directory.Exists(targetDir))
+            {
+                try { Directory.Delete(backupDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Debug.WriteLine($"Unable to delete plugin backup directory '{backupDir}': {ex.Message}");
+                }
+            }
+        }
+    }
+
+    private static bool HasLocalJiti(string entryPath, string rootDir)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootDir));
+        var current = Path.GetDirectoryName(Path.GetFullPath(entryPath));
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        while (!string.IsNullOrWhiteSpace(current) &&
+               (string.Equals(current, root, comparison) ||
+                current.StartsWith(root + Path.DirectorySeparatorChar, comparison)))
+        {
+            if (Directory.Exists(Path.Combine(current, "node_modules", "jiti")))
+                return true;
+            if (string.Equals(current, root, comparison))
+                break;
+            var parent = Path.GetDirectoryName(current);
+            if (string.Equals(parent, current, StringComparison.Ordinal))
+                break;
+            current = parent;
+        }
+
+        return false;
+    }
+
+    internal static async Task<PluginRuntimeInspection> InspectRuntimeAsync(
+        string entryPath,
+        string pluginId,
+        CancellationToken cancellationToken)
+    {
+        var bridgeScript = ResolveBridgeScriptPath();
+        if (bridgeScript is null)
+        {
+            return PluginRuntimeInspection.Failure(
+                "Plugin bridge script was not found. Reinstall or republish the OpenClaw CLI.");
+        }
+
+        var nodeExecutable = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "node.exe" : "node";
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = nodeExecutable,
+                WorkingDirectory = Path.GetDirectoryName(entryPath) ?? Directory.GetCurrentDirectory(),
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+        process.StartInfo.ArgumentList.Add("--experimental-vm-modules");
+        process.StartInfo.ArgumentList.Add(bridgeScript);
+        process.StartInfo.Environment["OPENCLAW_BRIDGE_TRANSPORT_MODE"] = "stdio";
+
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return PluginRuntimeInspection.Failure($"Unable to start Node.js for runtime inspection: {ex.Message}");
+        }
+
+        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            using var emptyConfig = JsonDocument.Parse("{}");
+            var initRequest = new BridgeInitRequest
+            {
+                EntryPath = Path.GetFullPath(entryPath),
+                PluginId = pluginId,
+                Config = emptyConfig.RootElement.Clone(),
+                Transport = new BridgeTransportRuntimeConfig { Mode = "stdio" }
+            };
+            var request = new BridgeRequest
+            {
+                Id = "inspection-1",
+                Method = "init",
+                Params = JsonSerializer.SerializeToElement(initRequest, CoreJsonContext.Default.BridgeInitRequest)
+            };
+            var requestJson = JsonSerializer.Serialize(request, CoreJsonContext.Default.BridgeRequest);
+            await process.StandardInput.WriteLineAsync(requestJson.AsMemory(), timeout.Token);
+            await process.StandardInput.FlushAsync(timeout.Token);
+
+            var responseLine = await process.StandardOutput.ReadLineAsync(timeout.Token);
+            if (string.IsNullOrWhiteSpace(responseLine))
+            {
+                var stderr = await stderrTask;
+                return PluginRuntimeInspection.Failure($"Plugin bridge exited without an inspection response. {stderr}".Trim());
+            }
+
+            var response = JsonSerializer.Deserialize(responseLine, CoreJsonContext.Default.BridgeResponse);
+            if (response?.Error is not null)
+                return PluginRuntimeInspection.Failure(response.Error.Message);
+            if (response?.Result is null)
+                return PluginRuntimeInspection.Failure("Plugin bridge returned an empty inspection result.");
+
+            var result = JsonSerializer.Deserialize(
+                response.Result.Value.GetRawText(),
+                CoreJsonContext.Default.BridgeInitResult);
+            if (result is null)
+                return PluginRuntimeInspection.Failure("Plugin bridge returned an unreadable inspection result.");
+
+            return new PluginRuntimeInspection
+            {
+                Compatible = result.Compatible,
+                Diagnostics = result.Diagnostics,
+                ToolCount = result.Tools.Length,
+                ChannelCount = result.Channels.Length,
+                CommandCount = result.Commands.Length,
+                CliCommandCount = result.CliCommands.Length,
+                ProviderCount = result.Providers.Length
+            };
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return PluginRuntimeInspection.Failure("Plugin runtime inspection timed out after 20 seconds.");
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or NotSupportedException)
+        {
+            return PluginRuntimeInspection.Failure($"Plugin runtime inspection failed: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
+            {
+                Debug.WriteLine($"Unable to terminate plugin inspection process: {ex.Message}");
+            }
+        }
+    }
+
+    internal static string? ResolveBridgeScriptPath()
+    {
+        var packaged = Path.Combine(AppContext.BaseDirectory, "Plugins", "plugin-bridge.mjs");
+        if (File.Exists(packaged))
+            return packaged;
+
+#if DEBUG
+        var source = Path.GetFullPath(Path.Combine(
+            Directory.GetCurrentDirectory(),
+            "src",
+            "OpenClaw.Agent",
+            "Plugins",
+            "plugin-bridge.mjs"));
+        return File.Exists(source) ? source : null;
+#else
+        return null;
+#endif
+    }
+
+    internal sealed class PluginRuntimeInspection
+    {
+        public bool Compatible { get; init; }
+        public string? Error { get; init; }
+        public IReadOnlyList<PluginCompatibilityDiagnostic> Diagnostics { get; init; } = [];
+        public int ToolCount { get; init; }
+        public int ChannelCount { get; init; }
+        public int CommandCount { get; init; }
+        public int CliCommandCount { get; init; }
+        public int ProviderCount { get; init; }
+
+        public static PluginRuntimeInspection Failure(string error)
+            => new() { Compatible = false, Error = error };
+    }
+
     private static string Quote(string path)
         => path.Contains(' ') ? $"\"{path}\"" : path;
 
@@ -491,6 +867,7 @@ internal static class PluginCommands
               openclaw plugins install <package|path|tarball>  Install a plugin from npm/ClawHub or local source
               openclaw plugins remove <plugin-name>            Remove an installed plugin
               openclaw plugins list                            List installed plugins
+              openclaw plugins inspect <plugin|path> [--runtime] Inspect static and optional runtime compatibility
               openclaw plugins search <query>                  Search npm for OpenClaw plugins
 
             Options:
@@ -504,6 +881,7 @@ internal static class PluginCommands
               openclaw plugins install ./my-plugin.tgz
               openclaw plugins remove qqbot
               openclaw plugins list
+              openclaw plugins inspect ./my-codex-bundle --runtime
               openclaw plugins search openclaw dingtalk
             """);
     }
@@ -545,9 +923,12 @@ internal static class PluginCommands
                 description = root.TryGetProperty("description", out var descriptionProp) ? descriptionProp.GetString() : null;
                 hasExtensionsConfig =
                     root.TryGetProperty("openclaw", out var openClaw) &&
-                    openClaw.TryGetProperty("extensions", out var extensions) &&
-                    extensions.ValueKind == JsonValueKind.Array &&
-                    extensions.GetArrayLength() > 0;
+                    ((openClaw.TryGetProperty("runtimeExtensions", out var runtimeExtensions) &&
+                      runtimeExtensions.ValueKind == JsonValueKind.Array &&
+                      runtimeExtensions.GetArrayLength() > 0) ||
+                     (openClaw.TryGetProperty("extensions", out var extensions) &&
+                      extensions.ValueKind == JsonValueKind.Array &&
+                      extensions.GetArrayLength() > 0));
             }
             catch (Exception ex)
             {
@@ -555,11 +936,17 @@ internal static class PluginCommands
             }
         }
 
-        var entryPath = FindEntryFile(rootPath);
+        var discovery = PluginDiscovery.DiscoverWithDiagnostics(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [rootPath] }
+        });
+        var discoveredPlugin = discovery.Plugins.FirstOrDefault();
+        var isBundle = discoveredPlugin?.Format == PluginFormats.Bundle;
+        var entryPath = isBundle ? rootPath : discoveredPlugin?.EntryPath ?? FindEntryFile(rootPath);
         if (entryPath is null)
-            return PluginInstallInspection.Failure($"No plugin entry file found under {rootPath}. Expected openclaw.plugin.json with an entry, package.json openclaw.extensions, or an index.ts/js/mjs file.");
+            return PluginInstallInspection.Failure($"No plugin entry file or compatible Codex/Claude/Cursor bundle was found under {rootPath}.");
 
-        var effectiveManifest = manifest ?? new PluginManifest
+        var effectiveManifest = manifest ?? discoveredPlugin?.Manifest ?? new PluginManifest
         {
             Id = ResolvePluginName(rootPath) ?? SanitizePackageName(packageName ?? Path.GetFileName(rootPath)),
             Name = packageName,
@@ -569,17 +956,39 @@ internal static class PluginCommands
 
         var warnings = new List<string>();
         var diagnostics = new List<PluginCompatibilityDiagnostic>();
-        if (!hasManifest)
+        diagnostics.AddRange(discovery.Reports.SelectMany(static report => report.Diagnostics));
+        if (!hasManifest && !isBundle)
             warnings.Add("No openclaw.plugin.json manifest was found. Install is allowed, but declared capabilities and config validation metadata are limited.");
-        if (!hasExtensionsConfig && !hasManifest)
+        if (!hasExtensionsConfig && !hasManifest && !isBundle)
             warnings.Add("Package relies on standalone entry-file discovery. Review the source before enabling it on a public bind.");
 
         var declaredChannels = effectiveManifest.Channels ?? [];
         var declaredProviders = effectiveManifest.Providers ?? [];
         var declaredSkills = effectiveManifest.Skills ?? [];
 
-        if (effectiveManifest.ConfigSchema is not null)
+        if (!isBundle && effectiveManifest.ConfigSchema is not null)
             diagnostics.AddRange(PluginConfigValidator.Validate(effectiveManifest, config: null));
+
+        if (discoveredPlugin is not null && !isBundle)
+            diagnostics.AddRange(PluginPackageCompatibility.Validate(discoveredPlugin));
+
+        if (!isBundle)
+            InspectUnsupportedRuntimeSurfaces(rootPath, diagnostics);
+
+        if (isBundle)
+        {
+            foreach (var capability in discoveredPlugin!.BundleDetectedCapabilities)
+            {
+                diagnostics.Add(new PluginCompatibilityDiagnostic
+                {
+                    Severity = "warning",
+                    Code = "bundle_capability_detected_only",
+                    Message = $"Bundle capability '{capability}' is detected but has no OpenClaw.NET runtime mapping.",
+                    Surface = capability,
+                    Path = rootPath
+                });
+            }
+        }
 
         foreach (var skillDir in declaredSkills)
         {
@@ -611,7 +1020,11 @@ internal static class PluginCommands
 
             var rootSkillFile = Path.Combine(resolvedSkillDir, "SKILL.md");
             var nestedSkillFiles = Directory.GetFiles(resolvedSkillDir, "SKILL.md", SearchOption.AllDirectories);
-            if (!File.Exists(rootSkillFile) && nestedSkillFiles.Length == 0)
+            var isBundleCommandRoot = isBundle &&
+                string.Equals(Path.GetFileName(Path.TrimEndingDirectorySeparator(resolvedSkillDir)), "commands", StringComparison.OrdinalIgnoreCase);
+            var hasBundleCommands = isBundleCommandRoot &&
+                Directory.GetFiles(resolvedSkillDir, "*.md", SearchOption.AllDirectories).Length > 0;
+            if (!File.Exists(rootSkillFile) && nestedSkillFiles.Length == 0 && !hasBundleCommands)
             {
                 diagnostics.Add(new PluginCompatibilityDiagnostic
                 {
@@ -630,8 +1043,9 @@ internal static class PluginCommands
             ? "errors"
             : warningCount > 0
                 ? "warnings"
-                : "verified";
+                : "manifest-valid";
         var hasStructuredSurface =
+            (isBundle && discoveredPlugin!.BundleMappedCapabilities.Length > 0) ||
             declaredChannels.Length > 0 ||
             declaredProviders.Length > 0 ||
             declaredSkills.Length > 0 ||
@@ -648,12 +1062,14 @@ internal static class PluginCommands
             Version = effectiveManifest.Version ?? version ?? "?",
             Description = effectiveManifest.Description ?? description ?? "",
             EntryPath = entryPath,
+            Format = discoveredPlugin?.Format ?? PluginFormats.Native,
+            BundleFormat = discoveredPlugin?.BundleFormat,
             TrustLevel = trustLevel,
             TrustReason = trustReason,
             CompatibilityStatus = compatibilityStatus,
             ErrorCount = errorCount,
             WarningCount = warningCount,
-            DeclaredSurface = BuildDeclaredSurfaceSummary(effectiveManifest),
+            DeclaredSurface = BuildDeclaredSurfaceSummary(effectiveManifest, discoveredPlugin),
             Diagnostics = diagnostics,
             Warnings = warnings
         };
@@ -663,6 +1079,9 @@ internal static class PluginCommands
     {
         Console.WriteLine($"Plugin: {inspection.DisplayName} ({inspection.PluginId})");
         Console.WriteLine($"Version: {inspection.Version}");
+        Console.WriteLine($"Format: {inspection.Format}");
+        if (inspection.Format == PluginFormats.Bundle)
+            Console.WriteLine($"Bundle format: {inspection.BundleFormat}");
         if (!string.IsNullOrWhiteSpace(inspection.Description))
             Console.WriteLine($"Description: {inspection.Description}");
         Console.WriteLine($"Trust: {inspection.TrustLevel}");
@@ -699,14 +1118,22 @@ internal static class PluginCommands
         => trustLevel switch
         {
             "first-party" => "Package source matches an official OpenClaw or ClawDotNet scope.",
-            "upstream-compatible" => "Plugin declares structured OpenClaw surfaces and passed install-time compatibility checks.",
+            "upstream-compatible" => "Plugin declares structured OpenClaw surfaces and passed manifest, package metadata, and static compatibility checks.",
             _ when hasStructuredSurface && errorCount > 0 => "Plugin declares OpenClaw surfaces, but compatibility verification reported blocking errors.",
             _ => "Plugin relies on entry discovery without a structured manifest-backed capability declaration."
         };
 
-    private static string BuildDeclaredSurfaceSummary(PluginManifest manifest)
+    private static string BuildDeclaredSurfaceSummary(PluginManifest manifest, DiscoveredPlugin? plugin = null)
     {
         var items = new List<string>();
+        if (plugin?.Format == PluginFormats.Bundle)
+        {
+            items.Add($"bundle={plugin.BundleFormat}");
+            if (plugin.BundleMappedCapabilities.Length > 0)
+                items.Add($"mapped={string.Join(",", plugin.BundleMappedCapabilities)}");
+            if (plugin.BundleDetectedCapabilities.Length > 0)
+                items.Add($"detected_only={string.Join(",", plugin.BundleDetectedCapabilities)}");
+        }
         var channels = manifest.Channels ?? [];
         var providers = manifest.Providers ?? [];
         var skills = manifest.Skills ?? [];
@@ -724,13 +1151,6 @@ internal static class PluginCommands
 
     private static string? FindEntryFile(string rootPath)
     {
-        foreach (var candidate in new[] { "index.ts", "index.js", "index.mjs", "src/index.ts", "src/index.js", "src/index.mjs" })
-        {
-            var path = Path.Combine(rootPath, candidate);
-            if (File.Exists(path))
-                return path;
-        }
-
         var packageJsonPath = Path.Combine(rootPath, "package.json");
         if (File.Exists(packageJsonPath))
         {
@@ -739,31 +1159,114 @@ internal static class PluginCommands
                 using var stream = File.OpenRead(packageJsonPath);
                 using var doc = JsonDocument.Parse(stream);
                 var root = doc.RootElement;
-                if (root.TryGetProperty("openclaw", out var openClaw) &&
-                    openClaw.TryGetProperty("extensions", out var extensions) &&
-                    extensions.ValueKind == JsonValueKind.Array)
+                if (root.TryGetProperty("openclaw", out var openClaw))
                 {
-                    foreach (var extension in extensions.EnumerateArray())
+                    var extensions = openClaw.TryGetProperty("runtimeExtensions", out var runtimeExtensions) &&
+                                     runtimeExtensions.ValueKind == JsonValueKind.Array
+                        ? runtimeExtensions
+                        : openClaw.TryGetProperty("extensions", out var sourceExtensions) &&
+                          sourceExtensions.ValueKind == JsonValueKind.Array
+                            ? sourceExtensions
+                            : default;
+                    if (extensions.ValueKind == JsonValueKind.Array)
                     {
-                        var relPath = extension.GetString();
-                        if (string.IsNullOrWhiteSpace(relPath))
-                            continue;
-
-                        if (PluginDiscovery.TryResolveContainedPath(rootPath, relPath, out var resolvedPath) &&
-                            File.Exists(resolvedPath))
+                        foreach (var extension in extensions.EnumerateArray())
                         {
-                            return resolvedPath;
+                            var relPath = extension.GetString();
+                            if (string.IsNullOrWhiteSpace(relPath))
+                                continue;
+
+                            if (PluginDiscovery.TryResolveContainedPath(rootPath, relPath, out var resolvedPath) &&
+                                File.Exists(resolvedPath))
+                            {
+                                return resolvedPath;
+                            }
                         }
                     }
                 }
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
                 return null;
             }
         }
 
-        return null;
+        return new[] { "index.js", "index.mjs", "index.cjs", "index.ts", "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts" }
+            .Select(candidate => Path.Combine(rootPath, candidate))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private static void InspectUnsupportedRuntimeSurfaces(
+        string rootPath,
+        ICollection<PluginCompatibilityDiagnostic> diagnostics)
+    {
+        foreach (var file in EnumeratePluginSourceFiles(rootPath))
+        {
+            string source;
+            try
+            {
+                source = File.ReadAllText(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            AddUnsupportedSurfaceDiagnostic(source, file, "registerGatewayMethod", "unsupported_gateway_method", diagnostics);
+        }
+    }
+
+    private static IEnumerable<string> EnumeratePluginSourceFiles(string rootPath)
+    {
+        const int maxDepth = 16;
+        var enumerationOptions = new EnumerationOptions
+        {
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+        var pending = new Stack<(string Directory, int Depth)>();
+        pending.Push((rootPath, 0));
+        while (pending.Count > 0)
+        {
+            var (directory, depth) = pending.Pop();
+            if (depth < maxDepth)
+            {
+                foreach (var child in Directory.EnumerateDirectories(directory, "*", enumerationOptions))
+                {
+                    var name = Path.GetFileName(child);
+                    if (name is not "node_modules" and not ".git")
+                        pending.Push((child, depth + 1));
+                }
+            }
+
+            foreach (var file in Directory.EnumerateFiles(directory, "*", enumerationOptions)
+                         .Where(file => Path.GetExtension(file) is ".js" or ".mjs" or ".cjs" or ".ts"))
+                yield return file;
+        }
+    }
+
+    private static void AddUnsupportedSurfaceDiagnostic(
+        string source,
+        string file,
+        string apiName,
+        string code,
+        ICollection<PluginCompatibilityDiagnostic> diagnostics)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(
+                source,
+                $@"\bapi\s*\.\s*{System.Text.RegularExpressions.Regex.Escape(apiName)}\s*\(",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant) ||
+            diagnostics.Any(item => string.Equals(item.Code, code, StringComparison.Ordinal)))
+            return;
+
+        diagnostics.Add(new PluginCompatibilityDiagnostic
+        {
+            Severity = "error",
+            Code = code,
+            Message = $"Plugin source references api.{apiName}(), which is not supported by OpenClaw.NET.",
+            Surface = apiName,
+            Path = file
+        });
     }
 
     internal sealed class PluginInstallInspection
@@ -776,6 +1279,8 @@ internal static class PluginCommands
         public string Version { get; init; } = "";
         public string Description { get; init; } = "";
         public string EntryPath { get; init; } = "";
+        public string Format { get; init; } = PluginFormats.Native;
+        public string? BundleFormat { get; init; }
         public string TrustLevel { get; init; } = "";
         public string TrustReason { get; init; } = "";
         public string CompatibilityStatus { get; init; } = "";

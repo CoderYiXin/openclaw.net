@@ -125,6 +125,39 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadAsync_StructuredTool_PreservesOutputSchemaAndDetails()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "structured-js-tool",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerTool({
+                name: "structured_echo",
+                description: "Structured echo",
+                parameters: { type: "object", properties: { text: { type: "string" } } },
+                outputSchema: { type: "object", properties: { echoed: { type: "string" } }, required: ["echoed"] },
+                execute: async (_pluginId, params) => ({
+                  details: { echoed: params.text }
+                })
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tool = Assert.IsType<BridgedPluginTool>(Assert.Single(await host.LoadAsync(null, TestContext.Current.CancellationToken)));
+        Assert.Contains("\"echoed\"", tool.OutputSchema, StringComparison.Ordinal);
+        Assert.Equal("{\"echoed\":\"hello\"}", await tool.ExecuteAsync("""{"text":"hello"}""", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task LoadAsync_StandaloneMjsPlugin_IsDiscoveredFromWorkspaceExtensions()
     {
         if (!HasNode()) return;
@@ -918,6 +951,41 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task LoadAsync_RegisterCli_LoadsAndReportsRootDescriptor()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "cli-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerCli(({ program }) => {
+                program.command("fixture")
+                  .description("Fixture commands")
+                  .command("hello <name>")
+                  .option("--loud", "Uppercase the greeting")
+                  .action(async () => {});
+              }, { commands: ["fixture"] });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        _ = await host.LoadAsync(null, TestContext.Current.CancellationToken);
+
+        var report = Assert.Single(host.Reports, r => r.PluginId == "cli-plugin");
+        Assert.True(report.Loaded);
+        Assert.Equal(1, report.CliCommandCount);
+        Assert.Contains(PluginCapabilityPolicy.Cli, report.RequestedCapabilities);
+        Assert.DoesNotContain(report.Diagnostics, item => item.Code == "unsupported_cli_registration");
+    }
+
+    [Fact]
     public async Task LoadAsync_RegisterProvider_LoadsSuccessfully()
     {
         if (!HasNode()) return;
@@ -1444,9 +1512,33 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
         var tool = Assert.Single(tools);
 
         Assert.Equal("echo:first", await tool.ExecuteAsync("""{"text":"first"}""", TestContext.Current.CancellationToken));
-        Assert.Equal("restarting", await tool.ExecuteAsync("""{"kill":true}""", TestContext.Current.CancellationToken));
-        await Task.Delay(500, TestContext.Current.CancellationToken);
-        Assert.Equal("echo:second", await tool.ExecuteAsync("""{"text":"second"}""", TestContext.Current.CancellationToken));
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            Assert.Equal("restarting", await tool.ExecuteAsync("""{"kill":true}""", TestContext.Current.CancellationToken));
+            var expected = $"echo:after-{attempt}";
+            string? actual = null;
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                try
+                {
+                    actual = await tool.ExecuteAsync(
+                        $$"""{"text":"after-{{attempt}}"}""",
+                        TestContext.Current.CancellationToken);
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException)
+                {
+                    actual = ex.Message;
+                }
+
+                if (string.Equals(actual, expected, StringComparison.Ordinal))
+                    break;
+
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Equal(expected, actual);
+        }
     }
 
     [Theory]
