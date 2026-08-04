@@ -39,6 +39,18 @@ public sealed class PluginManifest
 
     /// <summary>UI hints for config rendering.</summary>
     public JsonElement? UiHints { get; init; }
+
+    /// <summary>Static activation metadata published by newer OpenClaw plugins.</summary>
+    public JsonElement? Activation { get; init; }
+
+    /// <summary>Static capability ownership metadata published by newer OpenClaw plugins.</summary>
+    public JsonElement? Contracts { get; init; }
+
+    /// <summary>Channel configuration metadata available before plugin activation.</summary>
+    public JsonElement? ChannelConfigs { get; init; }
+
+    /// <summary>Setup and onboarding metadata available before plugin activation.</summary>
+    public JsonElement? Setup { get; init; }
 }
 
 /// <summary>
@@ -53,6 +65,33 @@ public sealed class DiscoveredPlugin
 
     /// <summary>Absolute path to the plugin entry file (TypeScript/JavaScript).</summary>
     public required string EntryPath { get; init; }
+
+    /// <summary>Discovery format: native or bundle.</summary>
+    public string Format { get; init; } = PluginFormats.Native;
+
+    /// <summary>Compatible bundle ecosystem: codex, claude, or cursor.</summary>
+    public string? BundleFormat { get; init; }
+
+    /// <summary>Bundle capabilities mapped into native OpenClaw.NET features.</summary>
+    public string[] BundleMappedCapabilities { get; init; } = [];
+
+    /// <summary>Bundle capabilities detected for operator visibility but not executed.</summary>
+    public string[] BundleDetectedCapabilities { get; init; } = [];
+
+    /// <summary>Minimum plugin API range declared in package.json openclaw.compat.pluginApi.</summary>
+    public string? PluginApiRange { get; init; }
+
+    /// <summary>Minimum host version declared by package metadata.</summary>
+    public string? MinHostVersion { get; init; }
+
+    /// <summary>Expected package integrity declared by package metadata.</summary>
+    public string? ExpectedIntegrity { get; init; }
+}
+
+public static class PluginFormats
+{
+    public const string Native = "native";
+    public const string Bundle = "bundle";
 }
 
 /// <summary>
@@ -699,6 +738,7 @@ public sealed class PluginLoadReport
     public required string SourcePath { get; init; }
     public string? EntryPath { get; init; }
     public string Origin { get; init; } = "bridge";
+    public string? BundleFormat { get; init; }
     public bool Loaded { get; init; }
     public string EffectiveRuntimeMode { get; init; } = "jit";
     public string[] RequestedCapabilities { get; init; } = [];
@@ -707,6 +747,8 @@ public sealed class PluginLoadReport
     public int ToolCount { get; init; }
     public int ChannelCount { get; init; }
     public int CommandCount { get; init; }
+    public int CliCommandCount { get; init; }
+    public string[] CliCommandNames { get; init; } = [];
     public int EventSubscriptionCount { get; init; }
     public int ProviderCount { get; init; }
     public string[] SkillDirectories { get; init; } = [];
@@ -724,6 +766,9 @@ public sealed class PluginToolRegistration
 
     /// <summary>JSON Schema for tool parameters.</summary>
     public required JsonElement Parameters { get; init; }
+
+    /// <summary>Optional JSON Schema for the tool's structured result.</summary>
+    public JsonElement? OutputSchema { get; init; }
 
     /// <summary>Whether this tool is optional (opt-in only).</summary>
     public bool Optional { get; init; }
@@ -766,6 +811,7 @@ public sealed class BridgeInitResult
     public PluginToolRegistration[] Tools { get; init; } = [];
     public BridgeChannelRegistration[] Channels { get; init; } = [];
     public BridgeCommandRegistration[] Commands { get; init; } = [];
+    public BridgeCliCommandRegistration[] CliCommands { get; init; } = [];
     public string[] EventSubscriptions { get; init; } = [];
     public BridgeProviderRegistration[] Providers { get; init; } = [];
     public string[] Capabilities { get; init; } = [];
@@ -849,6 +895,15 @@ public sealed class BridgeChannelRegistration
 /// Command registration from a plugin bridge.
 /// </summary>
 public sealed class BridgeCommandRegistration
+{
+    public required string Name { get; init; }
+    public string Description { get; init; } = "";
+}
+
+/// <summary>
+/// Root CLI command registered by a bridge plugin through <c>registerCli()</c>.
+/// </summary>
+public sealed class BridgeCliCommandRegistration
 {
     public required string Name { get; init; }
     public string Description { get; init; } = "";
@@ -1067,6 +1122,7 @@ public sealed class BridgeHookAfterRequest
 public sealed class BridgeToolResult
 {
     public ToolContentItem[] Content { get; init; } = [];
+    public JsonElement? Details { get; init; }
 }
 
 /// <summary>

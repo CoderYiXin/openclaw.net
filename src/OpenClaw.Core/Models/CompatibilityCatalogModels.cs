@@ -29,6 +29,7 @@ public sealed class CompatibilityCatalogEntry
     public string[] InstallExtraPackages { get; init; } = [];
     public string[] ExpectedToolNames { get; init; } = [];
     public string[] ExpectedSkillNames { get; init; } = [];
+    public string[] ExpectedCliCommandNames { get; init; } = [];
     public string[] ExpectedDiagnosticCodes { get; init; } = [];
     public string[] Guidance { get; init; } = [];
 }

@@ -998,6 +998,33 @@ OpenClaw.NET is designed to be compatible with the original [OpenClaw](https://g
 
 OpenClaw.NET spawns a Node.js bridge process to run upstream plugins over JSON-RPC. For runtime requirements, the compatibility matrix, and install paths, see the **Bridged Tools** section of the [Tool Guide](TOOLS_GUIDE.md). For the full supported-feature breakdown, see the [Compatibility Guide](COMPATIBILITY.md).
 
+Inspect a package without changing the workspace:
+
+```bash
+openclaw plugins install <package-or-path> --dry-run
+```
+
+Dry-run validates the manifest, package compatibility metadata, entry containment, config schema, skill paths, and known unsupported registration APIs. It reports `manifest-valid` only for that pre-execution evidence. A real install then installs dependencies and initializes the plugin in an isolated bridge process inside a staging directory before atomically replacing any existing copy, so failed updates preserve the working plugin.
+
+Codex, Claude, and Cursor compatible bundles use the same install path. They appear as `Format: bundle` with a `Bundle format` value, but they keep a narrower execution boundary: OpenClaw.NET maps bundle skill roots and Claude/Cursor Markdown command roots without executing arbitrary bundle modules. Other detected surfaces are shown as `bundle_capability_detected_only` diagnostics so users can distinguish reusable content from runtime gaps.
+
+Inspect an installed bundle or native plugin directly:
+
+```bash
+openclaw plugins inspect <plugin-id>
+openclaw plugins inspect <plugin-id> --runtime
+```
+
+For bundles, `--runtime` confirms that no arbitrary module was executed. For native plugins, it initializes the bridge and reports registered tool, channel, chat-command, root-CLI-command, and provider counts.
+
+Upstream plugins can also add root commands with `api.registerCli()`. OpenClaw.NET discovers those commands only after a built-in root does not match, then executes the selected plugin in a fresh Node process with the terminal attached:
+
+```bash
+openclaw <plugin-command> [arguments]
+```
+
+Built-in command names always take precedence. Disabled or quarantined plugins are not eligible, duplicate plugin command roots fail closed, and CLI discovery honors `OPENCLAW_CONFIG_PATH`, `OPENCLAW_WORKSPACE`, plugin allow/deny settings, per-plugin enablement, slots, package compatibility metadata, and plugin config validation. The bridge supports the common Commander-style `command`, `description`, `argument`, `option`, `requiredOption`, and `action` registration flow. Plugin commands that directly edit upstream-specific config files remain responsible for whether those files match the OpenClaw.NET deployment configuration.
+
 ---
 
 ## Breaking Changes

@@ -55,7 +55,7 @@ internal static class Program
                 "skills" => await SkillCommands.RunAsync(rest),
                 "clawhub" => await ClawHubCommand.RunAsync(rest),
                 "version" or "--version" or "-v" => PrintVersion(),
-                _ => UnknownCommand(command)
+                _ => await RunPluginOrUnknownAsync(command, rest)
             };
         }
         catch (OperationCanceledException)
@@ -82,6 +82,9 @@ internal static class Program
         Console.Error.WriteLine("Run: openclaw --help");
         return 2;
     }
+
+    private static async Task<int> RunPluginOrUnknownAsync(string command, string[] args)
+        => await PluginCliCommands.TryRunAsync(command, args) ?? UnknownCommand(command);
 
     private static void PrintHelp()
     {
@@ -230,6 +233,10 @@ internal static class Program
               openclaw plugins remove <plugin-name>       Remove a plugin
               openclaw plugins list                       List installed plugins
               openclaw plugins search <query>             Search npm for plugins
+
+              Installed plugins may also register root commands. Built-in commands
+              take precedence; disabled or quarantined plugins are not dispatched.
+              openclaw <plugin-command> --help            Show plugin command help
 
             Skill management:
               openclaw skill new "Community Research Insight Extractor" --category research

@@ -62,15 +62,15 @@
     },
     {
       "id": "supermemory",
-      "category": "unsupported-surface-plugin",
+      "category": "cli-plugin",
       "kind": "npm-plugin",
       "spec": "@supermemory/openclaw-supermemory@2.0.2",
       "packageName": "@supermemory/openclaw-supermemory",
       "pluginId": "openclaw-supermemory",
       "installExtraPackages": ["jiti"],
-      "expectedStatus": "incompatible",
+      "expectedStatus": "compatible",
       "configJson": "{}",
-      "expectedDiagnosticCodes": ["unsupported_cli_registration"]
+      "expectedCliCommandNames": ["supermemory"]
     }
   ]
 }
