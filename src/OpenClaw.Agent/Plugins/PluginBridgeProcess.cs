@@ -17,6 +17,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 {
     private Process? _process;
     private Task? _exitMonitor;
+    private volatile bool _initialized;
     private readonly string _bridgeScriptPath;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
@@ -132,6 +133,12 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 
         if (response.Result is { } result && result.TryGetProperty("content", out var contentArray))
         {
+            if (result.TryGetProperty("details", out var details) &&
+                details.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+            {
+                return details.GetRawText();
+            }
+
             var sb = new StringBuilder();
             foreach (var item in contentArray.EnumerateArray())
             {
@@ -205,7 +212,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 
     private async Task EnsureProcessRunningAsync(CancellationToken ct)
     {
-        if (_process is not null && !_process.HasExited && _transport is not null)
+        if (_initialized && _process is not null && !_process.HasExited && _transport is not null)
             return;
 
         await RestartAsync(ct);
@@ -225,7 +232,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             if (_disposed)
                 return;
 
-            if (_process is not null && !_process.HasExited && _transport is not null)
+            if (_initialized && _process is not null && !_process.HasExited && _transport is not null)
                 return;
 
             var delay = TimeSpan.FromSeconds(1);
@@ -270,6 +277,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 
     private async Task<BridgeResponse> InitializeProcessAsync(CancellationToken ct)
     {
+        _initialized = false;
         var (transport, runtimeTransport) = BridgeTransportFactory.Create(_transportConfig, _pluginId!, _logger, _runtimeRoot, _metrics);
         if (_notificationHandler is not null)
             transport.SetNotificationHandler(_notificationHandler);
@@ -301,6 +309,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             if (transport is HybridBridgeTransport hybrid)
                 hybrid.UseSocketTransport();
 
+            _initialized = true;
             return response;
         }
         catch
@@ -410,9 +419,26 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             return;
         }
 
-        await DisposeTransportAsync();
+        var shouldRestart = false;
+        await _lifecycleGate.WaitAsync();
+        try
+        {
+            // A prior child can report its exit after a replacement has already
+            // initialized. Never let that stale monitor tear down the new transport.
+            if (!ReferenceEquals(_process, process))
+                return;
 
-        if (_disposed || _intentionalShutdown)
+            _initialized = false;
+            await DisposeTransportAsync();
+            CleanupProcess();
+            shouldRestart = !_disposed && !_intentionalShutdown;
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+
+        if (!shouldRestart)
             return;
 
         _logger.LogWarning("Plugin bridge process for '{PluginId}' exited unexpectedly. Restarting.", _pluginId ?? "unknown");
@@ -440,6 +466,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 
     private void CleanupProcess()
     {
+        _initialized = false;
         if (_process is null)
             return;
 

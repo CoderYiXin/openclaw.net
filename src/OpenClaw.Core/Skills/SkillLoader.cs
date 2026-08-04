@@ -174,6 +174,12 @@ public static class SkillLoader
     {
         try
         {
+            if (source == SkillSource.Plugin &&
+                string.Equals(Path.GetFileName(Path.TrimEndingDirectorySeparator(rootDir)), "commands", StringComparison.OrdinalIgnoreCase))
+            {
+                ScanBundleCommandFiles(rootDir, results, logger);
+            }
+
             var rootSkillFile = Path.Combine(rootDir, "SKILL.md");
             if (File.Exists(rootSkillFile))
             {
@@ -248,6 +254,72 @@ public static class SkillLoader
         {
             logger.LogWarning(ex, "Failed to scan skill directory {Dir}", rootDir);
         }
+    }
+
+    private static void ScanBundleCommandFiles(
+        string commandRoot,
+        IDictionary<string, SkillDefinition> results,
+        ILogger logger)
+    {
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
+
+        foreach (var commandFile in Directory.EnumerateFiles(commandRoot, "*.md", options)
+                     .OrderBy(static path => path, StringComparer.Ordinal))
+        {
+            if (string.Equals(Path.GetFileName(commandFile), "SKILL.md", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            try
+            {
+                var commandName = Path.GetFileNameWithoutExtension(commandFile);
+                var content = File.ReadAllText(commandFile);
+                var normalized = NormalizeBundleCommandContent(content, commandName);
+                var commandDir = Path.GetDirectoryName(commandFile) ?? commandRoot;
+                var skill = ParseSkillContent(normalized, commandDir, SkillSource.Plugin);
+                if (skill is not null)
+                    results[skill.Name] = skill;
+                else
+                    logger.LogWarning("Failed to map bundle command at {Path} into a skill", commandFile);
+            }
+            catch (Exception ex) when (IsPathException(ex))
+            {
+                logger.LogWarning(ex, "Skipping inaccessible bundle command at {Path}", commandFile);
+            }
+        }
+    }
+
+    private static string NormalizeBundleCommandContent(string content, string commandName)
+    {
+        if (content.StartsWith("---", StringComparison.Ordinal) &&
+            content.IndexOf("\n---", 3, StringComparison.Ordinal) >= 0)
+        {
+            var frontmatterEnd = content.IndexOf("\n---", 3, StringComparison.Ordinal);
+            var frontmatter = content[3..frontmatterEnd];
+            if (!frontmatter.Split('\n').Any(static line =>
+                    line.TrimStart().StartsWith("name:", StringComparison.OrdinalIgnoreCase)))
+            {
+                var firstNewline = content.IndexOf('\n');
+                return firstNewline >= 0
+                    ? content.Insert(firstNewline + 1, $"name: {commandName}\n")
+                    : content;
+            }
+
+            return content;
+        }
+
+        return $"""
+            ---
+            name: {commandName}
+            description: Imported bundle command {commandName}
+            user-invocable: true
+            ---
+            {content}
+            """;
     }
 
     private static string[] EnumerateSkillDirectories(

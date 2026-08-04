@@ -124,6 +124,8 @@ public static class PublicCompatibilityCatalog
                 => "Pinned TypeScript bridge plugin expected to load when jiti is present in the plugin dependency tree.",
             "config-schema-plugin"
                 => "Negative compatibility scenario proving that invalid plugin config fails fast with structured diagnostics.",
+            "cli-plugin" when compatibilityStatus.Equals("compatible", StringComparison.OrdinalIgnoreCase)
+                => "Pinned upstream plugin expected to load and expose its lazy root CLI command through the Node bridge.",
             "unsupported-surface-plugin"
                 => "Negative compatibility scenario proving that unsupported upstream plugin surfaces fail explicitly instead of loading partially.",
             _ when compatibilityStatus.Equals("compatible", StringComparison.OrdinalIgnoreCase)
@@ -161,9 +163,6 @@ public static class PublicCompatibilityCatalog
         {
             yield return $"Expected failure diagnostics: {string.Join(", ", entry.ExpectedDiagnosticCodes)}.";
         }
-
-        if (entry.ExpectedDiagnosticCodes?.Any(code => string.Equals(code, "unsupported_cli_registration", StringComparison.Ordinal)) == true)
-            yield return "This package depends on `api.registerCli()`, which OpenClaw.NET does not bridge today.";
 
         if (entry.ExpectedDiagnosticCodes?.Any(code => string.Equals(code, "config_one_of_mismatch", StringComparison.Ordinal)) == true)
             yield return "Adjust the plugin config to the supported JSON-schema subset; this scenario intentionally demonstrates a failing shape.";

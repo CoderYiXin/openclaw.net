@@ -328,9 +328,31 @@ jobs:
       - name: Run Public Compatibility Smoke
         run: dotnet test --no-build -c Release --filter "Category=PublicSmoke" --verbosity normal --logger "trx;LogFileName=public-smoke.trx" src/OpenClaw.Tests
 
+      - name: Probe latest public plugin packages
+        id: latest_plugin_canary
+        continue-on-error: true
+        env:
+          OPENCLAW_LATEST_CANARY: "1"
+        run: dotnet test --no-build -c Release --filter "Category=LatestCanary" --verbosity normal --logger "trx;LogFileName=latest-plugin-canary.trx" src/OpenClaw.Tests
+
+      - name: Report latest-package compatibility drift
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.latest_plugin_canary.outcome }}" == "success" ]]; then
+            echo "### Latest plugin compatibility canary: passing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Current npm releases still match the pinned compatibility expectations." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=Latest plugin compatibility drift::One or more current npm releases no longer match the pinned compatibility expectations. Review the latest-plugin-canary artifact; the pinned release gate remains authoritative."
+            echo "### Latest plugin compatibility canary: drift detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "Review the latest-plugin-canary test artifact. This signal is intentionally non-blocking; pinned public-smoke scenarios remain the release gate." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload smoke results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: public-smoke-results
-          path: "**/public-smoke.trx"
+          path: |
+            **/public-smoke.trx
+            **/latest-plugin-canary.trx

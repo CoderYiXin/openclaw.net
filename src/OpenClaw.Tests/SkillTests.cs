@@ -3943,6 +3943,45 @@ public class SkillProjectionResolverTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public void LoadAll_PluginCommandRoot_MapsMarkdownCommandsIntoSkills()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"openclaw-bundle-commands-{Guid.NewGuid():N}");
+        var commands = Path.Combine(root, "commands");
+        Directory.CreateDirectory(commands);
+        File.WriteAllText(
+            Path.Combine(commands, "review.md"),
+            "---\ndescription: Review a proposed change\n---\nReview the change and report concrete risks.");
+
+        try
+        {
+            var skills = SkillLoader.LoadAll(
+                new SkillsConfig
+                {
+                    Enabled = true,
+                    Load = new SkillLoadConfig
+                    {
+                        IncludeBundled = false,
+                        IncludeManaged = false,
+                        IncludeWorkspace = false
+                    }
+                },
+                null,
+                NullLogger.Instance,
+                [commands]);
+
+            var command = Assert.Single(skills);
+            Assert.Equal("review", command.Name);
+            Assert.Equal("Review a proposed change", command.Description);
+            Assert.Contains("concrete risks", command.Instructions, StringComparison.Ordinal);
+            Assert.True(command.UserInvocable);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 /// <summary>Minimal ILogger for tests.</summary>

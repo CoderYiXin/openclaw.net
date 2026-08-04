@@ -55,7 +55,7 @@ internal static class Program
                 "skills" => await SkillCommands.RunAsync(rest),
                 "clawhub" => await ClawHubCommand.RunAsync(rest),
                 "version" or "--version" or "-v" => PrintVersion(),
-                _ => UnknownCommand(command)
+                _ => await RunPluginOrUnknownAsync(command, rest)
             };
         }
         catch (OperationCanceledException)
@@ -82,6 +82,9 @@ internal static class Program
         Console.Error.WriteLine("Run: openclaw --help");
         return 2;
     }
+
+    private static async Task<int> RunPluginOrUnknownAsync(string command, string[] args)
+        => await PluginCliCommands.TryRunAsync(command, args) ?? UnknownCommand(command);
 
     private static void PrintHelp()
     {

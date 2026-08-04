@@ -14,8 +14,15 @@ import { existsSync } from "node:fs";
 import { createConnection } from "node:net";
 import { join, dirname } from "node:path";
 
-console.log = console.error;
-console.info = console.error;
+const standaloneCliMode = process.argv[2] === "--cli-run";
+const standaloneCliDescribeMode = process.argv[2] === "--cli-describe";
+
+// Runtime bridge traffic owns stdout. Standalone CLI execution inherits stdout
+// so plugin commands can render output and use an interactive terminal.
+if (!standaloneCliMode) {
+  console.log = console.error;
+  console.info = console.error;
+}
 
 /** @type {Map<string, { execute: Function, optional?: boolean, name: string, description: string, parameters: object }>} */
 const registeredTools = new Map();
@@ -28,6 +35,12 @@ const registeredChannels = new Map();
 
 /** @type {Map<string, { name: string, description: string, handler: Function }>} */
 const registeredCommands = new Map();
+
+/** @type {Array<{ factory: Function, options: any }>} */
+const registeredCliFactories = [];
+
+/** @type {CliCommandNode | null} */
+let registeredCliProgram = null;
 
 /** @type {Map<string, Function[]>} */
 const registeredEventHandlers = new Map();
@@ -126,6 +139,8 @@ function resetState() {
   registeredServices.clear();
   registeredChannels.clear();
   registeredCommands.clear();
+  registeredCliFactories.length = 0;
+  registeredCliProgram = null;
   registeredEventHandlers.clear();
   registeredProviders.clear();
   compatibilityDiagnostics = [];
@@ -187,6 +202,7 @@ function collectCapabilities() {
   if (registeredServices.size > 0) capabilities.push("services");
   if (registeredChannels.size > 0) capabilities.push("channels");
   if (registeredCommands.size > 0) capabilities.push("commands");
+  if (registeredCliFactories.length > 0) capabilities.push("cli");
   if (registeredProviders.size > 0) capabilities.push("providers");
   if (registeredEventHandlers.size > 0) capabilities.push("hooks");
 
@@ -202,9 +218,10 @@ function getParam(params, name) {
   return params[name] ?? params[pascal];
 }
 
-function createPluginApi(pluginId, pluginConfig, logger) {
+function createPluginApi(pluginId, pluginConfig, logger, registrationMode = "full") {
   return {
     pluginId,
+    registrationMode,
     config: pluginConfig ?? {},
     pluginConfig: pluginConfig ?? {},
     logger,
@@ -233,6 +250,7 @@ function createPluginApi(pluginId, pluginConfig, logger) {
         name,
         description: def.description ?? "",
         parameters: parameters ?? { type: "object", properties: {} },
+        outputSchema: def.outputSchema ?? def.returnSchema ?? null,
         optional: opts?.optional ?? false,
         execute: def.execute,
       });
@@ -267,11 +285,15 @@ function createPluginApi(pluginId, pluginConfig, logger) {
       addDiagnostic("unsupported_gateway_method", message, "registerGatewayMethod", name);
     },
 
-    registerCli(_factory, _opts) {
-      const message =
-        `Plugin "${pluginId}" tried to register a CLI command, but CLI extensions are not supported by OpenClaw.NET.`;
-      logger.error(message);
-      addDiagnostic("unsupported_cli_registration", message, "registerCli");
+    registerCli(factory, options) {
+      if (typeof factory !== "function") {
+        const message = `Plugin "${pluginId}" passed a non-function registrar to registerCli().`;
+        logger.error(message);
+        addDiagnostic("invalid_cli_registration", message, "registerCli");
+        return;
+      }
+
+      registeredCliFactories.push({ factory, options: options ?? {} });
     },
 
     registerCommand(def) {
@@ -310,13 +332,358 @@ function createPluginApi(pluginId, pluginConfig, logger) {
   };
 }
 
+class CliCommandNode {
+  constructor(signature = "", parent = null) {
+    const tokens = String(signature).trim().split(/\s+/).filter(Boolean);
+    this._name = tokens.shift() ?? "";
+    this.parent = parent;
+    this.commands = [];
+    this.options = [];
+    this._arguments = tokens.map(parseCliArgument);
+    this._description = "";
+    this._aliases = [];
+    this._action = null;
+    this._parsedOptions = {};
+    this._usage = "";
+  }
+
+  command(signature, description) {
+    const child = new CliCommandNode(signature, this);
+    if (typeof description === "string") child.description(description);
+    this.commands.push(child);
+    return child;
+  }
+
+  addCommand(command) {
+    if (command && typeof command === "object") {
+      command.parent = this;
+      this.commands.push(command);
+    }
+    return this;
+  }
+
+  description(value) {
+    if (value === undefined) return this._description;
+    this._description = sanitizeCliText(value);
+    return this;
+  }
+
+  summary(value) { return this.description(value); }
+  name() { return this._name; }
+  alias(value) { this._aliases.push(String(value)); return this; }
+  aliases(values) { this._aliases.push(...(values ?? []).map(String)); return this; }
+  usage(value) { if (value === undefined) return this._usage; this._usage = String(value); return this; }
+
+  argument(spec, description, defaultValue) {
+    const argument = parseCliArgument(spec);
+    argument.description = sanitizeCliText(description ?? "");
+    argument.defaultValue = defaultValue;
+    this._arguments.push(argument);
+    return this;
+  }
+
+  arguments(spec) {
+    for (const token of String(spec).trim().split(/\s+/).filter(Boolean)) {
+      this._arguments.push(parseCliArgument(token));
+    }
+    return this;
+  }
+
+  option(flags, description, defaultValue) {
+    this.options.push(parseCliOption(flags, description, defaultValue, false));
+    return this;
+  }
+
+  requiredOption(flags, description, defaultValue) {
+    this.options.push(parseCliOption(flags, description, defaultValue, true));
+    return this;
+  }
+
+  addOption(option) {
+    if (option && typeof option === "object") this.options.push(normalizeExternalCliOption(option));
+    return this;
+  }
+
+  action(handler) { this._action = handler; return this; }
+  opts() { return { ...this._parsedOptions }; }
+  optsWithGlobals() { return this.opts(); }
+  getOptionValue(name) { return this._parsedOptions[name]; }
+  setOptionValue(name, value) { this._parsedOptions[name] = value; return this; }
+  setOptionValueWithSource(name, value) { return this.setOptionValue(name, value); }
+
+  // Commander configuration methods used by plugins during registration. The
+  // bridge owns parsing and help rendering, so these remain safe fluent no-ops.
+  allowUnknownOption() { return this; }
+  allowExcessArguments() { return this; }
+  passThroughOptions() { return this; }
+  enablePositionalOptions() { return this; }
+  showHelpAfterError() { return this; }
+  showSuggestionAfterError() { return this; }
+  configureHelp() { return this; }
+  configureOutput() { return this; }
+  helpOption() { return this; }
+  addHelpText() { return this; }
+  exitOverride() { return this; }
+  hook() { return this; }
+  version() { return this; }
+}
+
+function parseCliArgument(spec) {
+  const text = String(spec ?? "").trim();
+  const required = text.startsWith("<");
+  const optional = text.startsWith("[");
+  const inner = required || optional ? text.slice(1, -1) : text;
+  const variadic = inner.endsWith("...");
+  return {
+    name: variadic ? inner.slice(0, -3) : inner,
+    required,
+    variadic,
+    description: "",
+    defaultValue: undefined,
+  };
+}
+
+function parseCliOption(flags, description, defaultValue, requiredOption) {
+  const text = String(flags ?? "");
+  const parts = text.split(/[ ,|]+/).filter(Boolean);
+  const long = parts.find((part) => part.startsWith("--")) ?? null;
+  const short = parts.find((part) => /^-[^-]/.test(part)) ?? null;
+  const valueToken = parts.find((part) => part.startsWith("<") || part.startsWith("["));
+  const rawName = (long ?? short ?? "").replace(/^-+/, "").replace(/^no-/, "");
+  return {
+    flags: text,
+    long: long?.split(/[<[\s]/, 1)[0] ?? null,
+    short: short?.split(/[<[\s]/, 1)[0] ?? null,
+    name: toCamelCase(rawName),
+    requiredValue: Boolean(valueToken?.startsWith("<")),
+    optionalValue: Boolean(valueToken?.startsWith("[")),
+    requiredOption,
+    negate: Boolean(long?.startsWith("--no-")),
+    defaultValue,
+    description: sanitizeCliText(description ?? ""),
+  };
+}
+
+function normalizeExternalCliOption(option) {
+  const normalized = parseCliOption(
+    option.flags ?? `${option.short ?? ""} ${option.long ?? ""}`,
+    option.description ?? "",
+    option.defaultValue,
+    option.mandatory === true,
+  );
+  if (typeof option.attributeName === "function") normalized.name = option.attributeName();
+  return normalized;
+}
+
+function toCamelCase(value) {
+  return String(value).replace(/-([a-zA-Z0-9])/g, (_, char) => char.toUpperCase());
+}
+
+function sanitizeCliText(value) {
+  return String(value ?? "")
+    .replace(/[\u001b\u009b][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d\/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .slice(0, 500);
+}
+
+function isValidCliRootName(name) {
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(String(name ?? ""));
+}
+
+async function buildCliProgram(metadataOnly = false) {
+  const program = new CliCommandNode();
+  const declaredRoots = new Map();
+
+  for (const registration of registeredCliFactories) {
+    const descriptors = Array.isArray(registration.options?.descriptors)
+      ? registration.options.descriptors
+      : [];
+    for (const descriptor of descriptors) {
+      if (descriptor && typeof descriptor.name === "string") {
+        declaredRoots.set(descriptor.name, sanitizeCliText(descriptor.description ?? ""));
+      }
+    }
+
+    const commands = Array.isArray(registration.options?.commands)
+      ? registration.options.commands
+      : [];
+    for (const command of commands) declaredRoots.set(String(command), "");
+
+    // Modern descriptors and the legacy commands list are sufficient for
+    // non-activating root discovery. Registrars without metadata use the eager
+    // compatibility fallback so older plugins do not disappear.
+    if (metadataOnly && (descriptors.length > 0 || commands.length > 0)) continue;
+
+    try {
+      await registration.factory({ program });
+    } catch (error) {
+      const message = `Plugin "${pluginId}" CLI registrar failed: ${error?.message ?? error}`;
+      logger.error(message);
+      addDiagnostic("cli_registration_failed", message, "registerCli");
+    }
+  }
+
+  for (const command of program.commands) {
+    if (!isValidCliRootName(command.name())) {
+      const message = `Plugin "${pluginId}" registered invalid CLI root "${command.name()}".`;
+      addDiagnostic("invalid_cli_command_name", message, "registerCli", command.name());
+    }
+  }
+
+  for (const name of declaredRoots.keys()) {
+    if (!isValidCliRootName(name)) {
+      const message = `Plugin "${pluginId}" declared invalid CLI root "${name}".`;
+      addDiagnostic("invalid_cli_command_name", message, "registerCli", name);
+    }
+  }
+
+  const seenRoots = new Set();
+  for (const command of program.commands) {
+    if (seenRoots.has(command.name())) {
+      const message = `Plugin "${pluginId}" registered duplicate CLI root "${command.name()}".`;
+      addDiagnostic("duplicate_cli_command_name", message, "registerCli", command.name());
+    }
+    seenRoots.add(command.name());
+  }
+
+  registeredCliProgram = program;
+  const registrations = program.commands.map((command) => ({
+    name: command.name(),
+    description: declaredRoots.get(command.name()) || command.description() || "",
+  }));
+  for (const [name, description] of declaredRoots) {
+    if (!registrations.some((command) => command.name === name)) {
+      registrations.push({ name, description });
+    }
+  }
+  return registrations;
+}
+
+function findCliChild(command, token) {
+  return command.commands.find((child) => child.name() === token || child._aliases.includes(token));
+}
+
+function parseCliInvocation(command, argv) {
+  const options = {};
+  for (const option of command.options) {
+    if (option.defaultValue !== undefined) options[option.name] = option.defaultValue;
+    else if (option.negate) options[option.name] = true;
+  }
+
+  const positionals = [];
+  let index = 0;
+  while (index < argv.length) {
+    const token = argv[index];
+    if (token === "--") {
+      positionals.push(...argv.slice(index + 1));
+      break;
+    }
+
+    const [flag, inlineValue] = token.startsWith("--") && token.includes("=")
+      ? [token.slice(0, token.indexOf("=")), token.slice(token.indexOf("=") + 1)]
+      : [token, undefined];
+    const option = command.options.find((candidate) => candidate.long === flag || candidate.short === flag);
+    if (!option) {
+      if (token.startsWith("-")) throw new Error(`Unknown option: ${token}`);
+      positionals.push(token);
+      index++;
+      continue;
+    }
+
+    if (option.negate) {
+      options[option.name] = false;
+    } else if (option.requiredValue || option.optionalValue) {
+      const next = inlineValue ?? argv[index + 1];
+      if (next === undefined || (option.requiredValue && next.startsWith("-"))) {
+        throw new Error(`Option ${flag} requires a value.`);
+      }
+      options[option.name] = next;
+      if (inlineValue === undefined) index++;
+    } else {
+      options[option.name] = true;
+    }
+    index++;
+  }
+
+  for (const option of command.options) {
+    if (option.requiredOption && options[option.name] === undefined) {
+      throw new Error(`Required option missing: ${option.long ?? option.short}`);
+    }
+  }
+
+  const actionArgs = [];
+  let positionalIndex = 0;
+  for (const argument of command._arguments) {
+    if (argument.variadic) {
+      const rest = positionals.slice(positionalIndex);
+      if (argument.required && rest.length === 0) throw new Error(`Missing required argument: ${argument.name}`);
+      actionArgs.push(rest.length > 0 ? rest : argument.defaultValue);
+      positionalIndex = positionals.length;
+      continue;
+    }
+    const value = positionals[positionalIndex] ?? argument.defaultValue;
+    if (argument.required && value === undefined) throw new Error(`Missing required argument: ${argument.name}`);
+    actionArgs.push(value);
+    if (positionalIndex < positionals.length) positionalIndex++;
+  }
+  if (positionalIndex < positionals.length) throw new Error(`Unexpected argument: ${positionals[positionalIndex]}`);
+
+  command._parsedOptions = options;
+  return [...actionArgs, options, command];
+}
+
+function renderCliHelp(command) {
+  const path = [];
+  for (let current = command; current && current.name(); current = current.parent) path.unshift(current.name());
+  console.log(`Usage: openclaw ${path.join(" ")}${command.commands.length > 0 ? " <command>" : ""}`);
+  if (command.description()) console.log(`\n${command.description()}`);
+  if (command.commands.length > 0) {
+    console.log("\nCommands:");
+    for (const child of command.commands) {
+      console.log(`  ${child.name().padEnd(20)} ${child.description()}`.trimEnd());
+    }
+  }
+  if (command.options.length > 0) {
+    console.log("\nOptions:");
+    for (const option of command.options) {
+      console.log(`  ${option.flags.padEnd(24)} ${option.description}`.trimEnd());
+    }
+  }
+}
+
+async function executeCli(argv) {
+  if (!registeredCliProgram) await buildCliProgram();
+  let command = registeredCliProgram;
+  let index = 0;
+  while (index < argv.length) {
+    const child = findCliChild(command, argv[index]);
+    if (!child) break;
+    command = child;
+    index++;
+  }
+
+  if (command === registeredCliProgram) throw new Error(`Unknown plugin CLI command: ${argv[0] ?? ""}`);
+  const remaining = argv.slice(index);
+  if (remaining.includes("-h") || remaining.includes("--help") || (!command._action && command.commands.length > 0)) {
+    renderCliHelp(command);
+    return 0;
+  }
+  if (typeof command._action !== "function") throw new Error(`No action registered for: ${argv.slice(0, index).join(" ")}`);
+
+  const actionArgs = parseCliInvocation(command, remaining);
+  const result = await command._action(...actionArgs);
+  if (typeof result === "number") return result;
+  return Number.isInteger(process.exitCode) ? process.exitCode : 0;
+}
+
 function createLogger(pluginId) {
   const prefix = `[plugin:${pluginId}]`;
+  const quietStandalone = standaloneCliMode || standaloneCliDescribeMode;
   return {
-    info: (...args) => console.error(prefix, "INFO", ...args),
+    info: quietStandalone ? () => {} : (...args) => console.error(prefix, "INFO", ...args),
     warn: (...args) => console.error(prefix, "WARN", ...args),
     error: (...args) => console.error(prefix, "ERROR", ...args),
-    debug: (...args) => console.error(prefix, "DEBUG", ...args),
+    debug: quietStandalone ? () => {} : (...args) => console.error(prefix, "DEBUG", ...args),
   };
 }
 
@@ -402,7 +769,7 @@ async function handleRequest(req) {
 
       try {
         const pluginExport = await loadPlugin(entryPath);
-        const api = createPluginApi(pluginId, config, logger);
+        const api = createPluginApi(pluginId, config, logger, "full");
 
         if (typeof pluginExport === "function") {
           await pluginExport(api);
@@ -414,11 +781,14 @@ async function handleRequest(req) {
           addDiagnostic("invalid_plugin_export", message, "register");
         }
 
+        const cliCommands = await buildCliProgram();
+
         if (compatibilityDiagnostics.length > 0) {
           return {
             tools: [],
             channels: [],
             commands: [],
+            cliCommands: [],
             eventSubscriptions: [],
             providers: [],
             capabilities: collectCapabilities(),
@@ -441,6 +811,7 @@ async function handleRequest(req) {
             name: tool.name,
             description: tool.description,
             parameters: tool.parameters,
+            outputSchema: tool.outputSchema,
             optional: tool.optional,
           });
         }
@@ -466,6 +837,7 @@ async function handleRequest(req) {
           tools,
           channels,
           commands,
+          cliCommands,
           eventSubscriptions,
           providers,
           capabilities: collectCapabilities(),
@@ -721,7 +1093,60 @@ function handleInboundLine(line, channel) {
   })();
 }
 
-if (transportMode === "stdio" || transportMode === "hybrid") {
+function readStandaloneCliConfig() {
+  const encoded = process.env.OPENCLAW_PLUGIN_CLI_CONFIG_BASE64 ?? "";
+  if (!encoded) return {};
+  try {
+    return JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  } catch (error) {
+    throw new Error(`Invalid standalone CLI plugin config: ${error?.message ?? error}`);
+  }
+}
+
+async function initializeStandaloneCli(registrationMode, metadataOnly = false) {
+  const entryPath = process.env.OPENCLAW_PLUGIN_CLI_ENTRY;
+  pluginId = process.env.OPENCLAW_PLUGIN_CLI_ID ?? "unknown";
+  if (!entryPath) throw new Error("OPENCLAW_PLUGIN_CLI_ENTRY is required.");
+
+  logger = createLogger(pluginId);
+  resetState();
+  const pluginExport = await loadPlugin(entryPath);
+  const api = createPluginApi(pluginId, readStandaloneCliConfig(), logger, registrationMode);
+  if (typeof pluginExport === "function") {
+    await pluginExport(api);
+  } else if (pluginExport && typeof pluginExport.register === "function") {
+    await pluginExport.register(api);
+  } else {
+    throw new Error(`Plugin "${pluginId}" did not export a function or { register } API.`);
+  }
+
+  const cliCommands = await buildCliProgram(metadataOnly);
+  if (compatibilityDiagnostics.length > 0) {
+    throw new Error(compatibilityDiagnostics.map((item) => `[${item.code}] ${item.message}`).join(" | "));
+  }
+  return cliCommands;
+}
+
+async function runStandaloneCli() {
+  try {
+    if (standaloneCliDescribeMode) {
+      const cliCommands = await initializeStandaloneCli("cli-metadata", true);
+      process.stdout.write(`${JSON.stringify(cliCommands)}\n`, () => process.exit(0));
+      return;
+    }
+
+    await initializeStandaloneCli("full");
+    const exitCode = await executeCli(process.argv.slice(3));
+    process.exit(exitCode);
+  } catch (error) {
+    console.error(`Plugin CLI error: ${error?.message ?? error}`);
+    process.exit(1);
+  }
+}
+
+if (standaloneCliMode || standaloneCliDescribeMode) {
+  void runStandaloneCli();
+} else if (transportMode === "stdio" || transportMode === "hybrid") {
   const rl = createInterface({ input: process.stdin, terminal: false });
   rl.on("line", (line) => {
     handleInboundLine(line, "stdio");

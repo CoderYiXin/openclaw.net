@@ -33,6 +33,7 @@
 | `api.registerCommand()` | jit only |
 | `api.on(...)` | jit only |
 | `api.registerProvider()` | jit only |
+| `api.registerCli()` | Supported（惰性发现根命令；通过一次性 Node 桥接进程执行） |
 | 独立 `.js`/`.mjs`/`.ts` | `.ts` 需 `jiti` |
 | 原生动态 .NET 插件 | jit only |
 | 上游 TypeScript `payment` 插件 | Not supported（使用原生支付运行时） |
@@ -42,7 +43,6 @@
 | 接口 | 失败码 |
 | --- | --- |
 | `api.registerGatewayMethod()` | `unsupported_gateway_method` |
-| `api.registerCli()` | `unsupported_cli_registration` |
 
 ## Canvas 和 A2UI 兼容性
 

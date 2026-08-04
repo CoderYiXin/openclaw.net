@@ -131,8 +131,9 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
                 {
                     PluginId = plugin.Manifest.Id,
                     SourcePath = plugin.RootPath,
-                    EntryPath = plugin.EntryPath,
-                    Origin = "bridge",
+                    EntryPath = string.IsNullOrEmpty(plugin.EntryPath) ? null : plugin.EntryPath,
+                    Origin = plugin.Format == PluginFormats.Bundle ? PluginFormats.Bundle : "bridge",
+                    BundleFormat = plugin.BundleFormat,
                     EffectiveRuntimeMode = _runtimeState.EffectiveModeName,
                     Loaded = false,
                     BlockedReason = message,
@@ -162,8 +163,9 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
                 {
                     PluginId = plugin.Manifest.Id,
                     SourcePath = plugin.RootPath,
-                    EntryPath = plugin.EntryPath,
-                    Origin = "bridge",
+                    EntryPath = string.IsNullOrEmpty(plugin.EntryPath) ? null : plugin.EntryPath,
+                    Origin = plugin.Format == PluginFormats.Bundle ? PluginFormats.Bundle : "bridge",
+                    BundleFormat = plugin.BundleFormat,
                     EffectiveRuntimeMode = _runtimeState.EffectiveModeName,
                     Loaded = false,
                     Error = ex.Message
@@ -181,10 +183,19 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
     private async Task LoadPluginAsync(DiscoveredPlugin plugin, CancellationToken ct)
     {
         var id = plugin.Manifest.Id;
+
+        if (plugin.Format == PluginFormats.Bundle)
+        {
+            LoadBundle(plugin);
+            return;
+        }
+
         _logger.LogInformation("Loading plugin '{PluginId}' from {EntryPath}", id, plugin.EntryPath);
 
-        var configDiagnostics = PluginConfigValidator.Validate(plugin.Manifest, GetPluginConfig(id));
-        if (configDiagnostics.Count > 0)
+        var configDiagnostics = PluginPackageCompatibility.Validate(plugin)
+            .Concat(PluginConfigValidator.Validate(plugin.Manifest, GetPluginConfig(id)))
+            .ToArray();
+        if (configDiagnostics.Length > 0)
         {
             _reports.Add(new PluginLoadReport
             {
@@ -195,9 +206,9 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
                 EffectiveRuntimeMode = _runtimeState.EffectiveModeName,
                 Loaded = false,
                 Diagnostics = configDiagnostics.ToArray(),
-                Error = "Plugin config validation failed."
+                Error = "Plugin package or config compatibility validation failed."
             });
-            _logger.LogError("Plugin '{PluginId}' failed config validation: {Errors}",
+            _logger.LogError("Plugin '{PluginId}' failed package/config compatibility validation: {Errors}",
                 id, string.Join(" | ", configDiagnostics.Select(d => d.Message)));
             return;
         }
@@ -388,11 +399,74 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
             ToolCount = registeredCount,
             ChannelCount = initResult.Channels.Length,
             CommandCount = initResult.Commands.Length,
+            CliCommandCount = initResult.CliCommands.Length,
             EventSubscriptionCount = initResult.EventSubscriptions.Length,
             ProviderCount = initResult.Providers.Length,
             SkillDirectories = skillDirs,
             Diagnostics = [.. initResult.Diagnostics, .. reportDiagnostics]
         });
+    }
+
+    private void LoadBundle(DiscoveredPlugin plugin)
+    {
+        var id = plugin.Manifest.Id;
+        var diagnostics = new List<PluginCompatibilityDiagnostic>();
+        var skillDirs = ResolveSkillDirectories(plugin, diagnostics).ToArray();
+        foreach (var capability in plugin.BundleDetectedCapabilities)
+        {
+            diagnostics.Add(new PluginCompatibilityDiagnostic
+            {
+                Severity = "warning",
+                Code = "bundle_capability_detected_only",
+                Message = $"Bundle capability '{capability}' was detected but has no OpenClaw.NET runtime mapping.",
+                Surface = capability,
+                Path = plugin.RootPath
+            });
+        }
+
+        if (plugin.BundleMappedCapabilities.Length == 0)
+        {
+            diagnostics.Add(new PluginCompatibilityDiagnostic
+            {
+                Severity = "warning",
+                Code = "bundle_has_no_mapped_capabilities",
+                Message = $"{plugin.BundleFormat} bundle '{id}' was detected, but it contains no mapped skill or command content.",
+                Surface = "bundle",
+                Path = plugin.RootPath
+            });
+        }
+
+        var hasErrors = diagnostics.Any(static item =>
+            string.Equals(item.Severity, "error", StringComparison.OrdinalIgnoreCase));
+        if (!hasErrors)
+        {
+            foreach (var skillDir in skillDirs)
+            {
+                if (!_skillRoots.Contains(skillDir, StringComparer.Ordinal))
+                    _skillRoots.Add(skillDir);
+            }
+        }
+
+        _reports.Add(new PluginLoadReport
+        {
+            PluginId = id,
+            SourcePath = plugin.RootPath,
+            EntryPath = null,
+            Origin = PluginFormats.Bundle,
+            BundleFormat = plugin.BundleFormat,
+            EffectiveRuntimeMode = _runtimeState.EffectiveModeName,
+            RequestedCapabilities = PluginCapabilityPolicy.Normalize(plugin.BundleMappedCapabilities),
+            Loaded = !hasErrors,
+            SkillDirectories = skillDirs,
+            Diagnostics = [.. diagnostics],
+            Error = hasErrors ? "Bundle content validation failed." : null
+        });
+
+        _logger.LogInformation(
+            "Loaded {BundleFormat} bundle '{PluginId}' with {SkillRootCount} mapped skill root(s).",
+            plugin.BundleFormat,
+            id,
+            skillDirs.Length);
     }
 
     private static string[] DetermineRequestedCapabilities(BridgeInitResult initResult, IReadOnlyCollection<string> skillDirs)
@@ -460,6 +534,14 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
             if (!Directory.Exists(resolved))
             {
                 _logger.LogWarning("Plugin '{PluginId}' declared missing skill directory {Path}", plugin.Manifest.Id, resolved);
+                diagnostics?.Add(new PluginCompatibilityDiagnostic
+                {
+                    Severity = "error",
+                    Code = "skill_directory_missing",
+                    Message = $"Plugin '{plugin.Manifest.Id}' declared a skill directory that does not exist.",
+                    Surface = "skills",
+                    Path = resolved
+                });
                 continue;
             }
 

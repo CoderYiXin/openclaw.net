@@ -58,47 +58,70 @@ else
                                  Elevation="0"
                                  Class="ops-grid">
                         <Columns>
-                            <PropertyColumn Property="x => x.Name" Title="@L["ops.pluginName"]">
+                            <PropertyColumn Property="x => x.PluginId" Title="@L["ops.pluginName"]">
                                 <CellTemplate>
                                     <div class="d-flex align-center gap-2">
                                         <span class="ops-dot" style="background:@PluginAccent(context.Item)"></span>
                                         <MudText Typo="Typo.body2" Class="font-weight-bold">
-                                            @(string.IsNullOrEmpty(context.Item.Name) ? context.Item.Id : context.Item.Name)
+                                            @context.Item.PluginId
                                         </MudText>
                                     </div>
                                 </CellTemplate>
                             </PropertyColumn>
-                            <PropertyColumn Property="x => x.Description" Title="@L["common.description"]">
+                            <PropertyColumn Property="x => x.Detail" Title="@L["common.description"]">
                                 <CellTemplate>
                                     <MudText Typo="Typo.body2" Style="opacity:.78">
-                                        @(context.Item.Description ?? "—")
+                                        @context.Item.Detail
+                                    </MudText>
+                                    <MudText Typo="Typo.caption" Style="opacity:.62">
+                                        @context.Item.Origin@(context.Item.BundleFormat is null ? "" : $"/{context.Item.BundleFormat}") · @context.Item.TrustLevel · @context.Item.CompatibilityStatus
                                     </MudText>
                                 </CellTemplate>
                             </PropertyColumn>
-                            <PropertyColumn Property="x => x.Version" Title="v">
+                            <PropertyColumn Property="x => x.ToolCount" Title="Surface">
                                 <CellTemplate>
-                                    <span class="ops-version-pill">@(context.Item.Version ?? "—")</span>
+                                    <span class="ops-version-pill">T @context.Item.ToolCount · C @context.Item.ChannelCount · P @context.Item.ProviderCount</span>
                                 </CellTemplate>
                             </PropertyColumn>
-                            <PropertyColumn Property="x => x.Enabled" Title="@L["common.status"]">
+                            <PropertyColumn Property="x => x.Status" Title="@L["common.status"]">
                                 <CellTemplate>
                                     <MudChip T="string"
                                              Size="Size.Small"
-                                             Color="@(context.Item.Enabled ? Color.Success : Color.Default)"
-                                             Variant="@(context.Item.Enabled ? Variant.Filled : Variant.Outlined)">
-                                        @(context.Item.Enabled ? L["common.enabled"] : L["common.disabled"])
+                                             Color="@(context.Item.Loaded && context.Item.Enabled ? Color.Success : context.Item.Quarantined ? Color.Error : Color.Default)"
+                                             Variant="@(context.Item.Loaded && context.Item.Enabled ? Variant.Filled : Variant.Outlined)">
+                                        @context.Item.Status
                                     </MudChip>
                                 </CellTemplate>
                             </PropertyColumn>
                             <TemplateColumn Title="@L["common.actions"]" Sortable="false" Filterable="false">
                                 <CellTemplate>
-                                    <MudButton Size="Size.Small"
-                                               Variant="Variant.Outlined"
-                                               Color="@(context.Item.Enabled ? Color.Warning : Color.Success)"
-                                               StartIcon="@(context.Item.Enabled ? Icons.Material.Filled.PauseCircle : Icons.Material.Filled.PlayCircle)"
-                                               OnClick="@(() => TogglePlugin(context.Item))">
-                                        @(context.Item.Enabled ? L["common.disable"] : L["common.enable"])
-                                    </MudButton>
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        @if (context.Item.Quarantined)
+                                        {
+                                            <MudButton Size="Size.Small"
+                                                       Variant="Variant.Outlined"
+                                                       Color="Color.Warning"
+                                                       OnClick="@(() => MutatePlugin(context.Item, "clear-quarantine"))">
+                                                Clear quarantine
+                                            </MudButton>
+                                        }
+                                        else
+                                        {
+                                            <MudButton Size="Size.Small"
+                                                       Variant="Variant.Outlined"
+                                                       Color="@(context.Item.Disabled ? Color.Success : Color.Warning)"
+                                                       StartIcon="@(context.Item.Disabled ? Icons.Material.Filled.PlayCircle : Icons.Material.Filled.PauseCircle)"
+                                                       OnClick="@(() => MutatePlugin(context.Item, context.Item.Disabled ? "enable" : "disable"))">
+                                                @(context.Item.Disabled ? L["common.enable"] : L["common.disable"])
+                                            </MudButton>
+                                        }
+                                        <MudButton Size="Size.Small"
+                                                   Variant="Variant.Text"
+                                                   Color="Color.Default"
+                                                   OnClick="@(() => MutatePlugin(context.Item, context.Item.Reviewed ? "unreview" : "review"))">
+                                            @(context.Item.Reviewed ? "Clear review" : "Mark reviewed")
+                                        </MudButton>
+                                    </div>
                                 </CellTemplate>
                             </TemplateColumn>
                         </Columns>
@@ -307,7 +330,7 @@ else
             var deadLettersTask = Api.GetRawAsync("/admin/webhooks/dead-letter");
             await Task.WhenAll(pluginsTask, policiesTask, deadLettersTask);
 
-            _plugins = await ParseListAsync<PluginInfo>(pluginsTask.Result, "plugins");
+            _plugins = await ParseListAsync<PluginInfo>(pluginsTask.Result, "items");
             _policies = await ParseListAsync<ApprovalPolicy>(policiesTask.Result, "policies");
             _deadLetters = await ParseListAsync<DeadLetterItem>(deadLettersTask.Result, "items");
         }
@@ -367,10 +390,10 @@ else
         }
     }
 
-    private async Task TogglePlugin(PluginInfo plugin)
+    private async Task MutatePlugin(PluginInfo plugin, string action)
     {
-        var action = plugin.Enabled ? "disable" : "enable";
-        using var resp = await Api.PostRawAsync($"/admin/plugins/{plugin.Id}/{action}");
+        var pluginId = Uri.EscapeDataString(plugin.PluginId);
+        using var resp = await Api.PostRawAsync($"/admin/plugins/{pluginId}/{action}");
         if (resp.IsSuccessStatusCode)
         {
             Snackbar.Add(L["common.success"], Severity.Success);

@@ -20,4 +20,11 @@
     <ProjectReference Include="..\OpenClaw.Tui\OpenClaw.Tui.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\OpenClaw.Agent\Plugins\plugin-bridge.mjs"
+             Link="Plugins\plugin-bridge.mjs"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

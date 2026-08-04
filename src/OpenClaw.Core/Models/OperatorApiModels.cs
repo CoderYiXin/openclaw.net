@@ -118,6 +118,7 @@ public sealed class PluginHealthSnapshot
 {
     public required string PluginId { get; init; }
     public required string Origin { get; init; }
+    public string? BundleFormat { get; init; }
     public bool Loaded { get; init; }
     public bool BlockedByRuntimeMode { get; init; }
     public bool Disabled { get; init; }
@@ -145,6 +146,7 @@ public sealed class PluginHealthSnapshot
     public int ToolCount { get; init; }
     public int ChannelCount { get; init; }
     public int CommandCount { get; init; }
+    public int CliCommandCount { get; init; }
     public int ProviderCount { get; init; }
     public IReadOnlyList<string> BudgetViolations { get; init; } = [];
     public IReadOnlyList<PluginCompatibilityDiagnostic> Diagnostics { get; init; } = [];

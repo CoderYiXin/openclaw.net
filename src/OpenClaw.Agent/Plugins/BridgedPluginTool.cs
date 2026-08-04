@@ -7,7 +7,7 @@ namespace OpenClaw.Agent.Plugins;
 /// An ITool implementation that bridges to a tool registered by an OpenClaw
 /// TypeScript/JavaScript plugin running in a Node.js child process.
 /// </summary>
-public sealed class BridgedPluginTool : ITool
+public sealed class BridgedPluginTool : ITool, IToolOutputSchema
 {
     private readonly PluginBridgeProcess _bridge;
     private readonly string _pluginId;
@@ -15,6 +15,7 @@ public sealed class BridgedPluginTool : ITool
     public string Name { get; }
     public string Description { get; }
     public string ParameterSchema { get; }
+    public string? OutputSchema { get; }
 
     /// <summary>Whether this tool is optional (opt-in only).</summary>
     public bool Optional { get; }
@@ -29,6 +30,7 @@ public sealed class BridgedPluginTool : ITool
         Name = registration.Name;
         Description = registration.Description;
         ParameterSchema = registration.Parameters.GetRawText();
+        OutputSchema = registration.OutputSchema?.GetRawText();
         Optional = registration.Optional;
     }
 

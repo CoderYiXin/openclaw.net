@@ -1242,11 +1242,20 @@ public sealed class OpenClawToolExecutor
     internal static AIFunctionDeclaration CreateDeclaration(ITool tool)
     {
         using var doc = JsonDocument.Parse(tool.ParameterSchema);
+        JsonElement? returnSchema = null;
+        JsonDocument? returnSchemaDocument = null;
+        if (tool is IToolOutputSchema { OutputSchema: { Length: > 0 } outputSchema })
+        {
+            returnSchemaDocument = JsonDocument.Parse(outputSchema);
+            returnSchema = returnSchemaDocument.RootElement.Clone();
+        }
+
+        using (returnSchemaDocument)
         return AIFunctionFactory.CreateDeclaration(
             tool.Name,
             tool.Description,
             doc.RootElement.Clone(),
-            returnJsonSchema: null);
+            returnJsonSchema: returnSchema);
     }
 
     private static string NormalizeApprovalToolName(string toolName) =>
