@@ -335,7 +335,7 @@ jobs:
           OPENCLAW_LATEST_CANARY: "1"
         run: dotnet test --no-build -c Release --filter "Category=LatestCanary" --verbosity normal --logger "trx;LogFileName=latest-plugin-canary.trx" src/OpenClaw.Tests
 
-      - name: Report latest-package compatibility drift
+      - name: Report latest-package compatibility canary
         if: always()
         shell: bash
         run: |
@@ -343,9 +343,10 @@ jobs:
             echo "### Latest plugin compatibility canary: passing" >> "$GITHUB_STEP_SUMMARY"
             echo "Current npm releases still match the pinned compatibility expectations." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning title=Latest plugin compatibility drift::One or more current npm releases no longer match the pinned compatibility expectations. Review the latest-plugin-canary artifact; the pinned release gate remains authoritative."
-            echo "### Latest plugin compatibility canary: drift detected" >> "$GITHUB_STEP_SUMMARY"
-            echo "Review the latest-plugin-canary test artifact. This signal is intentionally non-blocking; pinned public-smoke scenarios remain the release gate." >> "$GITHUB_STEP_SUMMARY"
+            result="${{ steps.latest_plugin_canary.outcome }}"
+            echo "::warning title=Latest plugin compatibility canary failed::The canary result was '${result}'. This may indicate package compatibility drift or a Node, npm, process, or test-infrastructure failure. Review the latest-plugin-canary artifact; the pinned release gate remains authoritative."
+            echo "### Latest plugin compatibility canary: ${result}" >> "$GITHUB_STEP_SUMMARY"
+            echo "Review the latest-plugin-canary test artifact to classify the failure. This signal is intentionally non-blocking; pinned public-smoke scenarios remain the release gate." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload smoke results

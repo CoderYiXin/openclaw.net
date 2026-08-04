@@ -3982,6 +3982,41 @@ public class SkillProjectionResolverTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [Fact]
+    public void LoadAll_PluginCommandRoot_IgnoresNestedFrontmatterName()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"openclaw-bundle-command-name-{Guid.NewGuid():N}");
+        var commands = Path.Combine(root, "commands");
+        Directory.CreateDirectory(commands);
+        File.WriteAllText(
+            Path.Combine(commands, "review.md"),
+            "---\nmetadata:\n  name: nested-value\ndescription: Review a proposed change\n---\nReview the change.");
+
+        try
+        {
+            var skills = SkillLoader.LoadAll(
+                new SkillsConfig
+                {
+                    Enabled = true,
+                    Load = new SkillLoadConfig
+                    {
+                        IncludeBundled = false,
+                        IncludeManaged = false,
+                        IncludeWorkspace = false
+                    }
+                },
+                null,
+                NullLogger.Instance,
+                [commands]);
+
+            Assert.Equal("review", Assert.Single(skills).Name);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
 
 /// <summary>Minimal ILogger for tests.</summary>

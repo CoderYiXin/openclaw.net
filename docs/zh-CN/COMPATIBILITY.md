@@ -33,7 +33,7 @@
 | `api.registerCommand()` | jit only |
 | `api.on(...)` | jit only |
 | `api.registerProvider()` | jit only |
-| `api.registerCli()` | Supported（惰性发现根命令；通过一次性 Node 桥接进程执行） |
+| `api.registerCli()` | Supported with caveats（内置根命令优先；重复插件根命令会失败关闭；仅启用且通过配置验证的插件参与惰性发现；通过一次性 Node 桥接进程执行，并支持上游常用的 Commander 子集） |
 | 独立 `.js`/`.mjs`/`.ts` | `.ts` 需 `jiti` |
 | 原生动态 .NET 插件 | jit only |
 | 上游 TypeScript `payment` 插件 | Not supported（使用原生支付运行时） |

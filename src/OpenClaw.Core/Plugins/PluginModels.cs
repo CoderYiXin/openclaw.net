@@ -748,6 +748,7 @@ public sealed class PluginLoadReport
     public int ChannelCount { get; init; }
     public int CommandCount { get; init; }
     public int CliCommandCount { get; init; }
+    public string[] CliCommandNames { get; init; } = [];
     public int EventSubscriptionCount { get; init; }
     public int ProviderCount { get; init; }
     public string[] SkillDirectories { get; init; } = [];

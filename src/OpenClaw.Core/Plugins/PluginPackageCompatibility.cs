@@ -11,7 +11,26 @@ public static class PluginPackageCompatibility
     public static readonly Version HostCompatibilityVersion = new(2026, 5, 4);
 
     public static IReadOnlyList<PluginCompatibilityDiagnostic> Validate(DiscoveredPlugin plugin)
-        => Validate(plugin.PluginApiRange, plugin.MinHostVersion, plugin.Manifest.Id, plugin.RootPath);
+    {
+        var diagnostics = Validate(
+            plugin.PluginApiRange,
+            plugin.MinHostVersion,
+            plugin.Manifest.Id,
+            plugin.RootPath).ToList();
+        if (!string.IsNullOrWhiteSpace(plugin.ExpectedIntegrity))
+        {
+            diagnostics.Add(new PluginCompatibilityDiagnostic
+            {
+                Severity = "error",
+                Code = "package_integrity_unverified",
+                Message = $"Plugin '{plugin.Manifest.Id}' declares package integrity, but extracted plugin directories cannot currently be verified against package-manager integrity metadata.",
+                Surface = "package_metadata",
+                Path = plugin.RootPath
+            });
+        }
+
+        return diagnostics;
+    }
 
     public static IReadOnlyList<PluginCompatibilityDiagnostic> Validate(
         string? pluginApiRange,
@@ -52,14 +71,24 @@ public static class PluginPackageCompatibility
             return;
 
         var normalized = declaredRange.Trim();
-        if (normalized.StartsWith(">=", StringComparison.Ordinal))
-            normalized = normalized[2..].Trim();
-        else if (normalized.StartsWith('v'))
+        foreach (var rangeOperator in new[] { ">=", "<=", "==", ">", "=", "^", "~" })
+        {
+            if (!normalized.StartsWith(rangeOperator, StringComparison.Ordinal))
+                continue;
+
+            normalized = normalized[rangeOperator.Length..].Trim();
+            break;
+        }
+
+        if (normalized.StartsWith('v') || normalized.StartsWith('V'))
             normalized = normalized[1..];
 
         var suffixIndex = normalized.IndexOfAny(['-', '+', ' ', '<', '>', '|']);
         if (suffixIndex >= 0)
             normalized = normalized[..suffixIndex];
+
+        if (!normalized.Contains('.', StringComparison.Ordinal) && normalized.Length > 0)
+            normalized += ".0";
 
         if (!Version.TryParse(normalized, out var requiredVersion))
         {

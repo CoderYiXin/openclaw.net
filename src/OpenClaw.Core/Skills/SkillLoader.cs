@@ -302,7 +302,7 @@ public static class SkillLoader
             var frontmatterEnd = content.IndexOf("\n---", 3, StringComparison.Ordinal);
             var frontmatter = content[3..frontmatterEnd];
             if (!frontmatter.Split('\n').Any(static line =>
-                    line.TrimStart().StartsWith("name:", StringComparison.OrdinalIgnoreCase)))
+                    line.TrimEnd('\r').StartsWith("name:", StringComparison.OrdinalIgnoreCase)))
             {
                 var firstNewline = content.IndexOf('\n');
                 return firstNewline >= 0

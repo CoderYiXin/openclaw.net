@@ -1146,10 +1146,10 @@ async function runStandaloneCli() {
 
     await initializeStandaloneCli("full");
     const exitCode = await executeCli(process.argv.slice(3));
-    process.exit(exitCode);
+    process.exitCode = exitCode;
   } catch (error) {
     console.error(`Plugin CLI error: ${error?.message ?? error}`);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 

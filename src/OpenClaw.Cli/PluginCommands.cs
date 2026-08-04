@@ -335,7 +335,9 @@ internal static class PluginCommands
         }
 
         var candidatePath = target;
-        if (!Directory.Exists(candidatePath) && !File.Exists(candidatePath))
+        if (!Directory.Exists(candidatePath) &&
+            !File.Exists(candidatePath) &&
+            !Path.IsPathRooted(candidatePath))
         {
             var extensionsDir = ResolveExtensionsDir(args.Contains("--global") || args.Contains("-g"));
             candidatePath = Path.Combine(extensionsDir, target);
@@ -511,9 +513,12 @@ internal static class PluginCommands
             };
 
             process.Start();
-            var stdout = await process.StandardOutput.ReadToEndAsync();
-            var stderr = await process.StandardError.ReadToEndAsync();
+            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            var stderrTask = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
+            await Task.WhenAll(stdoutTask, stderrTask);
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
             return (process.ExitCode, stdout, stderr);
         }
         catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 2)
@@ -583,7 +588,7 @@ internal static class PluginCommands
 
             if (Path.GetExtension(stagedInspection.EntryPath).Equals(".ts", StringComparison.OrdinalIgnoreCase) &&
                 stagedInspection.Format != PluginFormats.Bundle &&
-                !HasLocalJiti(stagedInspection.EntryPath))
+                !HasLocalJiti(stagedInspection.EntryPath, stagingDir))
             {
                 Console.WriteLine("Installing the TypeScript runtime dependency jiti in staging...");
                 var jitiInstall = await RunNpmAsync("install --ignore-scripts --no-save --omit=dev --omit=optional jiti", stagingDir);
@@ -629,6 +634,7 @@ internal static class PluginCommands
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     // Successful install; a stale backup is recoverable.
+                    Debug.WriteLine($"Unable to delete stale plugin backup '{backupDir}': {ex.Message}");
                 }
             }
 
@@ -649,24 +655,38 @@ internal static class PluginCommands
             if (Directory.Exists(stagingDir))
             {
                 try { Directory.Delete(stagingDir, recursive: true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Debug.WriteLine($"Unable to delete plugin staging directory '{stagingDir}': {ex.Message}");
+                }
             }
 
             if (Directory.Exists(backupDir) && Directory.Exists(targetDir))
             {
                 try { Directory.Delete(backupDir, recursive: true); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    Debug.WriteLine($"Unable to delete plugin backup directory '{backupDir}': {ex.Message}");
+                }
             }
         }
     }
 
-    private static bool HasLocalJiti(string entryPath)
+    private static bool HasLocalJiti(string entryPath, string rootDir)
     {
-        var current = Path.GetDirectoryName(entryPath);
-        while (!string.IsNullOrWhiteSpace(current))
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootDir));
+        var current = Path.GetDirectoryName(Path.GetFullPath(entryPath));
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        while (!string.IsNullOrWhiteSpace(current) &&
+               (string.Equals(current, root, comparison) ||
+                current.StartsWith(root + Path.DirectorySeparatorChar, comparison)))
         {
             if (Directory.Exists(Path.Combine(current, "node_modules", "jiti")))
                 return true;
+            if (string.Equals(current, root, comparison))
+                break;
             var parent = Path.GetDirectoryName(current);
             if (string.Equals(parent, current, StringComparison.Ordinal))
                 break;
@@ -788,6 +808,7 @@ internal static class PluginCommands
             }
             catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
             {
+                Debug.WriteLine($"Unable to terminate plugin inspection process: {ex.Message}");
             }
         }
     }
@@ -798,6 +819,7 @@ internal static class PluginCommands
         if (File.Exists(packaged))
             return packaged;
 
+#if DEBUG
         var source = Path.GetFullPath(Path.Combine(
             Directory.GetCurrentDirectory(),
             "src",
@@ -805,6 +827,9 @@ internal static class PluginCommands
             "Plugins",
             "plugin-bridge.mjs"));
         return File.Exists(source) ? source : null;
+#else
+        return null;
+#endif
     }
 
     internal sealed class PluginRuntimeInspection
@@ -930,6 +955,7 @@ internal static class PluginCommands
 
         var warnings = new List<string>();
         var diagnostics = new List<PluginCompatibilityDiagnostic>();
+        diagnostics.AddRange(discovery.Reports.SelectMany(static report => report.Diagnostics));
         if (!hasManifest && !isBundle)
             warnings.Add("No openclaw.plugin.json manifest was found. Install is allowed, but declared capabilities and config validation metadata are limited.");
         if (!hasExtensionsConfig && !hasManifest && !isBundle)
@@ -1141,19 +1167,19 @@ internal static class PluginCommands
                           sourceExtensions.ValueKind == JsonValueKind.Array
                             ? sourceExtensions
                             : default;
-                    if (extensions.ValueKind != JsonValueKind.Array)
-                        return null;
-
-                    foreach (var extension in extensions.EnumerateArray())
+                    if (extensions.ValueKind == JsonValueKind.Array)
                     {
-                        var relPath = extension.GetString();
-                        if (string.IsNullOrWhiteSpace(relPath))
-                            continue;
-
-                        if (PluginDiscovery.TryResolveContainedPath(rootPath, relPath, out var resolvedPath) &&
-                            File.Exists(resolvedPath))
+                        foreach (var extension in extensions.EnumerateArray())
                         {
-                            return resolvedPath;
+                            var relPath = extension.GetString();
+                            if (string.IsNullOrWhiteSpace(relPath))
+                                continue;
+
+                            if (PluginDiscovery.TryResolveContainedPath(rootPath, relPath, out var resolvedPath) &&
+                                File.Exists(resolvedPath))
+                            {
+                                return resolvedPath;
+                            }
                         }
                     }
                 }
@@ -1227,7 +1253,7 @@ internal static class PluginCommands
         {
             Severity = "error",
             Code = code,
-            Message = $"Plugin source references api.{apiName}(), which is not supported by OpenClaw.NET.",
+            Message = $"Plugin source references {apiName}(), which is not supported by OpenClaw.NET.",
             Surface = apiName,
             Path = file
         });

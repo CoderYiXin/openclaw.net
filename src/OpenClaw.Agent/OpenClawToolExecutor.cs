@@ -1243,14 +1243,20 @@ public sealed class OpenClawToolExecutor
     {
         using var doc = JsonDocument.Parse(tool.ParameterSchema);
         JsonElement? returnSchema = null;
-        JsonDocument? returnSchemaDocument = null;
         if (tool is IToolOutputSchema { OutputSchema: { Length: > 0 } outputSchema })
         {
-            returnSchemaDocument = JsonDocument.Parse(outputSchema);
-            returnSchema = returnSchemaDocument.RootElement.Clone();
+            try
+            {
+                using var returnSchemaDocument = JsonDocument.Parse(outputSchema);
+                returnSchema = returnSchemaDocument.RootElement.Clone();
+            }
+            catch (JsonException)
+            {
+                // A malformed optional return schema must not hide an otherwise valid tool.
+                returnSchema = null;
+            }
         }
 
-        using (returnSchemaDocument)
         return AIFunctionFactory.CreateDeclaration(
             tool.Name,
             tool.Description,

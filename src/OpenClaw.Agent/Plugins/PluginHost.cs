@@ -400,6 +400,7 @@ public sealed class PluginHost : IAsyncDisposable, IPluginRuntimeTelemetrySource
             ChannelCount = initResult.Channels.Length,
             CommandCount = initResult.Commands.Length,
             CliCommandCount = initResult.CliCommands.Length,
+            CliCommandNames = initResult.CliCommands.Select(static command => command.Name).ToArray(),
             EventSubscriptionCount = initResult.EventSubscriptions.Length,
             ProviderCount = initResult.Providers.Length,
             SkillDirectories = skillDirs,

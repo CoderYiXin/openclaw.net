@@ -189,6 +189,38 @@ public sealed class PluginCommandsTests
     }
 
     [Fact]
+    public async Task PluginCliCommands_DescribeRejectsOversizedOutput()
+    {
+        if (!HasNode())
+            return;
+
+        var root = CreateTempRoot();
+        try
+        {
+            var entryPath = Path.Combine(root, "index.js");
+            File.WriteAllText(
+                entryPath,
+                "process.stdout.write('x'.repeat(1100000)); module.exports = api => api.registerCli(({ program }) => program.command('fixture')); ");
+            var bridgeScript = PluginCommands.ResolveBridgeScriptPath();
+            Assert.NotNull(bridgeScript);
+
+            var description = await PluginCliCommands.DescribeAsync(
+                entryPath,
+                "oversized-cli-plugin",
+                pluginConfig: null,
+                bridgeScript,
+                TestContext.Current.CancellationToken);
+
+            Assert.False(description.Success);
+            Assert.Contains("1 MiB", description.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void PluginCliCommands_LoadBlockedPluginIds_ReadsQuarantineState()
     {
         var root = CreateTempRoot();
@@ -225,6 +257,29 @@ public sealed class PluginCommandsTests
             Assert.Equal("untrusted", inspection.TrustLevel);
             Assert.Equal("entry-only", inspection.DeclaredSurface);
             Assert.Contains(inspection.Warnings, warning => warning.Contains("No openclaw.plugin.json manifest", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InspectCandidate_WithCompatOnlyOpenClawMetadata_UsesConventionalEntry()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(root, "package.json"),
+                """{"name":"compat-only","openclaw":{"compat":{"pluginApi":"^2026.5.0"}}}""");
+            File.WriteAllText(Path.Combine(root, "index.js"), "module.exports = () => {};");
+
+            var inspection = PluginCommands.InspectCandidate(root, "./compat-only", sourceIsNpm: false);
+
+            Assert.True(inspection.Success);
+            Assert.True(inspection.CanInstall);
+            Assert.EndsWith("index.js", inspection.EntryPath, StringComparison.Ordinal);
         }
         finally
         {
@@ -423,7 +478,7 @@ public sealed class PluginCommandsTests
             process?.WaitForExit(3000);
             return process is { ExitCode: 0 };
         }
-        catch
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             return false;
         }

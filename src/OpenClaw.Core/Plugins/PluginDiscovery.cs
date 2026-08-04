@@ -10,6 +10,7 @@ namespace OpenClaw.Core.Plugins;
 /// </summary>
 public static class PluginDiscovery
 {
+    private const int MaxPluginScanDepth = 8;
     private const int MaxSymlinkResolutionDepth = 64;
 
     private const string ManifestFileName = "openclaw.plugin.json";
@@ -118,11 +119,11 @@ public static class PluginDiscovery
 
         // Scan each installed directory using native-plugin precedence followed by
         // compatible bundle detection.
-        foreach (var subDir in Directory.EnumerateDirectories(extensionsDir))
+        foreach (var subDir in Directory.EnumerateDirectories(extensionsDir, "*", PluginDirectoryEnumerationOptions()))
             ScanDirectory(subDir, seen, result);
     }
 
-    private static void ScanDirectory(string dir, HashSet<string> seen, PluginDiscoveryResult result)
+    private static void ScanDirectory(string dir, HashSet<string> seen, PluginDiscoveryResult result, int depth = 0)
     {
         // Check if this directory is itself a plugin (has manifest)
         var manifestPath = Path.Combine(dir, ManifestFileName);
@@ -196,15 +197,25 @@ public static class PluginDiscovery
             return;
         }
 
-        // Scan subdirectories
-        foreach (var subDir in Directory.EnumerateDirectories(dir))
+        // Scan subdirectories without following links or traversing arbitrary depth.
+        if (depth >= MaxPluginScanDepth)
+            return;
+
+        foreach (var subDir in Directory.EnumerateDirectories(dir, "*", PluginDirectoryEnumerationOptions()))
         {
             var name = Path.GetFileName(subDir);
             if (name is "node_modules" or ".git")
                 continue;
-            ScanDirectory(subDir, seen, result);
+            ScanDirectory(subDir, seen, result, depth + 1);
         }
     }
+
+    private static EnumerationOptions PluginDirectoryEnumerationOptions()
+        => new()
+        {
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
 
     private static void TryAddPluginFromFile(string filePath, HashSet<string> seen, PluginDiscoveryResult result)
     {
@@ -268,7 +279,25 @@ public static class PluginDiscovery
         }
 
         if (manifest is null)
+        {
+            result.Reports.Add(new PluginLoadReport
+            {
+                PluginId = Path.GetFileName(pluginRoot),
+                SourcePath = Path.GetFullPath(pluginRoot),
+                EntryPath = null,
+                Loaded = false,
+                Diagnostics =
+                [
+                    new PluginCompatibilityDiagnostic
+                    {
+                        Code = "invalid_manifest",
+                        Message = $"Manifest '{manifestPath}' must contain a JSON object.",
+                        Path = Path.GetFullPath(manifestPath)
+                    }
+                ]
+            });
             return;
+        }
 
         if (!seen.Add(manifest.Id))
         {
@@ -495,7 +524,7 @@ public static class PluginDiscovery
                     }
                 ]
             });
-            return true;
+            return false;
         }
     }
 

@@ -79,7 +79,9 @@ public class PluginDiscoveryTests : IDisposable
         Assert.Equal(">=2026.5.4", plugin.PluginApiRange);
         Assert.Equal(">=2026.5.4", plugin.MinHostVersion);
         Assert.Equal("sha512-example", plugin.ExpectedIntegrity);
-        Assert.Empty(PluginPackageCompatibility.Validate(plugin));
+        Assert.Contains(
+            PluginPackageCompatibility.Validate(plugin),
+            diagnostic => diagnostic.Code == "package_integrity_unverified");
     }
 
     [Theory]
@@ -153,6 +155,10 @@ public class PluginDiscoveryTests : IDisposable
         var pluginDir = Path.Combine(_tempDir, "standalone-with-content");
         Directory.CreateDirectory(Path.Combine(pluginDir, "skills"));
         Directory.CreateDirectory(Path.Combine(pluginDir, "commands"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "agents"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "hooks"));
+        File.WriteAllText(Path.Combine(pluginDir, ".mcp.json"), "{}");
+        File.WriteAllText(Path.Combine(pluginDir, "settings.json"), "{}");
         File.WriteAllText(Path.Combine(pluginDir, "index.js"), "module.exports = () => {};");
 
         var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
@@ -162,6 +168,39 @@ public class PluginDiscoveryTests : IDisposable
 
         Assert.Equal(PluginFormats.Native, plugin.Format);
         Assert.EndsWith("index.js", plugin.EntryPath, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    public void Discover_BundleManifestMustBeJsonObject(string manifestJson)
+    {
+        var bundleDir = Path.Combine(_tempDir, $"invalid-bundle-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path.Combine(bundleDir, ".codex-plugin"));
+        File.WriteAllText(Path.Combine(bundleDir, ".codex-plugin", "plugin.json"), manifestJson);
+
+        var result = PluginDiscovery.DiscoverWithDiagnostics(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [bundleDir] }
+        });
+
+        Assert.Empty(result.Plugins);
+        Assert.Contains(
+            result.Reports.SelectMany(static report => report.Diagnostics),
+            diagnostic => diagnostic.Code == "invalid_bundle_manifest");
+    }
+
+    [Theory]
+    [InlineData("^2026.5.0")]
+    [InlineData("~2026.5.0")]
+    [InlineData("2026")]
+    public void PackageCompatibility_NormalizesCommonNpmVersionRanges(string range)
+    {
+        Assert.Empty(PluginPackageCompatibility.Validate(
+            range,
+            null,
+            "range-plugin",
+            _tempDir));
     }
 
     [Fact]

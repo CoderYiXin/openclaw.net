@@ -69,7 +69,8 @@
       "pluginId": "openclaw-supermemory",
       "installExtraPackages": ["jiti"],
       "expectedStatus": "compatible",
-      "configJson": "{}"
+      "configJson": "{}",
+      "expectedCliCommandNames": ["supermemory"]
     }
   ]
 }

@@ -92,6 +92,7 @@ public static class PublicCompatibilityCatalog
             InstallExtraPackages = entry.InstallExtraPackages ?? [],
             ExpectedToolNames = entry.ExpectedToolNames ?? [],
             ExpectedSkillNames = entry.ExpectedSkillNames ?? [],
+            ExpectedCliCommandNames = entry.ExpectedCliCommandNames ?? [],
             ExpectedDiagnosticCodes = entry.ExpectedDiagnosticCodes ?? [],
             Guidance = BuildGuidance(entry, compatibilityStatus).ToArray()
         };
@@ -158,6 +159,9 @@ public static class PublicCompatibilityCatalog
         if (entry.ExpectedSkillNames is { Length: > 0 })
             yield return $"Expected bundled skills: {string.Join(", ", entry.ExpectedSkillNames)}.";
 
+        if (entry.ExpectedCliCommandNames is { Length: > 0 })
+            yield return $"Expected root CLI commands: {string.Join(", ", entry.ExpectedCliCommandNames)}.";
+
         if (compatibilityStatus.Equals("incompatible", StringComparison.OrdinalIgnoreCase) &&
             entry.ExpectedDiagnosticCodes is { Length: > 0 })
         {
@@ -213,6 +217,7 @@ internal sealed class CompatibilityCatalogManifestEntry
     public string[]? InstallExtraPackages { get; set; }
     public string[]? ExpectedToolNames { get; set; }
     public string[]? ExpectedSkillNames { get; set; }
+    public string[]? ExpectedCliCommandNames { get; set; }
     public string[]? ExpectedDiagnosticCodes { get; set; }
 }
 

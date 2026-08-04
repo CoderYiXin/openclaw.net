@@ -17,6 +17,7 @@ internal static class PluginCliCommands
 {
     private const string ConfigPathEnvironment = "OPENCLAW_CONFIG_PATH";
     private const string WorkspaceEnvironment = "OPENCLAW_WORKSPACE";
+    private const int MaxDescribeBytes = 1024 * 1024;
     private static readonly TimeSpan DescribeTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan ExecuteTimeout = TimeSpan.FromMinutes(10);
 
@@ -25,6 +26,9 @@ internal static class PluginCliCommands
         string[] args,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(command) || command.StartsWith('-'))
+            return null;
+
         var configPathValue = Environment.GetEnvironmentVariable(ConfigPathEnvironment);
         var configPath = Path.GetFullPath(GatewayConfigFile.ExpandPath(
             string.IsNullOrWhiteSpace(configPathValue)
@@ -155,15 +159,38 @@ internal static class PluginCliCommands
             return PluginCliDescribeResult.Failure($"Unable to start Node.js for plugin CLI discovery: {ex.Message}");
         }
 
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(DescribeTimeout);
-            await process.WaitForExitAsync(timeout.Token);
+            var stdoutTask = ReadCappedAsync(process.StandardOutput.BaseStream, timeout.Token);
+            var stderrTask = ReadCappedAsync(process.StandardError.BaseStream, timeout.Token);
+            var exitTask = process.WaitForExitAsync(timeout.Token);
+            var pendingReads = new List<Task<string?>> { stdoutTask, stderrTask };
+            while (!exitTask.IsCompleted && pendingReads.Count > 0)
+            {
+                var completed = await Task.WhenAny(pendingReads.Cast<Task>().Prepend(exitTask));
+                if (ReferenceEquals(completed, exitTask))
+                    break;
+
+                var completedRead = (Task<string?>)completed;
+                if (await completedRead is null)
+                {
+                    TryKill(process);
+                    await timeout.CancelAsync();
+                    return PluginCliDescribeResult.Failure("Plugin CLI discovery output exceeded the 1 MiB limit.");
+                }
+
+                pendingReads.Remove(completedRead);
+            }
+
+            await exitTask;
+            await Task.WhenAll(stdoutTask, stderrTask);
             var stdout = await stdoutTask;
             var stderr = await stderrTask;
+            if (stdout is null || stderr is null)
+                return PluginCliDescribeResult.Failure("Plugin CLI discovery output exceeded the 1 MiB limit.");
+
             if (process.ExitCode != 0)
             {
                 return PluginCliDescribeResult.Failure(
@@ -226,7 +253,8 @@ internal static class PluginCliCommands
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(ExecuteTimeout);
+            if (Console.IsInputRedirected)
+                timeout.CancelAfter(ExecuteTimeout);
             await process.WaitForExitAsync(timeout.Token);
             return process.ExitCode;
         }
@@ -269,6 +297,22 @@ internal static class PluginCliCommands
         process.StartInfo.Environment["OPENCLAW_PLUGIN_CLI_CONFIG_BASE64"] = Convert.ToBase64String(
             Encoding.UTF8.GetBytes(pluginConfig?.GetRawText() ?? "{}"));
         return process;
+    }
+
+    private static async Task<string?> ReadCappedAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        using var output = new MemoryStream();
+        var buffer = new byte[8192];
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(), cancellationToken);
+            if (read == 0)
+                return Encoding.UTF8.GetString(output.GetBuffer(), 0, checked((int)output.Length));
+            if (output.Length + read > MaxDescribeBytes)
+                return null;
+
+            output.Write(buffer, 0, read);
+        }
     }
 
     internal static HashSet<string> LoadBlockedPluginIds(string storagePath)
@@ -317,6 +361,7 @@ internal static class PluginCliCommands
         }
         catch (Exception ex) when (ex is Win32Exception or InvalidOperationException or NotSupportedException)
         {
+            Debug.WriteLine($"Unable to terminate plugin CLI process: {ex.Message}");
         }
     }
 

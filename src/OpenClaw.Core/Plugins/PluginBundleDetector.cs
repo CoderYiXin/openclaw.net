@@ -26,12 +26,7 @@ internal static class PluginBundleDetector
                 (Directory.Exists(Path.Combine(cursorRoot, "commands")) ||
                  Directory.Exists(Path.Combine(cursorRoot, "agents")) ||
                  Directory.Exists(Path.Combine(cursorRoot, "rules")) ||
-                 File.Exists(Path.Combine(cursorRoot, "hooks.json")))) ||
-               Directory.Exists(Path.Combine(rootPath, "agents")) ||
-               Directory.Exists(Path.Combine(rootPath, "hooks")) ||
-               File.Exists(Path.Combine(rootPath, ".mcp.json")) ||
-               File.Exists(Path.Combine(rootPath, ".lsp.json")) ||
-               File.Exists(Path.Combine(rootPath, "settings.json"));
+                 File.Exists(Path.Combine(cursorRoot, "hooks.json"))));
     }
 
     public static bool TryDetect(
@@ -74,6 +69,19 @@ internal static class PluginBundleDetector
         using (manifestDocument)
         {
             var manifestRoot = manifestDocument?.RootElement;
+            if (manifestRoot is { ValueKind: not JsonValueKind.Object })
+            {
+                var manifestPath = Path.Combine(rootPath, manifestRelativePath!.Replace('/', Path.DirectorySeparatorChar));
+                diagnostic = new PluginCompatibilityDiagnostic
+                {
+                    Code = "invalid_bundle_manifest",
+                    Message = $"The {bundleFormat} bundle manifest '{manifestPath}' must contain a JSON object.",
+                    Surface = "bundle_manifest",
+                    Path = manifestPath
+                };
+                return true;
+            }
+
             var rawId = GetString(manifestRoot, "id")
                 ?? GetString(manifestRoot, "name")
                 ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(rootPath));

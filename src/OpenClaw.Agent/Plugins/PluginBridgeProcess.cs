@@ -139,7 +139,8 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
                 return details.GetRawText();
             }
 
-            if (!result.TryGetProperty("content", out var contentArray))
+            if (!result.TryGetProperty("content", out var contentArray) ||
+                contentArray.ValueKind != JsonValueKind.Array)
                 return result.GetRawText();
 
             var sb = new StringBuilder();

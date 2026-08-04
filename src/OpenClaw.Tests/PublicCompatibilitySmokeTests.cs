@@ -66,8 +66,9 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
     [Trait("Category", "LatestCanary")]
     public async Task LatestNpmPackage_ReportsCompatibilityDrift(string scenarioId)
     {
-        if (!HasNode() || !IsLatestCanaryEnabled())
+        if (!IsLatestCanaryEnabled())
             return;
+        Assert.True(HasNode(), "OPENCLAW_LATEST_CANARY is enabled, but Node.js is unavailable.");
 
         var entry = PublicCompatibilityCatalog.GetCatalog().Items.Single(item => item.Id == scenarioId);
         Assert.False(string.IsNullOrWhiteSpace(entry.PackageName));
@@ -152,6 +153,9 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
 
             foreach (var toolName in entry.ExpectedToolNames ?? [])
                 Assert.Contains(tools, tool => string.Equals(tool.Name, toolName, StringComparison.Ordinal));
+
+            foreach (var commandName in entry.ExpectedCliCommandNames ?? [])
+                Assert.Contains(report.CliCommandNames, name => string.Equals(name, commandName, StringComparison.Ordinal));
 
             if (entry.ExpectedSkillNames is { Length: > 0 })
             {
