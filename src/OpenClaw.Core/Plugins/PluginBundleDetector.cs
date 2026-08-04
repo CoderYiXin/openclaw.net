@@ -54,7 +54,7 @@ internal static class PluginBundleDetector
             {
                 manifestDocument = JsonDocument.Parse(File.ReadAllText(manifestPath));
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
                 diagnostic = new PluginCompatibilityDiagnostic
                 {

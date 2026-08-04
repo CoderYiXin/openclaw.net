@@ -89,7 +89,7 @@ else
                                              Size="Size.Small"
                                              Color="@(context.Item.Loaded && context.Item.Enabled ? Color.Success : context.Item.Quarantined ? Color.Error : Color.Default)"
                                              Variant="@(context.Item.Loaded && context.Item.Enabled ? Variant.Filled : Variant.Outlined)">
-                                        @context.Item.Status
+                                        @PluginStatusLabel(context.Item)
                                     </MudChip>
                                 </CellTemplate>
                             </PropertyColumn>
@@ -473,6 +473,15 @@ else
 
     private static string PluginAccent(PluginInfo p)
         => p.Enabled ? "#10b981" : "#475569";
+
+    private string PluginStatusLabel(PluginInfo plugin)
+        => plugin.Quarantined
+            ? L["ops.quarantined"]
+            : plugin.Disabled
+                ? L["common.disabled"]
+                : plugin.Loaded
+                    ? L["ops.loaded"]
+                    : L["ops.notLoaded"];
 
     private static Color PolicyColor(string? policy)
         => policy?.ToLowerInvariant() switch

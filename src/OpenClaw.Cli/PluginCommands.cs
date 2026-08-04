@@ -616,7 +616,7 @@ internal static class PluginCommands
             {
                 Directory.Move(stagingDir, targetDir);
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 if (Directory.Exists(backupDir) && !Directory.Exists(targetDir))
                     Directory.Move(backupDir, targetDir);
@@ -625,7 +625,11 @@ internal static class PluginCommands
 
             if (Directory.Exists(backupDir))
             {
-                try { Directory.Delete(backupDir, recursive: true); } catch { /* successful install; stale backup is recoverable */ }
+                try { Directory.Delete(backupDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Successful install; a stale backup is recoverable.
+                }
             }
 
             return (true, null);
@@ -644,12 +648,14 @@ internal static class PluginCommands
         {
             if (Directory.Exists(stagingDir))
             {
-                try { Directory.Delete(stagingDir, recursive: true); } catch { }
+                try { Directory.Delete(stagingDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
 
             if (Directory.Exists(backupDir) && Directory.Exists(targetDir))
             {
-                try { Directory.Delete(backupDir, recursive: true); } catch { }
+                try { Directory.Delete(backupDir, recursive: true); }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
     }
@@ -704,7 +710,7 @@ internal static class PluginCommands
         {
             process.Start();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
             return PluginRuntimeInspection.Failure($"Unable to start Node.js for runtime inspection: {ex.Message}");
         }
@@ -765,7 +771,11 @@ internal static class PluginCommands
         {
             return PluginRuntimeInspection.Failure("Plugin runtime inspection timed out after 20 seconds.");
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or JsonException or NotSupportedException)
         {
             return PluginRuntimeInspection.Failure($"Plugin runtime inspection failed: {ex.Message}");
         }
@@ -776,7 +786,7 @@ internal static class PluginCommands
                 if (!process.HasExited)
                     process.Kill(entireProcessTree: true);
             }
-            catch
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
             {
             }
         }
@@ -1148,7 +1158,7 @@ internal static class PluginCommands
                     }
                 }
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
             {
                 return null;
             }
@@ -1170,7 +1180,7 @@ internal static class PluginCommands
             {
                 source = File.ReadAllText(file);
             }
-            catch
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 continue;
             }

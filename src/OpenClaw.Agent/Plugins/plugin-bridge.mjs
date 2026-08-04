@@ -594,11 +594,20 @@ function parseCliInvocation(command, argv) {
       options[option.name] = false;
     } else if (option.requiredValue || option.optionalValue) {
       const next = inlineValue ?? argv[index + 1];
-      if (next === undefined || (option.requiredValue && next.startsWith("-"))) {
+      const nextFlag = typeof next === "string" && next.startsWith("-")
+        ? next.slice(0, next.includes("=") ? next.indexOf("=") : undefined)
+        : undefined;
+      const nextIsKnownOption = inlineValue === undefined && nextFlag !== undefined &&
+        command.options.some((candidate) => candidate.long === nextFlag || candidate.short === nextFlag);
+      if (next === undefined || (option.requiredValue && nextIsKnownOption)) {
         throw new Error(`Option ${flag} requires a value.`);
       }
-      options[option.name] = next;
-      if (inlineValue === undefined) index++;
+      if (option.optionalValue && nextIsKnownOption) {
+        options[option.name] = true;
+      } else {
+        options[option.name] = next;
+        if (inlineValue === undefined) index++;
+      }
     } else {
       options[option.name] = true;
     }

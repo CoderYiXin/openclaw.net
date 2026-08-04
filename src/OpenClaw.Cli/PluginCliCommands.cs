@@ -53,9 +53,7 @@ internal static class PluginCliCommands
             return 1;
         }
 
-        var blockedPluginIds = loadedConfig
-            ? LoadBlockedPluginIds(config.Memory.StoragePath)
-            : new HashSet<string>(StringComparer.Ordinal);
+        var blockedPluginIds = LoadBlockedPluginIds(config.Memory.StoragePath);
         return await TryRunAsync(
             command,
             args,
@@ -174,8 +172,13 @@ internal static class PluginCliCommands
                         : stderr.Trim());
             }
 
-            var commands = JsonSerializer.Deserialize(
-                stdout,
+            var descriptorLine = stdout
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .LastOrDefault();
+            var commands = descriptorLine is null
+                ? null
+                : JsonSerializer.Deserialize(
+                descriptorLine,
                 CoreJsonContext.Default.BridgeCliCommandRegistrationArray);
             return commands is null
                 ? PluginCliDescribeResult.Failure("Plugin CLI discovery returned unreadable metadata.")
@@ -268,7 +271,7 @@ internal static class PluginCliCommands
         return process;
     }
 
-    private static HashSet<string> LoadBlockedPluginIds(string storagePath)
+    internal static HashSet<string> LoadBlockedPluginIds(string storagePath)
     {
         var result = new HashSet<string>(StringComparer.Ordinal);
         try

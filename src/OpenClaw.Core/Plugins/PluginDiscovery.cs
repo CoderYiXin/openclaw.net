@@ -605,7 +605,7 @@ public static class PluginDiscovery
 
             return new PluginPackageMetadata(pluginApiRange, minHostVersion, expectedIntegrity);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             return new PluginPackageMetadata();
         }

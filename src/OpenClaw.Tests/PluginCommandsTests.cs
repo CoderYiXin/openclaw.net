@@ -154,13 +154,16 @@ public sealed class PluginCommandsTests
                 Path.Combine(root, "index.js"),
                 $$"""
                 const fs = require("node:fs");
+                console.log("plugin registration noise");
                 module.exports = api => api.registerCli(({ program }) => {
                   const root = program.command("fixture").description("Fixture commands");
                   root.command("write")
                     .argument("<value>", "Value to write")
                     .option("--upper", "Uppercase the value")
+                    .requiredOption("--threshold <value>", "Threshold")
                     .action(async (value, options) => {
-                      fs.writeFileSync({{JsonSerializer.Serialize(markerPath)}}, options.upper ? value.toUpperCase() : value);
+                      const output = options.upper ? value.toUpperCase() : value;
+                      fs.writeFileSync({{JsonSerializer.Serialize(markerPath)}}, `${output}:${options.threshold}`);
                     });
                 }, { commands: ["fixture"] });
                 """);
@@ -169,7 +172,7 @@ public sealed class PluginCommandsTests
             Assert.NotNull(bridgeScript);
             var result = await PluginCliCommands.TryRunAsync(
                 "fixture",
-                ["write", "hello", "--upper"],
+                ["write", "hello", "--upper", "--threshold", "-1"],
                 new PluginsConfig { Load = new PluginLoadConfig { Paths = [root] } },
                 workspacePath: null,
                 new HashSet<string>(StringComparer.Ordinal),
@@ -177,7 +180,29 @@ public sealed class PluginCommandsTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(0, result);
-            Assert.Equal("HELLO", File.ReadAllText(markerPath));
+            Assert.Equal("HELLO:-1", File.ReadAllText(markerPath));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void PluginCliCommands_LoadBlockedPluginIds_ReadsQuarantineState()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var adminDir = Path.Combine(root, "admin");
+            Directory.CreateDirectory(adminDir);
+            File.WriteAllText(
+                Path.Combine(adminDir, "plugin-state.json"),
+                """[{"pluginId":"blocked-plugin","quarantined":true}]""");
+
+            var blocked = PluginCliCommands.LoadBlockedPluginIds(root);
+
+            Assert.Contains("blocked-plugin", blocked);
         }
         finally
         {
