@@ -282,10 +282,21 @@ public static class SkillLoader
                 var normalized = NormalizeBundleCommandContent(content, commandName);
                 var commandDir = Path.GetDirectoryName(commandFile) ?? commandRoot;
                 var skill = ParseSkillContent(normalized, commandDir, SkillSource.Plugin);
-                if (skill is not null)
-                    results[skill.Name] = skill;
-                else
+                if (skill is null)
+                {
                     logger.LogWarning("Failed to map bundle command at {Path} into a skill", commandFile);
+                    continue;
+                }
+
+                if (results.ContainsKey(skill.Name))
+                {
+                    logger.LogWarning(
+                        "Bundle command at {Path} overwrites existing skill '{Name}'",
+                        commandFile,
+                        skill.Name);
+                }
+
+                results[skill.Name] = skill;
             }
             catch (Exception ex) when (IsPathException(ex))
             {

@@ -109,7 +109,11 @@ internal static class PluginCliCommands
                 bridgeScript,
                 cancellationToken);
             if (!description.Success)
+            {
+                Console.Error.WriteLine(
+                    $"Plugin '{plugin.Manifest.Id}' did not report CLI commands: {description.Error}");
                 continue;
+            }
 
             if (description.Commands.Any(item =>
                     string.Equals(item.Name, command, StringComparison.Ordinal)))

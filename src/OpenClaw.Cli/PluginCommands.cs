@@ -740,11 +740,12 @@ internal static class PluginCommands
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(20));
+            using var emptyConfig = JsonDocument.Parse("{}");
             var initRequest = new BridgeInitRequest
             {
                 EntryPath = Path.GetFullPath(entryPath),
                 PluginId = pluginId,
-                Config = JsonDocument.Parse("{}").RootElement.Clone(),
+                Config = emptyConfig.RootElement.Clone(),
                 Transport = new BridgeTransportRuntimeConfig { Mode = "stdio" }
             };
             var request = new BridgeRequest
@@ -1244,7 +1245,7 @@ internal static class PluginCommands
     {
         if (!System.Text.RegularExpressions.Regex.IsMatch(
                 source,
-                $@"\b{System.Text.RegularExpressions.Regex.Escape(apiName)}\s*\(",
+                $@"\bapi\s*\.\s*{System.Text.RegularExpressions.Regex.Escape(apiName)}\s*\(",
                 System.Text.RegularExpressions.RegexOptions.CultureInvariant) ||
             diagnostics.Any(item => string.Equals(item.Code, code, StringComparison.Ordinal)))
             return;
@@ -1253,7 +1254,7 @@ internal static class PluginCommands
         {
             Severity = "error",
             Code = code,
-            Message = $"Plugin source references {apiName}(), which is not supported by OpenClaw.NET.",
+            Message = $"Plugin source references api.{apiName}(), which is not supported by OpenClaw.NET.",
             Surface = apiName,
             Path = file
         });

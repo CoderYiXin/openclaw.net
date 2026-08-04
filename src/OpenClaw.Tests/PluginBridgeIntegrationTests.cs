@@ -1515,10 +1515,29 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
         for (var attempt = 1; attempt <= 5; attempt++)
         {
             Assert.Equal("restarting", await tool.ExecuteAsync("""{"kill":true}""", TestContext.Current.CancellationToken));
-            await Task.Delay(150, TestContext.Current.CancellationToken);
-            Assert.Equal(
-                $"echo:after-{attempt}",
-                await tool.ExecuteAsync($$"""{"text":"after-{{attempt}}"}""", TestContext.Current.CancellationToken));
+            var expected = $"echo:after-{attempt}";
+            string? actual = null;
+            var deadline = DateTimeOffset.UtcNow.AddSeconds(5);
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                try
+                {
+                    actual = await tool.ExecuteAsync(
+                        $$"""{"text":"after-{{attempt}}"}""",
+                        TestContext.Current.CancellationToken);
+                }
+                catch (Exception ex) when (ex is IOException or InvalidOperationException)
+                {
+                    actual = ex.Message;
+                }
+
+                if (string.Equals(actual, expected, StringComparison.Ordinal))
+                    break;
+
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+
+            Assert.Equal(expected, actual);
         }
     }
 

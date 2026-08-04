@@ -67,7 +67,29 @@ public sealed class PluginCommandsTests
             Assert.True(inspection.Success);
             Assert.True(inspection.CanInstall);
             Assert.Equal("manifest-valid", inspection.CompatibilityStatus);
-            Assert.DoesNotContain(inspection.Diagnostics, item => item.Code == "unsupported_cli_registration");
+            Assert.DoesNotContain(
+                inspection.Diagnostics,
+                item => string.Equals(item.Severity, "error", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InspectCandidate_WithRegisterGatewayMethod_BlocksInstall()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "index.js"), "module.exports = api => api.registerGatewayMethod('unsafe', () => {});");
+
+            var inspection = PluginCommands.InspectCandidate(root, "./gateway-method-plugin", sourceIsNpm: false);
+
+            Assert.True(inspection.Success);
+            Assert.False(inspection.CanInstall);
+            Assert.Contains(inspection.Diagnostics, item => item.Code == "unsupported_gateway_method");
         }
         finally
         {
@@ -475,8 +497,15 @@ public sealed class PluginCommandsTests
                 UseShellExecute = false,
                 CreateNoWindow = true
             });
-            process?.WaitForExit(3000);
-            return process is { ExitCode: 0 };
+            if (process is null)
+                return false;
+            if (!process.WaitForExit(3000))
+            {
+                process.Kill(entireProcessTree: true);
+                return false;
+            }
+
+            return process.ExitCode == 0;
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

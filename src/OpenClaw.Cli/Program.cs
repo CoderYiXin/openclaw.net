@@ -234,6 +234,10 @@ internal static class Program
               openclaw plugins list                       List installed plugins
               openclaw plugins search <query>             Search npm for plugins
 
+              Installed plugins may also register root commands. Built-in commands
+              take precedence; disabled or quarantined plugins are not dispatched.
+              openclaw <plugin-command> --help            Show plugin command help
+
             Skill management:
               openclaw skill new "Community Research Insight Extractor" --category research
               openclaw skill validate community.research_insight
