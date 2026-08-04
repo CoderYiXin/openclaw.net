@@ -12,6 +12,28 @@ internal static class PluginBundleDetector
     private const string ClaudeManifest = ".claude-plugin/plugin.json";
     private const string CursorManifest = ".cursor-plugin/plugin.json";
 
+    internal static bool HasExplicitOrStrongMarker(string rootPath)
+    {
+        if (File.Exists(Path.Combine(rootPath, CodexManifest.Replace('/', Path.DirectorySeparatorChar))) ||
+            File.Exists(Path.Combine(rootPath, ClaudeManifest.Replace('/', Path.DirectorySeparatorChar))) ||
+            File.Exists(Path.Combine(rootPath, CursorManifest.Replace('/', Path.DirectorySeparatorChar))))
+        {
+            return true;
+        }
+
+        var cursorRoot = Path.Combine(rootPath, ".cursor");
+        return (Directory.Exists(cursorRoot) &&
+                (Directory.Exists(Path.Combine(cursorRoot, "commands")) ||
+                 Directory.Exists(Path.Combine(cursorRoot, "agents")) ||
+                 Directory.Exists(Path.Combine(cursorRoot, "rules")) ||
+                 File.Exists(Path.Combine(cursorRoot, "hooks.json")))) ||
+               Directory.Exists(Path.Combine(rootPath, "agents")) ||
+               Directory.Exists(Path.Combine(rootPath, "hooks")) ||
+               File.Exists(Path.Combine(rootPath, ".mcp.json")) ||
+               File.Exists(Path.Combine(rootPath, ".lsp.json")) ||
+               File.Exists(Path.Combine(rootPath, "settings.json"));
+    }
+
     public static bool TryDetect(
         string rootPath,
         out DiscoveredPlugin? plugin,

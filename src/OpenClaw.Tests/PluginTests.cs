@@ -148,6 +148,23 @@ public class PluginDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public void Discover_StandaloneEntryWithWeakBundleFolders_RemainsNative()
+    {
+        var pluginDir = Path.Combine(_tempDir, "standalone-with-content");
+        Directory.CreateDirectory(Path.Combine(pluginDir, "skills"));
+        Directory.CreateDirectory(Path.Combine(pluginDir, "commands"));
+        File.WriteAllText(Path.Combine(pluginDir, "index.js"), "module.exports = () => {};");
+
+        var plugin = Assert.Single(PluginDiscovery.Discover(new PluginsConfig
+        {
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        }));
+
+        Assert.Equal(PluginFormats.Native, plugin.Format);
+        Assert.EndsWith("index.js", plugin.EntryPath, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Discover_SkipsBrokenManifestJson()
     {
         // Arrange – invalid manifest JSON should be ignored without throwing

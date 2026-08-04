@@ -137,6 +137,15 @@ public static class PluginDiscovery
         if (File.Exists(packageJsonPath) && TryAddPluginPack(dir, packageJsonPath, seen, result))
             return;
 
+        var conventionalEntry = new[] { "index.js", "index.mjs", "index.cjs", "index.ts" }
+            .Select(candidate => Path.Combine(dir, candidate))
+            .FirstOrDefault(File.Exists);
+        if (conventionalEntry is not null && !PluginBundleDetector.HasExplicitOrStrongMarker(dir))
+        {
+            TryAddPluginFromFile(conventionalEntry, seen, result);
+            return;
+        }
+
         if (PluginBundleDetector.TryDetect(dir, out var bundle, out var bundleDiagnostic))
         {
             if (bundleDiagnostic is not null)
@@ -181,13 +190,9 @@ public static class PluginDiscovery
             return;
         }
 
-        foreach (var candidate in new[] { "index.js", "index.mjs", "index.cjs", "index.ts" })
+        if (conventionalEntry is not null)
         {
-            var entryPath = Path.Combine(dir, candidate);
-            if (!File.Exists(entryPath))
-                continue;
-
-            TryAddPluginFromFile(entryPath, seen, result);
+            TryAddPluginFromFile(conventionalEntry, seen, result);
             return;
         }
 
