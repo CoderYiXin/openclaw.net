@@ -18,6 +18,11 @@
     <DebuggerSupport>false</DebuggerSupport>
     <MetricsSupport>true</MetricsSupport>
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
+    <!-- Exclude skills/ from default Content auto-include so the explicit
+         <Content Include="skills\**\*"> below is the sole source. Without this,
+         the SDK auto-includes files like *.json/manifest.jsonld and trips
+         NETSDK1022 "duplicate Content items". -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);skills\**</DefaultItemExcludes>
     <!-- Optional protocol packages can carry transitive AOT warnings; keep package-level warnings suppressed while surfacing project-owned trim diagnostics. -->
     <NoWarn>$(NoWarn);IL2104;IL3000;IL3002;IL3053</NoWarn>
   </PropertyGroup>

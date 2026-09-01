@@ -4,6 +4,8 @@ using System.Text;
 using System.Text.Json;
 using OpenClaw.Core.Models;
 using Microsoft.Extensions.Logging;
+using YamlDotNet.Core;
+using YamlDotNet.RepresentationModel;
 
 namespace OpenClaw.Core.Skills;
 
@@ -740,352 +742,107 @@ public static class SkillLoader
         if (string.IsNullOrWhiteSpace(yaml))
             return false;
 
-        var lines = yaml.Split('\n')
-            .Select(static line => line.TrimEnd('\r'))
-            .ToList();
-
-        var index = 0;
-        SkipYamlBlankLines(lines, ref index);
-        if (index >= lines.Count)
-            return false;
-
-        var indent = GetIndent(lines[index]);
-        if (!TryParseYamlNode(lines, ref index, indent, out var node) || node is null)
-            return false;
-
-        SkipYamlBlankLines(lines, ref index);
-        if (index < lines.Count)
-            return false;
-
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
+        try
         {
-            node.WriteTo(writer);
-        }
+            using var reader = new StringReader(yaml);
+            var stream = new YamlStream();
+            stream.Load(reader);
 
-        json = Encoding.UTF8.GetString(stream.ToArray());
-        return true;
-    }
-
-    private static bool TryParseYamlNode(IReadOnlyList<string> lines, ref int index, int indent, out SkillYamlNode? node)
-    {
-        node = null;
-        SkipYamlBlankLines(lines, ref index);
-        if (index >= lines.Count)
-            return false;
-
-        var line = lines[index];
-        var lineIndent = GetIndent(line);
-        if (lineIndent < indent)
-            return false;
-
-        var text = line[lineIndent..].TrimEnd();
-        return text.StartsWith("- ", StringComparison.Ordinal)
-            ? TryParseYamlArray(lines, ref index, lineIndent, out node)
-            : TryParseYamlMapping(lines, ref index, lineIndent, out node);
-    }
-
-    private static bool TryParseYamlMapping(IReadOnlyList<string> lines, ref int index, int indent, out SkillYamlNode? node)
-    {
-        var properties = new List<KeyValuePair<string, SkillYamlNode>>();
-        node = null;
-
-        while (index < lines.Count)
-        {
-            SkipYamlBlankLines(lines, ref index);
-            if (index >= lines.Count)
-                break;
-
-            var line = lines[index];
-            var lineIndent = GetIndent(line);
-            if (lineIndent < indent)
-                break;
-            if (lineIndent > indent)
+            if (stream.Documents.Count == 0)
                 return false;
 
-            var text = line[lineIndent..].TrimEnd();
-            if (text.StartsWith("- ", StringComparison.Ordinal))
-                break;
-
-            if (!TrySplitYamlKeyValue(text, out var key, out var value))
+            var root = stream.Documents[0].RootNode;
+            if (root is null)
                 return false;
 
-            if (!TryParseYamlValue(lines, ref index, indent, value, out var valueNode) || valueNode is null)
-                return false;
-
-            properties.Add(new KeyValuePair<string, SkillYamlNode>(NormalizeYamlPropertyName(key), valueNode));
-        }
-
-        node = new SkillYamlObjectNode(properties);
-        return true;
-    }
-
-    private static bool TryParseYamlArray(IReadOnlyList<string> lines, ref int index, int indent, out SkillYamlNode? node)
-    {
-        var items = new List<SkillYamlNode>();
-        node = null;
-
-        while (index < lines.Count)
-        {
-            SkipYamlBlankLines(lines, ref index);
-            if (index >= lines.Count)
-                break;
-
-            var line = lines[index];
-            var lineIndent = GetIndent(line);
-            if (lineIndent < indent)
-                break;
-            if (lineIndent > indent)
-                return false;
-
-            var text = line[lineIndent..].TrimEnd();
-            if (!text.StartsWith("- ", StringComparison.Ordinal))
-                break;
-
-            var itemText = text[2..].Trim();
-            if (string.IsNullOrWhiteSpace(itemText))
+            using var output = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(output))
             {
-                index++;
-                var childIndex = FindNextYamlContentLine(lines, index);
-                if (childIndex < 0 || GetIndent(lines[childIndex]) <= indent)
-                {
-                    items.Add(new SkillYamlScalarNode(string.Empty));
-                    continue;
-                }
-
-                var childIndent = GetIndent(lines[childIndex]);
-                if (!TryParseYamlNode(lines, ref index, childIndent, out var childNode) || childNode is null)
-                    return false;
-
-                items.Add(childNode);
-                continue;
+                WriteYamlNode(writer, root);
             }
 
-            if (TrySplitYamlKeyValue(itemText, out var key, out var value))
-            {
-                var properties = new List<KeyValuePair<string, SkillYamlNode>>();
-                if (!TryParseYamlInlineValueOrLiteral(lines, ref index, indent, value, out var firstValue) || firstValue is null)
-                    return false;
-
-                properties.Add(new KeyValuePair<string, SkillYamlNode>(NormalizeYamlPropertyName(key), firstValue));
-
-                var childIndex = FindNextYamlContentLine(lines, index);
-                if (childIndex >= 0 && GetIndent(lines[childIndex]) > indent)
-                {
-                    var childIndent = GetIndent(lines[childIndex]);
-                    if (!TryParseYamlMapping(lines, ref index, childIndent, out var continuationNode) ||
-                        continuationNode is not SkillYamlObjectNode continuationObject)
-                    {
-                        return false;
-                    }
-
-                    properties.AddRange(continuationObject.Properties);
-                }
-
-                items.Add(new SkillYamlObjectNode(properties));
-                continue;
-            }
-
-            items.Add(ParseYamlScalar(itemText));
-            index++;
-
-            var nextIndex = FindNextYamlContentLine(lines, index);
-            if (nextIndex >= 0 && GetIndent(lines[nextIndex]) > indent)
-                return false;
-        }
-
-        node = new SkillYamlArrayNode(items);
-        return true;
-    }
-
-    private static bool TryParseYamlValue(
-        IReadOnlyList<string> lines,
-        ref int index,
-        int parentIndent,
-        string rawValue,
-        out SkillYamlNode? node)
-    {
-        if (TryParseYamlInlineValueOrLiteral(lines, ref index, parentIndent, rawValue, out node))
-            return true;
-
-        node = null;
-        return false;
-    }
-
-    private static bool TryParseYamlInlineValueOrLiteral(
-        IReadOnlyList<string> lines,
-        ref int index,
-        int parentIndent,
-        string rawValue,
-        out SkillYamlNode? node)
-    {
-        node = null;
-        var value = rawValue.Trim();
-
-        if (IsYamlLiteralIndicator(value))
-        {
-            index++;
-            node = new SkillYamlScalarNode(ParseYamlLiteralBlock(lines, ref index, parentIndent));
+            json = Encoding.UTF8.GetString(output.ToArray());
             return true;
         }
-
-        if (string.IsNullOrWhiteSpace(value))
+        catch (YamlException)
         {
-            index++;
-            var childIndex = FindNextYamlContentLine(lines, index);
-            if (childIndex < 0 || GetIndent(lines[childIndex]) <= parentIndent)
-            {
-                node = new SkillYamlScalarNode(string.Empty);
-                return true;
-            }
-
-            var childIndent = GetIndent(lines[childIndex]);
-            return TryParseYamlNode(lines, ref index, childIndent, out node);
-        }
-
-        node = ParseYamlScalar(value);
-        index++;
-        return true;
-    }
-
-    private static SkillYamlNode ParseYamlScalar(string rawValue)
-    {
-        var value = rawValue.Trim();
-        if (value.StartsWith("[", StringComparison.Ordinal) && value.EndsWith("]", StringComparison.Ordinal))
-        {
-            return ParseYamlInlineArray(value);
-        }
-
-        if (value.Equals("true", StringComparison.OrdinalIgnoreCase))
-            return new SkillYamlScalarNode(true);
-
-        if (value.Equals("false", StringComparison.OrdinalIgnoreCase))
-            return new SkillYamlScalarNode(false);
-
-        if (value.Equals("null", StringComparison.OrdinalIgnoreCase) || value.Equals("~", StringComparison.Ordinal))
-            return new SkillYamlScalarNode(null);
-
-        if (long.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var longValue))
-            return new SkillYamlScalarNode(longValue);
-
-        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var doubleValue))
-            return new SkillYamlScalarNode(doubleValue);
-
-        return new SkillYamlScalarNode(UnquoteYamlScalar(value));
-    }
-
-    private static SkillYamlArrayNode ParseYamlInlineArray(string rawValue)
-    {
-        var content = rawValue[1..^1].Trim();
-        if (string.IsNullOrWhiteSpace(content))
-            return new SkillYamlArrayNode([]);
-
-        var items = SplitYamlInlineArray(content)
-            .Select(ParseYamlScalar)
-            .ToList();
-        return new SkillYamlArrayNode(items);
-    }
-
-    private static IEnumerable<string> SplitYamlInlineArray(string content)
-    {
-        var start = 0;
-        var quote = '\0';
-        var escaped = false;
-
-        for (var index = 0; index < content.Length; index++)
-        {
-            var character = content[index];
-            if (quote != '\0')
-            {
-                if (quote == '"' && character == '\\' && !escaped)
-                {
-                    escaped = true;
-                    continue;
-                }
-
-                if (character == quote && !escaped)
-                    quote = '\0';
-
-                escaped = false;
-                continue;
-            }
-
-            if (character is '"' or '\'')
-            {
-                quote = character;
-                continue;
-            }
-
-            if (character != ',')
-                continue;
-
-            yield return content[start..index].Trim();
-            start = index + 1;
-        }
-
-        yield return content[start..].Trim();
-    }
-
-    private static string ParseYamlLiteralBlock(IReadOnlyList<string> lines, ref int index, int parentIndent)
-    {
-        var literalLines = new List<string>();
-        var contentIndent = -1;
-
-        while (index < lines.Count)
-        {
-            var line = lines[index];
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                literalLines.Add(string.Empty);
-                index++;
-                continue;
-            }
-
-            var lineIndent = GetIndent(line);
-            if (lineIndent <= parentIndent)
-                break;
-
-            if (contentIndent < 0)
-                contentIndent = lineIndent;
-
-            var remove = Math.Min(contentIndent, line.Length);
-            literalLines.Add(line[remove..].TrimEnd());
-            index++;
-        }
-
-        return string.Join('\n', literalLines);
-    }
-
-    private static bool TrySplitYamlKeyValue(string text, out string key, out string value)
-    {
-        key = string.Empty;
-        value = string.Empty;
-
-        var colonIndex = text.IndexOf(':');
-        if (colonIndex <= 0)
             return false;
-
-        key = text[..colonIndex].Trim();
-        value = text[(colonIndex + 1)..].Trim();
-        return key.Length > 0;
+        }
     }
 
-    private static string NormalizeYamlPropertyName(string key)
-        => key switch
+    private static void WriteYamlNode(Utf8JsonWriter writer, YamlNode node)
+    {
+        switch (node)
         {
-            "skill_exec_entrypoint" => "entrypoint",
-            "skill_exec_args" => "args",
-            "skill_exec_stdin" => "stdin",
-            "skill_exec_cwd" => "cwd",
-            "skill_exec_parse_mode" => "parse_mode",
-            _ => key
-        };
+            case YamlMappingNode mapping:
+                writer.WriteStartObject();
+                foreach (var entry in mapping.Children)
+                {
+                    var keyNode = entry.Key;
+                    var key = keyNode is YamlScalarNode keyScalar && keyScalar.Value is not null
+                        ? keyScalar.Value
+                        : keyNode.ToString() ?? string.Empty;
+                    writer.WritePropertyName(key);
+                    WriteYamlNode(writer, entry.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case YamlSequenceNode sequence:
+                writer.WriteStartArray();
+                foreach (var item in sequence.Children)
+                    WriteYamlNode(writer, item);
+                writer.WriteEndArray();
+                break;
+            case YamlScalarNode scalar:
+                WriteYamlScalar(writer, scalar.Value);
+                break;
+            default:
+                writer.WriteNullValue();
+                break;
+        }
+    }
 
-    private static bool IsYamlLiteralIndicator(string value)
-        => value.Equals("|", StringComparison.Ordinal) ||
-           value.Equals("|-", StringComparison.Ordinal) ||
-           value.Equals("|+", StringComparison.Ordinal) ||
-           value.StartsWith("|", StringComparison.Ordinal);
+    private static void WriteYamlScalar(Utf8JsonWriter writer, string? value)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            writer.WriteStringValue(value);
+            return;
+        }
+
+        if (trimmed.Equals("null", StringComparison.Ordinal) || trimmed.Equals("~", StringComparison.Ordinal))
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        if (bool.TryParse(trimmed, out var boolValue))
+        {
+            writer.WriteBooleanValue(boolValue);
+            return;
+        }
+
+        if (long.TryParse(trimmed, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var longValue))
+        {
+            writer.WriteNumberValue(longValue);
+            return;
+        }
+
+        if (double.TryParse(trimmed, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var doubleValue))
+        {
+            writer.WriteNumberValue(doubleValue);
+            return;
+        }
+
+        writer.WriteStringValue(value);
+    }
 
     private static string UnquoteYamlScalar(string value)
     {
@@ -1123,26 +880,6 @@ public static class SkillLoader
         return builder.ToString();
     }
 
-    private static int FindNextYamlContentLine(IReadOnlyList<string> lines, int startIndex)
-    {
-        for (var index = startIndex; index < lines.Count; index++)
-        {
-            if (!IsYamlIgnorableLine(lines[index]))
-                return index;
-        }
-
-        return -1;
-    }
-
-    private static void SkipYamlBlankLines(IReadOnlyList<string> lines, ref int index)
-    {
-        while (index < lines.Count && IsYamlIgnorableLine(lines[index]))
-            index++;
-    }
-
-    private static bool IsYamlIgnorableLine(string line)
-        => string.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith("#", StringComparison.Ordinal);
-
     private static int GetIndent(string line)
     {
         var indent = 0;
@@ -1150,87 +887,6 @@ public static class SkillLoader
             indent++;
 
         return indent;
-    }
-
-    private abstract class SkillYamlNode
-    {
-        internal abstract void WriteTo(Utf8JsonWriter writer);
-    }
-
-    private sealed class SkillYamlObjectNode : SkillYamlNode
-    {
-        internal SkillYamlObjectNode(IReadOnlyList<KeyValuePair<string, SkillYamlNode>> properties)
-        {
-            Properties = properties;
-        }
-
-        internal IReadOnlyList<KeyValuePair<string, SkillYamlNode>> Properties { get; }
-
-        internal override void WriteTo(Utf8JsonWriter writer)
-        {
-            writer.WriteStartObject();
-            foreach (var (key, value) in Properties)
-            {
-                writer.WritePropertyName(key);
-                value.WriteTo(writer);
-            }
-
-            writer.WriteEndObject();
-        }
-    }
-
-    private sealed class SkillYamlArrayNode : SkillYamlNode
-    {
-        internal SkillYamlArrayNode(IReadOnlyList<SkillYamlNode> items)
-        {
-            Items = items;
-        }
-
-        private IReadOnlyList<SkillYamlNode> Items { get; }
-
-        internal override void WriteTo(Utf8JsonWriter writer)
-        {
-            writer.WriteStartArray();
-            foreach (var item in Items)
-                item.WriteTo(writer);
-
-            writer.WriteEndArray();
-        }
-    }
-
-    private sealed class SkillYamlScalarNode : SkillYamlNode
-    {
-        internal SkillYamlScalarNode(object? value)
-        {
-            Value = value;
-        }
-
-        private object? Value { get; }
-
-        internal override void WriteTo(Utf8JsonWriter writer)
-        {
-            switch (Value)
-            {
-                case null:
-                    writer.WriteNullValue();
-                    break;
-                case bool boolValue:
-                    writer.WriteBooleanValue(boolValue);
-                    break;
-                case long longValue:
-                    writer.WriteNumberValue(longValue);
-                    break;
-                case double doubleValue:
-                    writer.WriteNumberValue(doubleValue);
-                    break;
-                case string stringValue:
-                    writer.WriteStringValue(stringValue);
-                    break;
-                default:
-                    writer.WriteStringValue(Value.ToString());
-                    break;
-            }
-        }
     }
 
     internal static MetaSkillComposition? ParseComposition(string json)
