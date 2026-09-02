@@ -1,4 +1,3 @@
-#if OPENCLAW_ENABLE_MAF_EXPERIMENT
 using OpenClaw.Core.Middleware;
 using OpenClaw.Core.Models;
 using OpenClaw.Gateway.Mcp;
@@ -36,7 +35,8 @@ internal sealed class OpenClawA2AExecutionBridge : IOpenClawA2AExecutionBridge
         var (handled, commandResponse) = await runtime.CommandProcessor.TryProcessCommandAsync(
             session,
             request.UserText,
-            cancellationToken);
+            cancellationToken,
+            sessionLockHeld: true);
         if (handled)
         {
             if (!string.IsNullOrWhiteSpace(commandResponse))
@@ -89,4 +89,3 @@ internal sealed class OpenClawA2AExecutionBridge : IOpenClawA2AExecutionBridge
         }
     }
 }
-#endif

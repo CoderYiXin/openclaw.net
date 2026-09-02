@@ -15,8 +15,10 @@ public static class PluginCapabilityPolicy
     public const string Skills = "skills";
     public const string Channels = "channels";
     public const string Commands = "commands";
+    public const string Cli = "cli";
     public const string Providers = "providers";
     public const string Hooks = "hooks";
+    public const string Memory = "memory";
     public const string NativeDynamic = "native_dynamic";
 
     public static string[] Normalize(IEnumerable<string> capabilities)

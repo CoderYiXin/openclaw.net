@@ -27,18 +27,18 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
         AgentEventQueue eventQueue,
         CancellationToken cancellationToken)
     {
-        var updater = new TaskUpdater(eventQueue, context.TaskId, context.ContextId);
-        await updater.SubmitAsync(cancellationToken);
-        await updater.StartWorkAsync(null, cancellationToken);
+        var taskId = string.IsNullOrWhiteSpace(context.TaskId)
+            ? Guid.NewGuid().ToString("N")
+            : context.TaskId;
+        var contextId = string.IsNullOrWhiteSpace(context.ContextId)
+            ? taskId
+            : context.ContextId;
 
-        var request = new OpenClawA2AExecutionRequest
+        if (context.StreamingResponse)
         {
-            SessionId = context.TaskId,
-            ChannelId = "a2a",
-            SenderId = string.IsNullOrWhiteSpace(context.ContextId) ? "a2a-client" : context.ContextId,
-            UserText = ExtractUserText(context),
-            MessageId = context.Message?.MessageId
-        };
+            await ExecuteStreamingAsync(context, eventQueue, taskId, contextId, cancellationToken);
+            return;
+        }
 
         var responseText = new StringBuilder();
         string? errorMessage = null;
@@ -46,7 +46,14 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
         try
         {
             await _bridge.ExecuteStreamingAsync(
-                request,
+                new OpenClawA2AExecutionRequest
+                {
+                    SessionId = taskId,
+                    ChannelId = "a2a",
+                    SenderId = contextId,
+                    UserText = ExtractUserText(context),
+                    MessageId = context.Message?.MessageId
+                },
                 (evt, ct) =>
                 {
                     switch (evt.Type)
@@ -61,7 +68,7 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
 
                     return ValueTask.CompletedTask;
                 },
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -69,21 +76,160 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "A2A execution failed for task {TaskId}", context.TaskId);
-            await updater.FailAsync(CreateAgentMessage("A2A request failed."), cancellationToken);
+            _logger.LogError(ex, "A2A execution failed for task {TaskId}", taskId);
+            await eventQueue.EnqueueMessageAsync(
+                CreateAgentMessage("A2A request failed.", taskId, contextId),
+                cancellationToken);
             return;
         }
 
         if (!string.IsNullOrWhiteSpace(errorMessage))
         {
-            await updater.FailAsync(CreateAgentMessage(errorMessage), cancellationToken);
+            _logger.LogWarning("A2A execution failed for task {TaskId}: {Message}", taskId, errorMessage);
+            await eventQueue.EnqueueMessageAsync(
+                CreateAgentMessage(errorMessage, taskId, contextId),
+                cancellationToken);
             return;
         }
 
-        await updater.CompleteAsync(
+        await eventQueue.EnqueueMessageAsync(
             responseText.Length > 0
-                ? CreateAgentMessage(responseText.ToString())
-                : CreateAgentMessage($"[{_options.AgentName}] Request completed."),
+                ? CreateAgentMessage(responseText.ToString(), taskId, contextId)
+                : CreateAgentMessage($"[{OpenClawA2AAgent.GetDisplayName(_options)}] Request completed.", taskId, contextId),
+            cancellationToken);
+    }
+
+    private async Task ExecuteStreamingAsync(
+        RequestContext context,
+        AgentEventQueue eventQueue,
+        string taskId,
+        string contextId,
+        CancellationToken cancellationToken)
+    {
+        var updater = new TaskUpdater(eventQueue, taskId, contextId);
+        var responseText = new StringBuilder();
+        string? errorMessage = null;
+        var deltaCount = 0;
+        string? pendingDelta = null;
+
+        await updater.SubmitAsync(cancellationToken);
+        await updater.StartWorkAsync(null!, cancellationToken);
+
+        try
+        {
+            await _bridge.ExecuteStreamingAsync(
+                new OpenClawA2AExecutionRequest
+                {
+                    SessionId = taskId,
+                    ChannelId = "a2a",
+                    SenderId = contextId,
+                    UserText = ExtractUserText(context),
+                    MessageId = context.Message?.MessageId
+                },
+                async (evt, ct) =>
+                {
+                    switch (evt.Type)
+                    {
+                        case AgentStreamEventType.TextDelta when !string.IsNullOrEmpty(evt.Content):
+                            deltaCount++;
+                            responseText.Append(evt.Content);
+                            if (!string.IsNullOrEmpty(pendingDelta))
+                            {
+                                await updater.AddArtifactAsync(
+                                    [Part.FromText(pendingDelta)],
+                                    artifactId: "text-delta",
+                                    name: "Streaming response",
+                                    description: "Incremental text from agent",
+                                    lastChunk: false,
+                                    append: true,
+                                    cancellationToken: ct);
+                            }
+
+                            pendingDelta = evt.Content;
+                            break;
+                        case AgentStreamEventType.Error when !string.IsNullOrWhiteSpace(evt.Content):
+                            errorMessage = evt.Content;
+                            break;
+                    }
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "A2A streaming execution failed for task {TaskId} after {DeltaCount} deltas", taskId, deltaCount);
+            if (!string.IsNullOrEmpty(pendingDelta))
+            {
+                await updater.AddArtifactAsync(
+                    [Part.FromText(pendingDelta)],
+                    artifactId: "text-delta",
+                    name: "Streaming response",
+                    description: "Incremental text from agent",
+                    lastChunk: false,
+                    append: true,
+                    cancellationToken: cancellationToken);
+            }
+
+            await updater.FailAsync(
+                CreateAgentMessage("A2A request failed.", taskId, contextId),
+                cancellationToken);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            _logger.LogWarning(
+                "A2A streaming execution failed for task {TaskId} after {DeltaCount} deltas: {Message}",
+                taskId,
+                deltaCount,
+                errorMessage);
+
+            if (!string.IsNullOrEmpty(pendingDelta))
+            {
+                await updater.AddArtifactAsync(
+                    [Part.FromText(pendingDelta)],
+                    artifactId: "text-delta",
+                    name: "Streaming response",
+                    description: "Incremental text from agent",
+                    lastChunk: false,
+                    append: true,
+                    cancellationToken: cancellationToken);
+            }
+
+            await updater.FailAsync(CreateAgentMessage(errorMessage, taskId, contextId), cancellationToken);
+            return;
+        }
+
+        if (deltaCount == 0)
+        {
+            var fallbackText = $"[{OpenClawA2AAgent.GetDisplayName(_options)}] Request completed.";
+            responseText.Append(fallbackText);
+            await updater.AddArtifactAsync(
+                [Part.FromText(fallbackText)],
+                artifactId: "text-delta",
+                name: "Streaming response",
+                description: "Incremental text from agent",
+                lastChunk: true,
+                append: true,
+                cancellationToken: cancellationToken);
+        }
+        else if (!string.IsNullOrEmpty(pendingDelta))
+        {
+            await updater.AddArtifactAsync(
+                [Part.FromText(pendingDelta)],
+                artifactId: "text-delta",
+                name: "Streaming response",
+                description: "Incremental text from agent",
+                lastChunk: true,
+                append: true,
+                cancellationToken: cancellationToken);
+        }
+
+        await updater.CompleteAsync(
+            CreateAgentMessage(responseText.ToString(), taskId, contextId),
             cancellationToken);
     }
 
@@ -92,7 +238,17 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
         AgentEventQueue eventQueue,
         CancellationToken cancellationToken)
     {
-        var updater = new TaskUpdater(eventQueue, context.TaskId, context.ContextId);
+        if (string.IsNullOrWhiteSpace(context.TaskId))
+        {
+            _logger.LogDebug("Ignoring A2A cancellation request without a task id.");
+            return;
+        }
+
+        var taskId = context.TaskId;
+        var contextId = string.IsNullOrWhiteSpace(context.ContextId)
+            ? taskId
+            : context.ContextId;
+        var updater = new TaskUpdater(eventQueue, taskId, contextId);
         await updater.CancelAsync(cancellationToken);
     }
 
@@ -111,10 +267,13 @@ public sealed class OpenClawA2AAgentHandler : IAgentHandler
         return string.Empty;
     }
 
-    private static Message CreateAgentMessage(string text)
+    private static Message CreateAgentMessage(string text, string taskId, string contextId)
         => new()
         {
             Role = Role.Agent,
+            MessageId = Guid.NewGuid().ToString("N"),
+            TaskId = taskId,
+            ContextId = contextId,
             Parts = [Part.FromText(text)]
         };
 }

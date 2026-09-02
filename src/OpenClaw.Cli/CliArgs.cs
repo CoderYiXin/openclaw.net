@@ -82,10 +82,16 @@ internal sealed class CliArgs
             or "--apply"
             or "--non-interactive"
             or "--offline"
+            or "--strict"
             or "--require-provider"
             or "--with-companion"
             or "--open-browser"
             or "--skip-verify"
             or "--json"
-            or "--anonymize";
+            or "--anonymize"
+            or "--test"
+            or "--dry-run"
+            or "--yes"
+            or "--accept-license"
+            or "--no-optional-files";
 }

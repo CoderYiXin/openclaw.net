@@ -8,6 +8,7 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
 {
     private readonly IAgentRuntime _agentRuntime;
     private readonly ILogger<SkillWatcherService> _logger;
+    private readonly Action<IReadOnlyList<SkillDefinition>>? _onSkillsReloaded;
     private readonly Channel<byte> _reloadRequests = Channel.CreateUnbounded<byte>(new UnboundedChannelOptions
     {
         SingleReader = true,
@@ -27,10 +28,12 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
         string? workspacePath,
         IReadOnlyList<string>? pluginSkillDirs,
         IAgentRuntime agentRuntime,
-        ILogger<SkillWatcherService> logger)
+        ILogger<SkillWatcherService> logger,
+        Action<IReadOnlyList<SkillDefinition>>? onSkillsReloaded = null)
     {
         _agentRuntime = agentRuntime;
         _logger = logger;
+        _onSkillsReloaded = onSkillsReloaded;
         _watchRoots = GetWatchRoots(config, workspacePath, pluginSkillDirs)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -72,6 +75,23 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
                 watcher.Deleted += OnWatcherChanged;
                 watcher.Renamed += OnWatcherRenamed;
                 _watchers.Add(watcher);
+
+                // Also watch contract files (artifacts.json, projection indexes, etc.)
+                var jsonWatcher = new FileSystemWatcher(root, "*.json")
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.CreationTime |
+                                   NotifyFilters.FileName |
+                                   NotifyFilters.LastWrite |
+                                   NotifyFilters.Size,
+                    EnableRaisingEvents = true
+                };
+
+                jsonWatcher.Changed += OnWatcherChanged;
+                jsonWatcher.Created += OnWatcherChanged;
+                jsonWatcher.Deleted += OnWatcherChanged;
+                jsonWatcher.Renamed += OnWatcherRenamed;
+                _watchers.Add(jsonWatcher);
             }
             catch (Exception ex)
             {
@@ -85,7 +105,7 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
             return;
         }
 
-        _logger.LogInformation("Watching {Count} skill directories for SKILL.md changes.", _watchers.Count);
+        _logger.LogInformation("Watching {Count} skill watchers for SKILL.md and contract JSON changes.", _watchers.Count);
     }
 
     public void Dispose()
@@ -173,11 +193,32 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
             yield return Path.Combine(workspacePath, "skills");
     }
 
-    private void OnWatcherChanged(object sender, FileSystemEventArgs e) => ScheduleReload();
+    private void OnWatcherChanged(object sender, FileSystemEventArgs e)
+    {
+        if (ShouldReloadForPath(e.FullPath))
+            ScheduleReload();
+    }
 
-    private void OnWatcherRenamed(object sender, RenamedEventArgs e) => ScheduleReload();
+    private void OnWatcherRenamed(object sender, RenamedEventArgs e)
+    {
+        if (ShouldReloadForPath(e.FullPath) || ShouldReloadForPath(e.OldFullPath))
+            ScheduleReload();
+    }
 
     internal void NotifySkillChanged() => ScheduleReload();
+
+    private static bool ShouldReloadForPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        if (string.Equals(Path.GetFileName(path), "SKILL.md", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var normalizedPath = path.Replace('\\', '/');
+        return normalizedPath.Contains("/contracts/", StringComparison.OrdinalIgnoreCase) &&
+               normalizedPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
+    }
 
     private void ScheduleReload()
     {
@@ -243,6 +284,11 @@ internal sealed class SkillWatcherService : IAsyncDisposable, IDisposable
         {
             var loadedSkillNames = await _agentRuntime.ReloadSkillsAsync(_stoppingToken);
             _logger.LogInformation("Reloaded {Count} skills after file change.", loadedSkillNames.Count);
+            if (_onSkillsReloaded is not null)
+            {
+                var skills = _agentRuntime.LoadedSkills;
+                _onSkillsReloaded(skills);
+            }
         }
         catch (OperationCanceledException) when (_stoppingToken.IsCancellationRequested)
         {

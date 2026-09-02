@@ -13,67 +13,86 @@ env:
   DOTNET_VERSION: "10.0.x"
   DOTNET_NOLOGO: true
   DOTNET_CLI_TELEMETRY_OPTOUT: true
+  NUGET_PACKAGES: ${{ github.workspace }}/.nuget/packages
+  FAST_BUILD_PROPERTIES: "-p:OpenClawSkipDashboardBuild=true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  go-whatsapp-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version: "1.26.6"
+          cache-dependency-path: src/whatsapp-whatsmeow-worker/go.sum
+
+      - name: Check Go module tidiness
+        working-directory: src/whatsapp-whatsmeow-worker
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Test WhatsApp whatsmeow worker
+        working-directory: src/whatsapp-whatsmeow-worker
+        run: go test ./...
+
+      - name: Run govulncheck
+        working-directory: src/whatsapp-whatsmeow-worker
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 ./...
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "20"
 
-      - name: Restore standard targets
-        run: |
-          dotnet restore src/OpenClaw.Gateway && dotnet restore src/OpenClaw.Tests
-          dotnet restore src/OpenClaw.SemanticKernelAdapter
-          dotnet restore samples/OpenClaw.SemanticKernelInteropHost
+      - name: Restore solution
+        run: dotnet restore OpenClaw.Net.slnx
 
-      - name: Build standard targets
-        run: |
-          dotnet build --no-restore -c Release src/OpenClaw.Gateway && dotnet build --no-restore -c Release src/OpenClaw.Tests
-          dotnet build --no-restore -c Release src/OpenClaw.SemanticKernelAdapter
-          dotnet build --no-restore -c Release samples/OpenClaw.SemanticKernelInteropHost
+      - name: Build solution
+        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release
 
       - name: Test standard targets
         run: dotnet test --no-build -c Release --verbosity normal --logger "trx;LogFileName=results.trx" src/OpenClaw.Tests
 
-      - name: Restore sandbox-enabled targets
-        run: |
-          dotnet restore src/OpenClaw.Gateway -p:OpenClawEnableOpenSandbox=true
-          dotnet restore src/OpenClaw.Tests -p:OpenClawEnableOpenSandbox=true
+      - name: HelloAgent smoke
+        run: dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
 
-      - name: Build sandbox-enabled targets
-        run: |
-          dotnet build --no-restore -c Release -p:OpenClawEnableOpenSandbox=true src/OpenClaw.Gateway
-          dotnet build --no-restore -c Release -p:OpenClawEnableOpenSandbox=true src/OpenClaw.Tests
+      - name: Restore sandbox-enabled solution
+        run: dotnet restore OpenClaw.Net.slnx -p:OpenClawEnableOpenSandbox=true
+
+      - name: Build sandbox-enabled solution
+        run: dotnet build OpenClaw.Net.slnx --no-restore -c Release -p:OpenClawEnableOpenSandbox=true
 
       - name: Test sandbox-enabled targets
         run: dotnet test --no-build -c Release -p:OpenClawEnableOpenSandbox=true --verbosity normal --logger "trx;LogFileName=results-sandbox.trx" src/OpenClaw.Tests
 
-      - name: Restore MAF-enabled targets
-        run: |
-          dotnet restore src/OpenClaw.Gateway -p:OpenClawEnableMafExperiment=true
-          dotnet restore src/OpenClaw.Tests -p:OpenClawEnableMafExperiment=true
-
-      - name: Build MAF-enabled targets
-        run: |
-          dotnet build --no-restore -c Release -p:OpenClawEnableMafExperiment=true src/OpenClaw.Gateway
-          dotnet build --no-restore -c Release -p:OpenClawEnableMafExperiment=true src/OpenClaw.Tests
-
-      - name: Test MAF-enabled targets
-        run: dotnet test --no-build -c Release -p:OpenClawEnableMafExperiment=true --verbosity normal --logger "trx;LogFileName=results-maf.trx" src/OpenClaw.Tests
-
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: test-results
           path: "**/*.trx"
@@ -81,53 +100,145 @@ jobs:
   publish-aot:
     needs: build-and-test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'schedule'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Install AOT prerequisites
-        run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
-      - name: Publish and smoke-test NativeAOT binaries
+      - name: Ensure AOT prerequisites
+        timeout-minutes: 8
+        run: bash .github/scripts/install-nativeaot-prereqs.sh
+
+      - name: Publish and smoke-test standard NativeAOT binaries
         run: |
           chmod +x ./eng/verify-aot-smoke.sh
-          chmod +x ./eng/verify-aot-maf-smoke.sh
           ./eng/verify-aot-smoke.sh
+
+      - name: Publish and smoke-test MAF NativeAOT gateway
+        if: github.event_name != 'pull_request'
+        run: |
+          chmod +x ./eng/verify-aot-maf-smoke.sh
           ./eng/verify-aot-maf-smoke.sh
 
-      - name: Upload standard gateway artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload gateway artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: gateway-standard-aot-linux-x64
+          name: gateway-aot-linux-x64
           path: ./artifacts/aot/gateway/
 
-      - name: Upload MAF-enabled gateway artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gateway-maf-enabled-aot-linux-x64
-          path: ./artifacts/aot-maf/gateway/
-
       - name: Upload CLI artifact
-        uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: openclaw-cli-aot-linux-x64
           path: ./artifacts/aot/cli/
+
+  macos-gateway-linker-probe:
+    needs: build-and-test
+    runs-on: macos-15
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Configure macOS Swift library path
+        shell: bash
+        run: |
+          set -euo pipefail
+          developer_dir="$(xcode-select -p)"
+          sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+          library_paths=()
+          for candidate in \
+            "/usr/lib/swift" \
+            "$developer_dir/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx" \
+            "$sdk_path/usr/lib/swift"; do
+            if [[ -d "$candidate" ]]; then
+              library_paths+=("$candidate")
+            fi
+          done
+          if [[ -n "${LIBRARY_PATH:-}" ]]; then
+            library_paths+=("$LIBRARY_PATH")
+          fi
+          joined="$(IFS=:; echo "${library_paths[*]}")"
+          echo "LIBRARY_PATH=$joined" >> "$GITHUB_ENV"
+          echo "Using macOS Swift library paths: $joined"
+
+      - name: Probe gateway NativeAOT without classic linker
+        id: probe
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/linker-probe
+          dotnet publish src/OpenClaw.Gateway/OpenClaw.Gateway.csproj \
+            -c Release \
+            -r osx-arm64 \
+            --self-contained true \
+            -p:PublishAot=true \
+            -p:OpenClawUseClassicMacLd=false \
+            -o artifacts/linker-probe/gateway \
+            2>&1 | tee artifacts/linker-probe/publish.log
+
+      - name: Report linker probe outcome
+        shell: bash
+        run: |
+          if [[ "${{ steps.probe.outcome }}" == "success" ]]; then
+            echo "::notice title=Gateway linked without classic linker::Remove the gateway OpenClawUseClassicMacLd default after validating release smoke coverage."
+          else
+            echo "::warning title=Gateway still needs classic linker::The no-classic-linker probe failed on macos-15; keep the scoped gateway fallback."
+          fi
+
+      - name: Upload linker probe log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: macos-gateway-linker-probe
+          path: artifacts/linker-probe/
 
   publish-jit:
     needs: build-and-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
 
       - name: Publish and smoke-test JIT binaries
         run: |
@@ -136,23 +247,16 @@ jobs:
           ./eng/verify-jit-smoke.sh
           ./eng/verify-jit-maf-smoke.sh
 
-      - name: Upload standard gateway artifact
+      - name: Upload gateway artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: gateway-standard-jit-linux-x64
+          name: gateway-jit-linux-x64
           path: ./artifacts/jit/gateway/
-
-      - name: Upload MAF-enabled gateway artifact
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
-        with:
-          name: gateway-maf-enabled-jit-linux-x64
-          path: ./artifacts/jit-maf/gateway/
 
       - name: Upload CLI artifact
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: openclaw-cli-jit-linux-x64
           path: ./artifacts/jit/cli/
@@ -164,20 +268,20 @@ jobs:
     permissions:
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           push: true
@@ -195,30 +299,61 @@ jobs:
     env:
       OPENCLAW_PUBLIC_SMOKE: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
-          node-version: "20"
+          path: ${{ env.NUGET_PACKAGES }}
+          key: nuget-${{ runner.os }}-${{ hashFiles('OpenClaw.Net.slnx', '**/*.csproj', '**/*.props', '**/*.targets') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
 
       - name: Restore
         run: dotnet restore src/OpenClaw.Tests
 
       - name: Build
-        run: dotnet build --no-restore -c Release src/OpenClaw.Tests
+        run: dotnet build --no-restore -c Release src/OpenClaw.Tests ${{ env.FAST_BUILD_PROPERTIES }}
 
       - name: Run Public Compatibility Smoke
         run: dotnet test --no-build -c Release --filter "Category=PublicSmoke" --verbosity normal --logger "trx;LogFileName=public-smoke.trx" src/OpenClaw.Tests
 
+      - name: Probe latest public plugin packages
+        id: latest_plugin_canary
+        continue-on-error: true
+        env:
+          OPENCLAW_LATEST_CANARY: "1"
+        run: dotnet test --no-build -c Release --filter "Category=LatestCanary" --verbosity normal --logger "trx;LogFileName=latest-plugin-canary.trx" src/OpenClaw.Tests
+
+      - name: Report latest-package compatibility canary
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.latest_plugin_canary.outcome }}" == "success" ]]; then
+            echo "### Latest plugin compatibility canary: passing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Current npm releases still match the pinned compatibility expectations." >> "$GITHUB_STEP_SUMMARY"
+          else
+            result="${{ steps.latest_plugin_canary.outcome }}"
+            echo "::warning title=Latest plugin compatibility canary failed::The canary result was '${result}'. This may indicate package compatibility drift or a Node, npm, process, or test-infrastructure failure. Review the latest-plugin-canary artifact; the pinned release gate remains authoritative."
+            echo "### Latest plugin compatibility canary: ${result}" >> "$GITHUB_STEP_SUMMARY"
+            echo "Review the latest-plugin-canary test artifact to classify the failure. This signal is intentionally non-blocking; pinned public-smoke scenarios remain the release gate." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload smoke results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: public-smoke-results
-          path: "**/public-smoke.trx"
+          path: |
+            **/public-smoke.trx
+            **/latest-plugin-canary.trx

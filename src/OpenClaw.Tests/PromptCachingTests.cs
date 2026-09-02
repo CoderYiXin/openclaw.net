@@ -84,6 +84,7 @@ public sealed class PromptCachingTests
         };
 
         var registry = new ConfiguredModelProfileRegistry(config, NullLogger<ConfiguredModelProfileRegistry>.Instance);
+        registry.SetDefaultProfileId();
 
         Assert.True(registry.TryGet("profile-a", out var profile));
         Assert.True(profile!.PromptCaching.Enabled == true);

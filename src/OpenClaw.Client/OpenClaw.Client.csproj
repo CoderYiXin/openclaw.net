@@ -10,5 +10,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.Abstractions\OpenClaw.Payments.Abstractions.csproj" />
   </ItemGroup>
 </Project>

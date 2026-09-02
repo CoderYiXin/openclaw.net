@@ -14,3 +14,12 @@ public interface ITool
     /// <summary>Execute the tool with the given JSON arguments.</summary>
     ValueTask<string> ExecuteAsync(string argumentsJson, CancellationToken ct);
 }
+
+/// <summary>
+/// Optional structured output contract for tools that return stable JSON values.
+/// </summary>
+public interface IToolOutputSchema
+{
+    /// <summary>JSON schema describing the tool's structured result.</summary>
+    string? OutputSchema { get; }
+}

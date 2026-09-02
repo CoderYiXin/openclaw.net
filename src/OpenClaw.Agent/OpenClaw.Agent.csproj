@@ -2,19 +2,19 @@
   <PropertyGroup>
     <RootNamespace>OpenClaw.Agent</RootNamespace>
     <IsAotCompatible>true</IsAotCompatible>
+    <NoWarn>$(NoWarn);MCP9005</NoWarn>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="OpenClaw.MicrosoftAgentFrameworkAdapter" />
+    <InternalsVisibleTo Include="OpenClaw.Gateway" />
     <InternalsVisibleTo Include="OpenClaw.Tests" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.Playwright" Version="1.58.0" />
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
     <ProjectReference Include="..\OpenClaw.PluginKit\OpenClaw.PluginKit.csproj" />
-    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
-    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.3.0" />
-    <PackageReference Include="MQTTnet" Version="5.1.0.1559" />
-    <PackageReference Include="ModelContextProtocol" Version="1.1.0" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.7.0" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.7.0" />
+    <PackageReference Include="ModelContextProtocol" Version="2.0.0" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Plugins/plugin-bridge.mjs" CopyToOutputDirectory="PreserveNewest" />

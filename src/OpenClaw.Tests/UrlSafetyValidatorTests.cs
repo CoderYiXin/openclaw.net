@@ -3,6 +3,7 @@ using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
+using OpenClaw.Protocols.Browser.Tools;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -16,7 +17,7 @@ public sealed class UrlSafetyValidatorTests
     [InlineData("http://169.254.169.254/latest/meta-data")]
     public async Task ValidateHttpUrlAsync_BlocksPrivateTargetsByDefault(string url)
     {
-        var result = await UrlSafetyValidator.ValidateHttpUrlAsync(new Uri(url), new UrlSafetyConfig(), CancellationToken.None);
+        var result = await UrlSafetyValidator.ValidateHttpUrlAsync(new Uri(url), new UrlSafetyConfig(), TestContext.Current.CancellationToken);
 
         Assert.False(result.Allowed);
         Assert.Contains("blocked", result.ToToolError(), StringComparison.OrdinalIgnoreCase);
@@ -32,7 +33,7 @@ public sealed class UrlSafetyValidatorTests
                 BlockPrivateNetworkTargets = false,
                 BlockedHostGlobs = ["*.example.com"]
             },
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.Allowed);
         Assert.Contains("blocklist", result.Reason, StringComparison.OrdinalIgnoreCase);
@@ -59,7 +60,7 @@ public sealed class UrlSafetyValidatorTests
     {
         using var tool = new WebFetchTool(new WebFetchConfig { Enabled = true });
 
-        var result = await tool.ExecuteAsync("""{"url":"http://127.0.0.1:18789"}""", CancellationToken.None);
+        var result = await tool.ExecuteAsync("""{"url":"http://127.0.0.1:18789"}""", TestContext.Current.CancellationToken);
 
         Assert.Contains("URL blocked", result, StringComparison.OrdinalIgnoreCase);
     }

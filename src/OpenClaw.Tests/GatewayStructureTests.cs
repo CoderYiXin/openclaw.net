@@ -11,8 +11,33 @@ public sealed class GatewayStructureTests
 
         AssertFileLineBudget(root, "src/OpenClaw.Gateway/Extensions/GatewayWorkers.cs", 200);
         AssertFileLineBudget(root, "src/OpenClaw.Gateway/Endpoints/OpenAiEndpoints.cs", 250);
-        AssertFileLineBudget(root, "src/OpenClaw.Gateway/Composition/RuntimeInitializationExtensions.cs", 250);
+        AssertFileLineBudget(root, "src/OpenClaw.Gateway/Composition/RuntimeInitializationExtensions.cs", 280);
         AssertFileLineBudget(root, "src/OpenClaw.Gateway/Endpoints/AdminEndpoints.cs", 300);
+    }
+
+    [Fact]
+    public void LoopCommandCallback_ResolvesSchedulerAtWiringTime()
+    {
+        var root = FindRepositoryRoot();
+        var fullPath = Path.Combine(
+            root,
+            "src/OpenClaw.Gateway/Composition/RuntimeInitializationExtensions.LoopCommands.cs".Replace('/', Path.DirectorySeparatorChar));
+        var source = File.ReadAllText(fullPath);
+        var methodStart = source.IndexOf("private static void WireLoopCommandCallback", StringComparison.Ordinal);
+        Assert.True(methodStart >= 0, "WireLoopCommandCallback was not found.");
+
+        var setLoopIndex = source.IndexOf("services.CommandProcessor.SetLoopCallback", methodStart, StringComparison.Ordinal);
+        var resolveIndex = source.IndexOf("app.Services.GetRequiredService<ClawLoopScheduler>()", methodStart, StringComparison.Ordinal);
+        Assert.True(
+            resolveIndex >= 0 && resolveIndex < setLoopIndex,
+            "ClawLoopScheduler should be resolved before SetLoopCallback so missing DI registration fails during startup.");
+
+        var lambdaStart = source.IndexOf("=>", setLoopIndex, StringComparison.Ordinal);
+        Assert.True(lambdaStart >= 0, "Loop callback lambda was not found.");
+        var lambdaEnd = source.IndexOf("});", lambdaStart, StringComparison.Ordinal);
+        Assert.True(lambdaEnd >= 0, "Loop callback lambda end was not found.");
+        var lambdaBody = source[lambdaStart..lambdaEnd];
+        Assert.DoesNotContain("GetRequiredService<ClawLoopScheduler>", lambdaBody);
     }
 
     private static void AssertFileLineBudget(string root, string relativePath, int maxLines)

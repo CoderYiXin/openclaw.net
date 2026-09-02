@@ -23,10 +23,13 @@ using OpenClaw.Core.Validation;
 using OpenClaw.Gateway;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Extensions;
+using OpenClaw.Gateway.Mcp;
 using OpenClaw.Gateway.Models;
 using OpenClaw.Gateway.Profiles;
 using OpenClaw.Gateway.Tools;
 using OpenClaw.Gateway.Pipeline;
+using OpenClaw.McpApp;
+using OpenClaw.Plugins.TokenJuice;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -61,27 +64,36 @@ internal static partial class RuntimeInitializationExtensions
         }
         var services = ResolveRuntimeServices(app);
         var providerSmokeRegistry = app.Services.GetRequiredService<ProviderSmokeRegistry>();
-
-        // Register observability gauge for pending tool approvals
         var approvalService = app.Services.GetRequiredService<ToolApprovalService>();
         Telemetry.RegisterApprovalQueueGauge(() => approvalService.PendingCount);
-
         var blockedPluginIds = services.PluginHealth.GetBlockedPluginIds();
         var channelComposition = await BuildChannelCompositionAsync(app, startup, services, loggerFactory);
+
+        var artifactRuntime = new SkillArtifactRuntime();
+        // Resolve workspace path once so tool creation, skill load, reload, and watching use the same source.
+        var resolvedRuntimeWorkspacePath = startup.WorkspacePath
+            ?? SecretResolver.Resolve(startup.Config.Tooling.WorkspaceRoot);
 
         var builtInTools = CreateBuiltInTools(
             config,
             services,
-            startup.WorkspacePath,
-            startup.RuntimeState);
+            resolvedRuntimeWorkspacePath,
+            startup.RuntimeState,
+            artifactRuntime);
         if (config.Plugins.Mcp.Enabled)
             await services.McpRegistry.RegisterToolsAsync(services.NativeRegistry, app.Lifetime.ApplicationStopping);
-
+        await using var mcpAppStartupCleanup = new AsyncStartupCleanupGuard();
+        if (config.McpApps.Enabled)
+        {
+            await services.McpAppRegistry.RegisterMcpAppToolsAsync(services.NativeRegistry, config.McpApps, app.Lifetime.ApplicationStopping);
+            mcpAppStartupCleanup.Register(() => services.McpAppRegistry.DisposeAsync());
+        }
         LlmClientFactory.ResetDynamicProviders();
+        var videoFrameExtraction = app.Services.GetRequiredService<IVideoFrameExtractionService>();
         string? builtInInitError = null;
         try
         {
-            services.ProviderRegistry.RegisterDefault(config.Llm, LlmClientFactory.CreateChatClient(config.Llm));
+            services.ProviderRegistry.RegisterDefault(config.Llm, LlmClientFactory.CreateChatClient(config.Llm, config.LocalInference, config.Multimodal, videoFrameExtraction));
         }
         catch (InvalidOperationException ex)
         {
@@ -103,17 +115,16 @@ internal static partial class RuntimeInitializationExtensions
 
         if (!services.ProviderRegistry.MarkDefault(config.Llm.Provider) && !services.ProviderRegistry.TryGet(config.Llm.Provider, out _))
         {
-            var suffix = builtInInitError is null
-                ? string.Empty
-                : $" Built-in provider initialization failed: {builtInInitError}.";
+            var suffix = builtInInitError is null ? string.Empty : $" Built-in provider initialization failed: {builtInInitError}.";
             throw new InvalidOperationException(
                 $"Configured provider '{config.Llm.Provider}' is not available.{suffix} " +
                 "Register it as the built-in provider or via a compatible plugin.");
         }
+        services.ModelProfiles.SetDefaultProfileId();
 
         var chatClient = services.ProviderRegistry.TryGet("default", out var defaultRegistration) && defaultRegistration is not null
             ? defaultRegistration.Client
-            : LlmClientFactory.CreateChatClient(config.Llm);
+            : LlmClientFactory.CreateChatClient(config.Llm, config.LocalInference, config.Multimodal, videoFrameExtraction);
 
         var resolveLogger = loggerFactory.CreateLogger("PluginResolver");
         IReadOnlyList<ITool> tools = NativePluginRegistry.ResolvePreference(
@@ -126,9 +137,19 @@ internal static partial class RuntimeInitializationExtensions
         var combinedPluginSkillRoots = CollectPluginSkillRoots(pluginComposition);
 
         var skillLogger = loggerFactory.CreateLogger("SkillLoader");
-        var skills = SkillLoader.LoadAll(config.Skills, startup.WorkspacePath, skillLogger, combinedPluginSkillRoots);
+        var skills = SkillLoader.LoadAll(config.Skills, resolvedRuntimeWorkspacePath, skillLogger, combinedPluginSkillRoots);
         if (skills.Count > 0)
             skillLogger.LogInformation("{Summary}", SkillPromptBuilder.BuildSummary(skills));
+        artifactRuntime.ReplaceSkills(skills);
+        IAgentRuntime? runtimeForLoadSkill = null;
+        Func<IReadOnlyList<SkillDefinition>> skillsProvider = () => runtimeForLoadSkill?.LoadedSkills ?? skills;
+        tools =
+        [
+            .. tools,
+            new LoadSkillTool(skillsProvider),
+            new ReadSkillResourceTool(skillsProvider, config.Skills.MaxResourceReadBytes),
+            new MetaInvokeTool(skillsProvider)
+        ];
 
         var hooks = CreateHooks(
             config,
@@ -137,6 +158,12 @@ internal static partial class RuntimeInitializationExtensions
             pluginComposition.NativeDynamicPluginHost,
             services.SessionManager,
             services.ContractGovernance);
+
+        var interceptors = new List<IToolResultInterceptor>
+        {
+            TokenJuicePluginRegistration.CreateInterceptor()
+        };
+
         var (effectiveRequireToolApproval, effectiveApprovalRequiredTools) = ResolveApprovalMode(config);
 
         var agentLogger = loggerFactory.CreateLogger("AgentRuntime");
@@ -155,32 +182,34 @@ internal static partial class RuntimeInitializationExtensions
             config.Skills,
             agentLogger,
             hooks,
-            startup.WorkspacePath,
+            resolvedRuntimeWorkspacePath,
             combinedPluginSkillRoots,
             effectiveRequireToolApproval,
             effectiveApprovalRequiredTools,
-            services.ToolSandbox);
-
-        // Wire compact callback so /compact command can trigger LLM-powered compaction
+            services.ToolSandbox,
+            interceptors);
+        runtimeForLoadSkill = agentRuntime;
         if (agentRuntime is AgentRuntime concreteRuntime)
         {
             services.CommandProcessor.SetCompactCallback(async (session, ct) =>
             {
-                var countBefore = session.History.Count;
                 await concreteRuntime.CompactHistoryAsync(session, ct);
-                var countAfter = session.History.Count;
-                return countAfter; // Return actual remaining turn count
+                return session.History.Count;
             });
         }
+
+        WireLoopCommandCallback(app, services);
 
         var middlewarePipeline = CreateMiddlewarePipeline(config, loggerFactory, services.ContractGovernance, services.SessionManager);
         var skillWatcher = new SkillWatcherService(
             config.Skills,
-            startup.WorkspacePath,
+            resolvedRuntimeWorkspacePath,
             combinedPluginSkillRoots,
             agentRuntime,
-            app.Services.GetRequiredService<ILogger<SkillWatcherService>>());
+            app.Services.GetRequiredService<ILogger<SkillWatcherService>>(),
+            skills => artifactRuntime.ReplaceSkills(skills));
         skillWatcher.Start(app.Lifetime.ApplicationStopping);
+        var mcpWatcher = StartMcpWorkspaceWatcher(app, services, startup, agentRuntime);
 
         await services.AutomationService.RefreshCacheAsync(app.Lifetime.ApplicationStopping);
         var cronScheduler = app.Services.GetRequiredService<CronScheduler>();
@@ -189,6 +218,9 @@ internal static partial class RuntimeInitializationExtensions
         var profile = app.Services.GetRequiredService<IRuntimeProfile>();
         var shutdownCoordinator = app.Services.GetRequiredService<GatewayRuntimeShutdownCoordinator>();
         shutdownCoordinator.RegisterAsyncCleanup("mcp registry", _ => services.McpRegistry.DisposeAsync());
+        shutdownCoordinator.RegisterAsyncCleanup("mcp workspace watcher", _ => mcpWatcher.DisposeAsync());
+        shutdownCoordinator.RegisterAsyncCleanup("mcpapp registry", _ => services.McpAppRegistry.DisposeAsync());
+        mcpAppStartupCleanup.Cancel();
         var runtime = CreateGatewayRuntime(
             config,
             services,
@@ -202,7 +234,8 @@ internal static partial class RuntimeInitializationExtensions
             orchestratorId,
             tools,
             skills,
-            cronScheduler);
+            cronScheduler,
+            artifactRuntime);
         shutdownCoordinator.AttachRuntime(startup, runtime);
 
         services.PluginHealth.SetRuntimeReports(
@@ -211,8 +244,6 @@ internal static partial class RuntimeInitializationExtensions
             pluginComposition.NativeDynamicPluginHost);
 
         await profile.OnRuntimeInitializedAsync(app, startup, runtime);
-
-        // Start integration services
         if (config.Tailscale.Enabled)
         {
             var tailscale = new Integrations.TailscaleService(

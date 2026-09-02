@@ -10,6 +10,86 @@ namespace OpenClaw.Tests;
 public sealed class WebSocketChannelTests
 {
     [Fact]
+    public void WsClientEnvelope_RoundTripsA2UiV09Fields()
+    {
+        var envelope = new WsClientEnvelope
+        {
+            Type = "a2ui_operation",
+            ProtocolVersion = "0.9",
+            Operation = "invoke",
+            CatalogId = "catalog-main",
+            SupportedCatalogIds = ["catalog-main", "catalog-fallback"],
+            Components = ["{\"type\":\"Text\",\"id\":\"button\"}"],
+            DataModelJson = "{\"count\":1}",
+            SurfaceTitle = "Main Surface",
+            SurfaceKind = "panel",
+            ParentSurfaceId = "root",
+            Action = "submit",
+            ParametersJson = "{\"value\":true}",
+            SyncMode = "delta",
+            DiagnosticCode = "diag.ok"
+        };
+
+        var json = JsonSerializer.Serialize(envelope, CoreJsonContext.Default.WsClientEnvelope);
+        var roundTripped = JsonSerializer.Deserialize(json, CoreJsonContext.Default.WsClientEnvelope);
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal("0.9", roundTripped!.ProtocolVersion);
+        Assert.Equal("invoke", roundTripped.Operation);
+        Assert.Equal("catalog-main", roundTripped.CatalogId);
+        Assert.Equal(["catalog-main", "catalog-fallback"], roundTripped.SupportedCatalogIds ?? []);
+        Assert.Equal(["{\"type\":\"Text\",\"id\":\"button\"}"], roundTripped.Components ?? []);
+        Assert.Equal("{\"count\":1}", roundTripped.DataModelJson);
+        Assert.Equal("Main Surface", roundTripped.SurfaceTitle);
+        Assert.Equal("panel", roundTripped.SurfaceKind);
+        Assert.Equal("root", roundTripped.ParentSurfaceId);
+        Assert.Equal("submit", roundTripped.Action);
+        Assert.Equal("{\"value\":true}", roundTripped.ParametersJson);
+        Assert.Equal("delta", roundTripped.SyncMode);
+        Assert.Equal("diag.ok", roundTripped.DiagnosticCode);
+    }
+
+    [Fact]
+    public void WsServerEnvelope_RoundTripsA2UiV09Fields()
+    {
+        var envelope = new WsServerEnvelope
+        {
+            Type = "a2ui_operation_result",
+            ProtocolVersion = "0.9",
+            Operation = "render",
+            CatalogId = "catalog-main",
+            SupportedCatalogIds = ["catalog-main", "catalog-fallback"],
+            Components = ["{\"type\":\"Card\",\"id\":\"card\"}"],
+            DataModelJson = "{\"status\":\"ready\"}",
+            SurfaceTitle = "Details",
+            SurfaceKind = "modal",
+            ParentSurfaceId = "main",
+            Action = "refresh",
+            ParametersJson = "{\"force\":false}",
+            SyncMode = "full",
+            DiagnosticCode = "diag.warning"
+        };
+
+        var json = JsonSerializer.Serialize(envelope, CoreJsonContext.Default.WsServerEnvelope);
+        var roundTripped = JsonSerializer.Deserialize(json, CoreJsonContext.Default.WsServerEnvelope);
+
+        Assert.NotNull(roundTripped);
+        Assert.Equal("0.9", roundTripped!.ProtocolVersion);
+        Assert.Equal("render", roundTripped.Operation);
+        Assert.Equal("catalog-main", roundTripped.CatalogId);
+        Assert.Equal(["catalog-main", "catalog-fallback"], roundTripped.SupportedCatalogIds ?? []);
+        Assert.Equal(["{\"type\":\"Card\",\"id\":\"card\"}"], roundTripped.Components ?? []);
+        Assert.Equal("{\"status\":\"ready\"}", roundTripped.DataModelJson);
+        Assert.Equal("Details", roundTripped.SurfaceTitle);
+        Assert.Equal("modal", roundTripped.SurfaceKind);
+        Assert.Equal("main", roundTripped.ParentSurfaceId);
+        Assert.Equal("refresh", roundTripped.Action);
+        Assert.Equal("{\"force\":false}", roundTripped.ParametersJson);
+        Assert.Equal("full", roundTripped.SyncMode);
+        Assert.Equal("diag.warning", roundTripped.DiagnosticCode);
+    }
+
+    [Fact]
     public async Task SendAsync_RoutesOnlyToRecipient()
     {
         var channel = new WebSocketChannel(new WebSocketConfig());
@@ -25,7 +105,7 @@ public sealed class WebSocketChannelTests
             ChannelId = "websocket",
             RecipientId = "a",
             Text = "hello"
-        }, CancellationToken.None);
+        }, TestContext.Current.CancellationToken);
 
         Assert.Single(ws1.Sent);
         Assert.Empty(ws2.Sent);
@@ -48,7 +128,7 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
         Assert.Equal("hello", received!.Text);
@@ -71,7 +151,7 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
         Assert.Equal("legacy", received!.Text);
@@ -94,11 +174,67 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.NotNull(received);
         Assert.Equal("sess-restart", received!.SessionId);
         Assert.Equal("hello", received.Text);
+    }
+
+    [Fact]
+    public async Task HandleConnectionAsync_ForwardsAuthenticatedUserId()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig { MaxMessageBytes = 1024 });
+        var ws = new TestWebSocket();
+
+        ws.QueueReceiveText("hello");
+        ws.QueueClose();
+
+        InboundMessage? received = null;
+        channel.OnMessageReceived += (msg, _) =>
+        {
+            received = msg;
+            return ValueTask.CompletedTask;
+        };
+
+        await channel.HandleConnectionAsync(
+            ws,
+            "client",
+            IPAddress.Loopback,
+            TestContext.Current.CancellationToken,
+            authenticatedUserId: "acct-123");
+
+        Assert.NotNull(received);
+        Assert.Equal("acct-123", received!.AuthenticatedUserId);
+    }
+
+    [Fact]
+    public async Task HandleConnectionAsync_ForwardsRequestCancellationToken()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig { MaxMessageBytes = 1024 });
+        var ws = new TestWebSocket();
+
+        ws.QueueReceiveText("hello");
+        ws.QueueClose();
+
+        InboundMessage? received = null;
+        channel.OnMessageReceived += (msg, _) =>
+        {
+            received = msg;
+            return ValueTask.CompletedTask;
+        };
+
+        using var requestCts = new CancellationTokenSource();
+        await channel.HandleConnectionAsync(
+            ws,
+            "client",
+            IPAddress.Loopback,
+            requestCts.Token,
+            authenticatedUserId: null);
+
+        Assert.NotNull(received);
+        Assert.Equal(requestCts.Token, received!.RequestCancellation);
+        Assert.True(received.RequestCancellation.CanBeCanceled);
     }
 
     [Fact]
@@ -123,11 +259,32 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.NotNull(canvasEnvelope);
         Assert.Equal("canvas_ready", canvasEnvelope!.Type);
         Assert.Contains("a2ui.v0_8", canvasEnvelope.Capabilities ?? [], StringComparer.Ordinal);
+        Assert.False(messageObserved);
+    }
+
+    [Fact]
+    public async Task HandleConnectionAsync_IgnoresHeartbeatEnvelopeWithoutUserMessage()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig { MaxMessageBytes = 1024 });
+        var ws = new TestWebSocket();
+
+        ws.QueueReceiveText("""{"type":"heartbeat"}""");
+        ws.QueueClose();
+
+        var messageObserved = false;
+        channel.OnMessageReceived += (_, _) =>
+        {
+            messageObserved = true;
+            return ValueTask.CompletedTask;
+        };
+
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
+
         Assert.False(messageObserved);
     }
 
@@ -140,6 +297,8 @@ public sealed class WebSocketChannelTests
         ws.QueueReceiveText("""{"type":"canvas_ack","requestId":"req1","success":true}""");
         ws.QueueReceiveText("""{"type":"canvas_snapshot_result","requestId":"req2","snapshotJson":"{}","success":true}""");
         ws.QueueReceiveText("""{"type":"canvas_eval_result","requestId":"req3","valueJson":"1","success":true}""");
+        ws.QueueReceiveText("""{"type":"a2ui_error","sessionId":"sess","surfaceId":"main","error":"failed"}""");
+        ws.QueueReceiveText("""{"type":"a2ui_sync_result","sessionId":"sess","surfaceId":"main","success":true}""");
         ws.QueueClose();
 
         var canvasTypes = new List<string>();
@@ -155,10 +314,33 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
-        Assert.Equal(["canvas_ack", "canvas_snapshot_result", "canvas_eval_result"], canvasTypes);
+        Assert.Equal(["canvas_ack", "canvas_snapshot_result", "canvas_eval_result", "a2ui_error", "a2ui_sync_result"], canvasTypes);
         Assert.False(messageObserved);
+    }
+
+    [Fact]
+    public async Task HandleConnectionAsync_A2UiEventDoesNotUseActionAsEventFallback()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig { MaxMessageBytes = 1024 });
+        var ws = new TestWebSocket();
+
+        ws.QueueReceiveText("""{"type":"a2ui_event","sessionId":"sess","surfaceId":"main","componentId":"btn","action":"click","valueJson":"true","sequence":7}""");
+        ws.QueueClose();
+
+        InboundMessage? received = null;
+        channel.OnMessageReceived += (msg, _) =>
+        {
+            received = msg;
+            return ValueTask.CompletedTask;
+        };
+
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(received);
+        Assert.Null(received!.Event);
+        Assert.Contains("\"event\": \"\"", received.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -183,7 +365,7 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.NotNull(canvasEnvelope);
         Assert.NotNull(received);
@@ -194,6 +376,47 @@ public sealed class WebSocketChannelTests
         Assert.Equal("true", received.ValueJson);
         Assert.Equal(7, received.Sequence);
         Assert.Contains("\"componentId\": \"btn\"", received.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HandleConnectionAsync_ConvertsA2UiActionToSessionMessage()
+    {
+        var channel = new WebSocketChannel(new WebSocketConfig { MaxMessageBytes = 2048 });
+        var ws = new TestWebSocket();
+
+        ws.QueueReceiveText("""{"type":"a2ui_action","sessionId":"sess","surfaceId":"main","componentId":"submit-button","action":"submit","valueJson":"{\"accepted\":true}","dataModelJson":"{\"name\":\"Ada\"}","sequence":42}""");
+        ws.QueueClose();
+
+        WsClientEnvelope? canvasEnvelope = null;
+        InboundMessage? received = null;
+        channel.OnCanvasClientEnvelopeReceived += (_, envelope, _) =>
+        {
+            canvasEnvelope = envelope;
+            return ValueTask.CompletedTask;
+        };
+        channel.OnMessageReceived += (msg, _) =>
+        {
+            received = msg;
+            return ValueTask.CompletedTask;
+        };
+
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(canvasEnvelope);
+        Assert.NotNull(received);
+        Assert.Equal("a2ui_action", received!.Type);
+        Assert.Equal("sess", received.SessionId);
+        Assert.Equal("main", received.SurfaceId);
+        Assert.Equal("submit-button", received.ComponentId);
+        Assert.Equal("submit", received.Event);
+        Assert.Equal("{\"accepted\":true}", received.ValueJson);
+        Assert.Equal(42, received.Sequence);
+        Assert.Contains("\"surfaceId\": \"main\"", received.Text, StringComparison.Ordinal);
+        Assert.Contains("\"componentId\": \"submit-button\"", received.Text, StringComparison.Ordinal);
+        Assert.Contains("\"action\": \"submit\"", received.Text, StringComparison.Ordinal);
+        Assert.Contains("\"value\": {\"accepted\":true}", received.Text, StringComparison.Ordinal);
+        Assert.Contains("\"dataModel\": {\"name\":\"Ada\"}", received.Text, StringComparison.Ordinal);
+        Assert.Contains("\"sequence\": 42", received.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -211,7 +434,7 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.False(observed);
     }
@@ -230,7 +453,7 @@ public sealed class WebSocketChannelTests
             RecipientId = "a",
             Text = "hello",
             ReplyToMessageId = "m1"
-        }, CancellationToken.None);
+        }, TestContext.Current.CancellationToken);
 
         var payload = System.Text.Encoding.UTF8.GetString(ws.Sent.Single());
         var env = JsonSerializer.Deserialize(payload, CoreJsonContext.Default.WsServerEnvelope);
@@ -259,7 +482,7 @@ public sealed class WebSocketChannelTests
             return ValueTask.CompletedTask;
         };
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, receivedCount);
         Assert.NotEmpty(ws.Sent);
@@ -281,7 +504,7 @@ public sealed class WebSocketChannelTests
         var ws = new TestWebSocket();
         ws.BlockReceiveUntilCancelled();
 
-        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, CancellationToken.None);
+        await channel.HandleConnectionAsync(ws, "client", IPAddress.Loopback, TestContext.Current.CancellationToken);
 
         Assert.Equal(WebSocketState.Closed, ws.State);
     }
@@ -300,7 +523,7 @@ public sealed class WebSocketChannelTests
             ChannelId = "websocket",
             RecipientId = "a",
             Text = "first"
-        }, CancellationToken.None).AsTask();
+        }, TestContext.Current.CancellationToken).AsTask();
 
         await ws.WaitForSendToStartAsync();
 
@@ -309,7 +532,7 @@ public sealed class WebSocketChannelTests
             ChannelId = "websocket",
             RecipientId = "a",
             Text = "second"
-        }, CancellationToken.None).AsTask();
+        }, TestContext.Current.CancellationToken).AsTask();
 
         channel.RemoveConnectionForTest("a");
         ws.ReleaseBlockedSend();

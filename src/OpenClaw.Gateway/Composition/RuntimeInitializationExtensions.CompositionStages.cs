@@ -5,6 +5,7 @@ using OpenClaw.Agent.Plugins;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Contacts;
+using OpenClaw.Core.ExternalCli;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
@@ -16,6 +17,8 @@ using OpenClaw.Core.Validation;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Extensions;
 using OpenClaw.Gateway.Models;
+using OpenClaw.McpApp;
+using OpenClaw.Payments.Core;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -35,6 +38,7 @@ internal static partial class RuntimeInitializationExtensions
             ApprovalAuditStore = app.Services.GetRequiredService<ApprovalAuditStore>(),
             RuntimeMetrics = app.Services.GetRequiredService<RuntimeMetrics>(),
             ProviderUsage = app.Services.GetRequiredService<ProviderUsageTracker>(),
+            PaymentRuntime = app.Services.GetRequiredService<PaymentRuntimeService>(),
             ModelProfiles = app.Services.GetRequiredService<ConfiguredModelProfileRegistry>(),
             ProviderRegistry = app.Services.GetRequiredService<LlmProviderRegistry>(),
             ProviderPolicies = app.Services.GetRequiredService<ProviderPolicyService>(),
@@ -49,6 +53,7 @@ internal static partial class RuntimeInitializationExtensions
             AutomationService = app.Services.GetRequiredService<GatewayAutomationService>(),
             PluginHealth = app.Services.GetRequiredService<PluginHealthService>(),
             MemoryStore = app.Services.GetRequiredService<IMemoryStore>(),
+            StructuredMemoryProviderFactory = () => app.Services.GetRequiredService<IStructuredMemoryProvider>(),
             SessionSearchStore = app.Services.GetRequiredService<ISessionSearchStore>(),
             UserProfileStore = app.Services.GetRequiredService<IUserProfileStore>(),
             ProcessService = app.Services.GetRequiredService<ExecutionProcessService>(),
@@ -60,9 +65,17 @@ internal static partial class RuntimeInitializationExtensions
             ToolSandbox = app.Services.GetService<IToolSandbox>(),
             Pipeline = app.Services.GetRequiredService<MessagePipeline>(),
             WebSocketChannel = app.Services.GetRequiredService<WebSocketChannel>(),
+            MediaCache = app.Services.GetRequiredService<MediaCacheStore>(),
             CanvasBroker = app.Services.GetRequiredService<CanvasCommandBroker>(),
             NativeRegistry = app.Services.GetRequiredService<NativePluginRegistry>(),
-            McpRegistry = app.Services.GetRequiredService<McpServerToolRegistry>()
+            McpRegistry = app.Services.GetRequiredService<McpServerToolRegistry>(),
+            McpAppRegistry = app.Services.GetRequiredService<McpAppRegistry>(),
+            ExternalCliRegistry = app.Services.GetRequiredService<IExternalCliConnectorRegistry>(),
+            ExternalCliRunner = app.Services.GetRequiredService<IExternalCliRunner>(),
+            ExternalCliAudit = app.Services.GetRequiredService<IExternalCliAuditSink>(),
+            ExternalCliEvents = app.Services.GetRequiredService<IExternalCliEventSink>(),
+            AbortRegistry = app.Services.GetRequiredService<SessionAbortRegistry>(),
+            GoalService = app.Services.GetRequiredService<IGoalService>()
         };
 
     private static async Task<ChannelComposition> BuildChannelCompositionAsync(
@@ -82,6 +95,34 @@ internal static partial class RuntimeInitializationExtensions
         {
             ["websocket"] = services.WebSocketChannel
         };
+
+        // Restore persisted channel configs from volume storage (survives container restarts).
+        // This must happen before channels are added to adapters and before StartAsync is called.
+        var channelStore = app.Services.GetRequiredService<OpenClaw.Gateway.Channels.ChannelConfigStore>();
+
+        var persistedFeishu = channelStore.TryLoad("feishu", CoreJsonContext.Default.FeishuChannelConfig);
+        if (persistedFeishu is not null)
+        {
+            app.Services.GetRequiredService<FeishuChannel>().SetRuntimeConfig(persistedFeishu);
+            app.Logger.LogInformation("Restored persisted Feishu config from volume storage.");
+        }
+        channelAdapters["feishu"] = app.Services.GetRequiredService<FeishuChannel>();
+
+        var persistedDingTalk = channelStore.TryLoad("dingtalk", CoreJsonContext.Default.DingTalkChannelConfig);
+        if (persistedDingTalk is not null)
+        {
+            app.Services.GetRequiredService<DingTalkChannel>().SetRuntimeConfig(persistedDingTalk);
+            app.Logger.LogInformation("Restored persisted DingTalk config from volume storage.");
+        }
+        channelAdapters["dingtalk"] = app.Services.GetRequiredService<DingTalkChannel>();
+
+        var persistedWeCom = channelStore.TryLoad("wecom", CoreJsonContext.Default.WeComChannelConfig);
+        if (persistedWeCom is not null)
+        {
+            app.Services.GetRequiredService<WeComChannel>().SetRuntimeConfig(persistedWeCom);
+            app.Logger.LogInformation("Restored persisted WeCom config from volume storage.");
+        }
+        channelAdapters["wecom"] = app.Services.GetRequiredService<WeComChannel>();
 
         if (smsChannel is not null)
             channelAdapters["sms"] = smsChannel;
@@ -197,12 +238,20 @@ internal static partial class RuntimeInitializationExtensions
 
         if (config.Plugins.DynamicNative.Enabled)
         {
-            nativeDynamicPluginHost = new NativeDynamicPluginHost(
-                config.Plugins.DynamicNative,
-                startup.RuntimeState,
-                loggerFactory.CreateLogger<NativeDynamicPluginHost>(),
-                blockedPluginIds);
-            nativeDynamicTools = await nativeDynamicPluginHost.LoadAsync(startup.WorkspacePath, app.Lifetime.ApplicationStopping);
+            nativeDynamicPluginHost = startup.NativeDynamicPluginHost;
+            if (nativeDynamicPluginHost is null)
+            {
+                nativeDynamicPluginHost = new NativeDynamicPluginHost(
+                    config.Plugins.DynamicNative,
+                    startup.RuntimeState,
+                    loggerFactory.CreateLogger<NativeDynamicPluginHost>(),
+                    blockedPluginIds);
+                nativeDynamicTools = await nativeDynamicPluginHost.LoadAsync(startup.WorkspacePath, app.Lifetime.ApplicationStopping);
+            }
+            else
+            {
+                nativeDynamicTools = nativeDynamicPluginHost.Tools;
+            }
 
             RegisterNativeDynamicChannels(channelAdapters, nativeDynamicPluginHost, runtimeDiagnostics);
             RegisterNativeDynamicCommands(services.CommandProcessor, nativeDynamicPluginHost, runtimeDiagnostics);
@@ -493,6 +542,7 @@ internal static partial class RuntimeInitializationExtensions
                     SourcePath = report.SourcePath,
                     EntryPath = report.EntryPath,
                     Origin = report.Origin,
+                    BundleFormat = report.BundleFormat,
                     Loaded = report.Loaded,
                     EffectiveRuntimeMode = report.EffectiveRuntimeMode,
                     RequestedCapabilities = report.RequestedCapabilities,
@@ -501,6 +551,7 @@ internal static partial class RuntimeInitializationExtensions
                     ToolCount = report.ToolCount,
                     ChannelCount = report.ChannelCount,
                     CommandCount = report.CommandCount,
+                    CliCommandCount = report.CliCommandCount,
                     EventSubscriptionCount = report.EventSubscriptionCount,
                     ProviderCount = report.ProviderCount,
                     SkillDirectories = report.SkillDirectories,
@@ -538,6 +589,7 @@ internal static partial class RuntimeInitializationExtensions
         public required ApprovalAuditStore ApprovalAuditStore { get; init; }
         public required RuntimeMetrics RuntimeMetrics { get; init; }
         public required ProviderUsageTracker ProviderUsage { get; init; }
+        public required PaymentRuntimeService PaymentRuntime { get; init; }
         public required ConfiguredModelProfileRegistry ModelProfiles { get; init; }
         public required LlmProviderRegistry ProviderRegistry { get; init; }
         public required ProviderPolicyService ProviderPolicies { get; init; }
@@ -552,6 +604,7 @@ internal static partial class RuntimeInitializationExtensions
         public required GatewayAutomationService AutomationService { get; init; }
         public required PluginHealthService PluginHealth { get; init; }
         public required IMemoryStore MemoryStore { get; init; }
+        public required Func<IStructuredMemoryProvider> StructuredMemoryProviderFactory { get; init; }
         public required ISessionSearchStore SessionSearchStore { get; init; }
         public required IUserProfileStore UserProfileStore { get; init; }
         public required ExecutionProcessService ProcessService { get; init; }
@@ -563,9 +616,17 @@ internal static partial class RuntimeInitializationExtensions
         public IToolSandbox? ToolSandbox { get; init; }
         public required MessagePipeline Pipeline { get; init; }
         public required WebSocketChannel WebSocketChannel { get; init; }
+        public required MediaCacheStore MediaCache { get; init; }
         public required CanvasCommandBroker CanvasBroker { get; init; }
         public required NativePluginRegistry NativeRegistry { get; init; }
         public required McpServerToolRegistry McpRegistry { get; init; }
+        public required McpAppRegistry McpAppRegistry { get; init; }
+        public required IExternalCliConnectorRegistry ExternalCliRegistry { get; init; }
+        public required IExternalCliRunner ExternalCliRunner { get; init; }
+        public required IExternalCliAuditSink ExternalCliAudit { get; init; }
+        public required IExternalCliEventSink ExternalCliEvents { get; init; }
+        public required SessionAbortRegistry AbortRegistry { get; init; }
+        public required IGoalService GoalService { get; init; }
     }
 
     private sealed class ChannelComposition

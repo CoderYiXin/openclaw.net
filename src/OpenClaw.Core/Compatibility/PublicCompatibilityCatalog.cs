@@ -85,12 +85,14 @@ public static class PublicCompatibilityCatalog
             PackageName = entry.PackageName,
             PluginId = entry.PluginId,
             SkillSlug = entry.Slug,
+            SkillRef = entry.Ref,
             PackageVersion = entry.Version,
             ExpectedRelativePath = entry.ExpectedRelativePath,
             ConfigJsonExample = entry.ConfigJson,
             InstallExtraPackages = entry.InstallExtraPackages ?? [],
             ExpectedToolNames = entry.ExpectedToolNames ?? [],
             ExpectedSkillNames = entry.ExpectedSkillNames ?? [],
+            ExpectedCliCommandNames = entry.ExpectedCliCommandNames ?? [],
             ExpectedDiagnosticCodes = entry.ExpectedDiagnosticCodes ?? [],
             Guidance = BuildGuidance(entry, compatibilityStatus).ToArray()
         };
@@ -100,11 +102,12 @@ public static class PublicCompatibilityCatalog
     {
         if (string.Equals(entry.Kind, "clawhub-skill", StringComparison.Ordinal))
         {
-            var slug = RequireField(entry.Slug, entry, "slug");
+            _ = RequireField(entry.Slug, entry, "slug");
+            var skillRef = RequireField(entry.Ref, entry, "ref");
             var suffix = string.IsNullOrWhiteSpace(entry.Version)
                 ? string.Empty
                 : $" --version {entry.Version}";
-            return $"openclaw clawhub install {slug}{suffix}";
+            return $"openclaw clawhub install {skillRef}{suffix}";
         }
 
         var spec = RequireField(entry.Spec, entry, "spec");
@@ -122,6 +125,8 @@ public static class PublicCompatibilityCatalog
                 => "Pinned TypeScript bridge plugin expected to load when jiti is present in the plugin dependency tree.",
             "config-schema-plugin"
                 => "Negative compatibility scenario proving that invalid plugin config fails fast with structured diagnostics.",
+            "cli-plugin" when compatibilityStatus.Equals("compatible", StringComparison.OrdinalIgnoreCase)
+                => "Pinned upstream plugin expected to load and expose its lazy root CLI command through the Node bridge.",
             "unsupported-surface-plugin"
                 => "Negative compatibility scenario proving that unsupported upstream plugin surfaces fail explicitly instead of loading partially.",
             _ when compatibilityStatus.Equals("compatible", StringComparison.OrdinalIgnoreCase)
@@ -154,14 +159,14 @@ public static class PublicCompatibilityCatalog
         if (entry.ExpectedSkillNames is { Length: > 0 })
             yield return $"Expected bundled skills: {string.Join(", ", entry.ExpectedSkillNames)}.";
 
+        if (entry.ExpectedCliCommandNames is { Length: > 0 })
+            yield return $"Expected root CLI commands: {string.Join(", ", entry.ExpectedCliCommandNames)}.";
+
         if (compatibilityStatus.Equals("incompatible", StringComparison.OrdinalIgnoreCase) &&
             entry.ExpectedDiagnosticCodes is { Length: > 0 })
         {
             yield return $"Expected failure diagnostics: {string.Join(", ", entry.ExpectedDiagnosticCodes)}.";
         }
-
-        if (entry.ExpectedDiagnosticCodes?.Any(code => string.Equals(code, "unsupported_cli_registration", StringComparison.Ordinal)) == true)
-            yield return "This package depends on `api.registerCli()`, which OpenClaw.NET does not bridge today.";
 
         if (entry.ExpectedDiagnosticCodes?.Any(code => string.Equals(code, "config_one_of_mismatch", StringComparison.Ordinal)) == true)
             yield return "Adjust the plugin config to the supported JSON-schema subset; this scenario intentionally demonstrates a failing shape.";
@@ -204,6 +209,7 @@ internal sealed class CompatibilityCatalogManifestEntry
     public string? PackageName { get; set; }
     public string? PluginId { get; set; }
     public string? Slug { get; set; }
+    public string? Ref { get; set; }
     public string? Version { get; set; }
     public string? ExpectedStatus { get; set; }
     public string? ExpectedRelativePath { get; set; }
@@ -211,6 +217,7 @@ internal sealed class CompatibilityCatalogManifestEntry
     public string[]? InstallExtraPackages { get; set; }
     public string[]? ExpectedToolNames { get; set; }
     public string[]? ExpectedSkillNames { get; set; }
+    public string[]? ExpectedCliCommandNames { get; set; }
     public string[]? ExpectedDiagnosticCodes { get; set; }
 }
 

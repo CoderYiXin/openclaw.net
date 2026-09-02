@@ -16,10 +16,12 @@ internal static class AgentSystemPromptBuilder
         Avoid long rationale unless the user explicitly asks for it.
         """;
 
-    public static string BuildSystemPrompt(IReadOnlyList<SkillDefinition> skills, bool requireApproval)
+    public static string BuildSystemPrompt(IReadOnlyList<SkillDefinition> skills, bool requireApproval, string? skillsInstructionPrompt = null)
     {
         var basePrompt = BuildBaseSystemPrompt(requireApproval);
-        var skillSection = SkillPromptBuilder.Build(skills);
+        // Progressive disclosure: emit only the metadata index; full bodies are loaded on
+        // demand by the `load_skill` tool against the runtime's LoadedSkills snapshot.
+        var skillSection = SkillPromptBuilder.BuildIndex(skills, skillsInstructionPrompt);
         return string.IsNullOrEmpty(skillSection) ? basePrompt : basePrompt + "\n" + skillSection;
     }
 
@@ -93,6 +95,12 @@ internal static class AgentSystemPromptBuilder
 
         var soulFile = Path.Combine(workspacePath, "SOUL.md");
         AppendOptionalPromptFile(ref basePrompt, "Agent Personality (SOUL.md)", soulFile, PromptFileMaxChars);
+
+        var identityFile = Path.Combine(workspacePath, "IDENTITY.md");
+        AppendOptionalPromptFile(ref basePrompt, "Agent Identity (IDENTITY.md)", identityFile, PromptFileMaxChars);
+
+        var memoryFile = Path.Combine(workspacePath, "MEMORY.md");
+        AppendOptionalPromptFile(ref basePrompt, "Agent Memory Schema (MEMORY.md)", memoryFile, PromptFileMaxChars);
 
         return basePrompt;
     }

@@ -1,13 +1,20 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using OpenClaw.Core.Models;
+using OpenClaw.Payments.Abstractions;
 
 namespace OpenClaw.Client;
 
 public sealed class OpenClawHttpClient : IDisposable
 {
+    private const string LatestMcpProtocolVersion = "2026-07-28";
+    private const string LatestLegacyMcpProtocolVersion = "2025-11-25";
+    private const string McpProtocolVersionMetaKey = "io.modelcontextprotocol/protocolVersion";
+    private const string McpClientInfoMetaKey = "io.modelcontextprotocol/clientInfo";
+    private const string McpClientCapabilitiesMetaKey = "io.modelcontextprotocol/clientCapabilities";
     private readonly Uri _baseUri;
     private readonly HttpClient _http;
     private readonly bool _ownsHttpClient;
@@ -28,24 +35,47 @@ public sealed class OpenClawHttpClient : IDisposable
     private readonly Uri _integrationSessionSearchUri;
     private readonly Uri _integrationProfilesUri;
     private readonly Uri _integrationToolPresetsUri;
+    private readonly Uri _integrationWorkflowsUri;
     private readonly Uri _integrationAutomationsUri;
     private readonly Uri _integrationRuntimeEventsUri;
     private readonly Uri _integrationMessagesUri;
+    private readonly Uri _integrationPaymentSetupUri;
+    private readonly Uri _integrationPaymentFundingUri;
+    private readonly Uri _integrationPaymentVirtualCardUri;
+    private readonly Uri _integrationPaymentExecuteUri;
+    private readonly Uri _integrationPaymentStatusUri;
     private readonly Uri _adminAutomationsUri;
     private readonly Uri _adminLearningProposalsUri;
     private readonly Uri _adminMemoryNotesUri;
     private readonly Uri _adminMemorySearchUri;
     private readonly Uri _adminMemoryExportUri;
     private readonly Uri _adminMemoryImportUri;
+    private readonly Uri _adminMemoryFractalStatusUri;
+    private readonly Uri _adminMemoryFractalSearchUri;
+    private readonly Uri _adminMemoryFractalOpenUri;
+    private readonly Uri _adminMemoryFractalExportUri;
+    private readonly Uri _adminMemoryFractalRecentUri;
+    private readonly Uri _adminMemoryFractalValidateUri;
+    private readonly Uri _adminMemoryFractalIndexRefreshUri;
+    private readonly Uri _adminMemoryFractalHandoffUri;
+    private readonly Uri _adminHarnessSharedStateUri;
     private readonly Uri _adminAgentBundleExportUri;
     private readonly Uri _adminAgentBundleImportUri;
     private readonly Uri _adminHeartbeatUri;
     private readonly Uri _adminHeartbeatPreviewUri;
     private readonly Uri _adminHeartbeatStatusUri;
+    private readonly Uri _adminPulseStatusUri;
+    private readonly Uri _adminPulseRunUri;
+    private readonly Uri _adminPulseEventsUri;
+    private readonly Uri _adminPulseEnableUri;
+    private readonly Uri _adminPulseDisableUri;
     private readonly Uri _adminPostureUri;
     private readonly Uri _adminModelsUri;
     private readonly Uri _adminModelsDoctorUri;
     private readonly Uri _adminModelEvaluationsUri;
+    private readonly Uri _adminExternalCliConnectorsUri;
+    private readonly Uri _adminExternalCliPreviewUri;
+    private readonly Uri _adminExternalCliExecuteUri;
     private readonly Uri _adminApprovalSimulationUri;
     private readonly Uri _toolsApproveUri;
     private readonly Uri _adminAccountResolutionUri;
@@ -63,6 +93,7 @@ public sealed class OpenClawHttpClient : IDisposable
     private readonly Uri _adminWhatsAppSetupUri;
     private readonly Uri _adminWhatsAppRestartUri;
     private long _mcpRequestId;
+    private string? _negotiatedMcpProtocolVersion;
 
     public OpenClawHttpClient(string baseUrl, string? authToken, HttpClient? httpClient = null)
     {
@@ -91,24 +122,47 @@ public sealed class OpenClawHttpClient : IDisposable
         _integrationSessionSearchUri = new Uri(baseUri, "/api/integration/session-search");
         _integrationProfilesUri = new Uri(baseUri, "/api/integration/profiles");
         _integrationToolPresetsUri = new Uri(baseUri, "/api/integration/tool-presets");
+        _integrationWorkflowsUri = new Uri(baseUri, "/api/integration/workflows");
         _integrationAutomationsUri = new Uri(baseUri, "/api/integration/automations");
         _integrationRuntimeEventsUri = new Uri(baseUri, "/api/integration/runtime-events");
         _integrationMessagesUri = new Uri(baseUri, "/api/integration/messages");
+        _integrationPaymentSetupUri = new Uri(baseUri, "/api/integration/payment/setup");
+        _integrationPaymentFundingUri = new Uri(baseUri, "/api/integration/payment/funding");
+        _integrationPaymentVirtualCardUri = new Uri(baseUri, "/api/integration/payment/virtual-card");
+        _integrationPaymentExecuteUri = new Uri(baseUri, "/api/integration/payment/execute");
+        _integrationPaymentStatusUri = new Uri(baseUri, "/api/integration/payment/status/");
         _adminAutomationsUri = new Uri(baseUri, "/admin/automations");
         _adminLearningProposalsUri = new Uri(baseUri, "/admin/learning/proposals");
         _adminMemoryNotesUri = new Uri(baseUri, "/admin/memory/notes");
         _adminMemorySearchUri = new Uri(baseUri, "/admin/memory/search");
         _adminMemoryExportUri = new Uri(baseUri, "/admin/memory/export");
         _adminMemoryImportUri = new Uri(baseUri, "/admin/memory/import");
+        _adminMemoryFractalStatusUri = new Uri(baseUri, "/admin/memory/fractal/status");
+        _adminMemoryFractalSearchUri = new Uri(baseUri, "/admin/memory/fractal/search");
+        _adminMemoryFractalOpenUri = new Uri(baseUri, "/admin/memory/fractal/open");
+        _adminMemoryFractalExportUri = new Uri(baseUri, "/admin/memory/fractal/export");
+        _adminMemoryFractalRecentUri = new Uri(baseUri, "/admin/memory/fractal/recent");
+        _adminMemoryFractalValidateUri = new Uri(baseUri, "/admin/memory/fractal/validate");
+        _adminMemoryFractalIndexRefreshUri = new Uri(baseUri, "/admin/memory/fractal/index/refresh");
+        _adminMemoryFractalHandoffUri = new Uri(baseUri, "/admin/memory/fractal/handoff");
+        _adminHarnessSharedStateUri = new Uri(baseUri, "/admin/harness/shared-state");
         _adminAgentBundleExportUri = new Uri(baseUri, "/admin/agent-bundle/export");
         _adminAgentBundleImportUri = new Uri(baseUri, "/admin/agent-bundle/import");
         _adminHeartbeatUri = new Uri(baseUri, "/admin/heartbeat");
         _adminHeartbeatPreviewUri = new Uri(baseUri, "/admin/heartbeat/preview");
         _adminHeartbeatStatusUri = new Uri(baseUri, "/admin/heartbeat/status");
+        _adminPulseStatusUri = new Uri(baseUri, "/admin/pulse/status");
+        _adminPulseRunUri = new Uri(baseUri, "/admin/pulse/run");
+        _adminPulseEventsUri = new Uri(baseUri, "/admin/pulse/events");
+        _adminPulseEnableUri = new Uri(baseUri, "/admin/pulse/enable");
+        _adminPulseDisableUri = new Uri(baseUri, "/admin/pulse/disable");
         _adminPostureUri = new Uri(baseUri, "/admin/posture");
         _adminModelsUri = new Uri(baseUri, "/admin/models");
         _adminModelsDoctorUri = new Uri(baseUri, "/admin/models/doctor");
         _adminModelEvaluationsUri = new Uri(baseUri, "/admin/models/evaluations");
+        _adminExternalCliConnectorsUri = new Uri(baseUri, "/admin/external-cli/connectors");
+        _adminExternalCliPreviewUri = new Uri(baseUri, "/admin/external-cli/preview");
+        _adminExternalCliExecuteUri = new Uri(baseUri, "/admin/external-cli/execute");
         _adminApprovalSimulationUri = new Uri(baseUri, "/admin/approvals/simulate");
         _toolsApproveUri = new Uri(baseUri, "/tools/approve");
         _adminAccountResolutionUri = new Uri(baseUri, "/admin/accounts/test-resolution");
@@ -212,8 +266,50 @@ public sealed class OpenClawHttpClient : IDisposable
         return fullText.ToString();
     }
 
-    public Task<McpInitializeResult> InitializeMcpAsync(McpInitializeRequest request, CancellationToken cancellationToken)
-        => SendMcpAsync("initialize", request, McpJsonContext.Default.McpInitializeRequest, McpJsonContext.Default.McpInitializeResult, cancellationToken);
+    public async Task<McpInitializeResult> InitializeMcpAsync(McpInitializeRequest request, CancellationToken cancellationToken)
+    {
+        var result = await SendMcpAsync("initialize", request, McpJsonContext.Default.McpInitializeRequest, McpJsonContext.Default.McpInitializeResult, cancellationToken);
+        RememberNegotiatedProtocolVersion(result.ProtocolVersion);
+        return result;
+    }
+
+    public async Task<McpDiscoverResult> DiscoverMcpAsync(CancellationToken cancellationToken)
+    {
+        var request = new McpDiscoverRequest();
+        try
+        {
+            var result = await SendMcpAsync(
+                "server/discover",
+                request,
+                McpJsonContext.Default.McpDiscoverRequest,
+                McpJsonContext.Default.McpDiscoverResult,
+                cancellationToken);
+            RememberNegotiatedProtocolVersion(ResolveNegotiatedProtocolVersion(result));
+            return result;
+        }
+        catch (McpProtocolException ex) when (ex.StatusCode == HttpStatusCode.NotFound || ex.RpcCode == -32601)
+        {
+            return await DiscoverLegacyMcpAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return await DiscoverLegacyMcpAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<McpDiscoverResult> DiscoverLegacyMcpAsync(CancellationToken cancellationToken)
+    {
+        var initialize = await InitializeMcpAsync(
+            new McpInitializeRequest { ProtocolVersion = LatestLegacyMcpProtocolVersion },
+            cancellationToken).ConfigureAwait(false);
+        return new McpDiscoverResult
+        {
+            ProtocolVersion = initialize.ProtocolVersion,
+            SupportedVersions = [initialize.ProtocolVersion],
+            Capabilities = JsonSerializer.SerializeToElement(initialize.Capabilities, McpJsonContext.Default.McpCapabilities),
+            ServerInfo = initialize.ServerInfo
+        };
+    }
 
     public Task<McpToolListResult> ListMcpToolsAsync(CancellationToken cancellationToken)
         => SendMcpWithoutParamsAsync("tools/list", McpJsonContext.Default.McpToolListResult, cancellationToken);
@@ -277,6 +373,39 @@ public sealed class OpenClawHttpClient : IDisposable
 
     public Task<IntegrationStatusResponse> GetIntegrationStatusAsync(CancellationToken cancellationToken)
         => GetAsync(_integrationStatusUri, CoreJsonContext.Default.IntegrationStatusResponse, cancellationToken);
+
+    public Task<PaymentSetupStatus> GetPaymentSetupStatusAsync(string? provider, CancellationToken cancellationToken)
+        => GetAsync(BuildPaymentUri(_integrationPaymentSetupUri, provider, environment: null, yes: false), PaymentJsonContext.Default.PaymentSetupStatus, cancellationToken);
+
+    public Task<List<FundingSource>> ListPaymentFundingSourcesAsync(string? provider, string? environment, CancellationToken cancellationToken)
+        => GetAsync(BuildPaymentUri(_integrationPaymentFundingUri, provider, environment, yes: false), PaymentJsonContext.Default.ListFundingSource, cancellationToken);
+
+    public async Task<VirtualCardHandle> IssueVirtualCardAsync(VirtualCardRequest request, bool yes, CancellationToken cancellationToken)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildPaymentUri(_integrationPaymentVirtualCardUri, request.ProviderId, request.Environment, yes))
+        {
+            Content = BuildJsonContent(request, PaymentJsonContext.Default.VirtualCardRequest)
+        };
+        return await SendAsync(httpRequest, PaymentJsonContext.Default.VirtualCardHandle, cancellationToken);
+    }
+
+    public async Task<MachinePaymentResult> ExecuteMachinePaymentAsync(MachinePaymentRequest request, bool yes, CancellationToken cancellationToken)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, BuildPaymentUri(_integrationPaymentExecuteUri, request.ProviderId, request.Environment, yes))
+        {
+            Content = BuildJsonContent(request, PaymentJsonContext.Default.MachinePaymentRequest)
+        };
+        return await SendAsync(httpRequest, PaymentJsonContext.Default.MachinePaymentResult, cancellationToken);
+    }
+
+    public Task<PaymentStatus> GetPaymentStatusAsync(string id, string? provider, string? environment, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Payment id is required.", nameof(id));
+
+        var uri = new Uri(_integrationPaymentStatusUri, Uri.EscapeDataString(id));
+        return GetAsync(BuildPaymentUri(uri, provider, environment, yes: false), PaymentJsonContext.Default.PaymentStatus, cancellationToken);
+    }
 
     public Task<IntegrationApprovalsResponse> GetIntegrationApprovalsAsync(
         string? channelId,
@@ -541,6 +670,74 @@ public sealed class OpenClawHttpClient : IDisposable
         return await SendAsync(req, CoreJsonContext.Default.MemoryConsoleImportResponse, cancellationToken);
     }
 
+    public Task<StructuredMemoryStatusResponse> GetFractalMemoryStatusAsync(CancellationToken cancellationToken)
+        => GetAsync(_adminMemoryFractalStatusUri, CoreJsonContext.Default.StructuredMemoryStatusResponse, cancellationToken);
+
+    public Task<StructuredMemorySearchResult> SearchFractalMemoryAsync(string query, int limit, string? scope, CancellationToken cancellationToken)
+        => GetAsync(BuildFractalSearchUri(query, limit, scope), CoreJsonContext.Default.StructuredMemorySearchResult, cancellationToken);
+
+    public Task<StructuredMemoryOpenResult> OpenFractalMemoryAsync(string path, int? depth, string? view, CancellationToken cancellationToken)
+        => GetAsync(BuildFractalOpenUri(path, depth, view), CoreJsonContext.Default.StructuredMemoryOpenResult, cancellationToken);
+
+    public Task<StructuredMemoryExportResult> ExportFractalMemoryAsync(string path, string? mode, CancellationToken cancellationToken)
+        => GetAsync(BuildFractalExportUri(path, mode), CoreJsonContext.Default.StructuredMemoryExportResult, cancellationToken);
+
+    public Task<StructuredMemoryRecentResult> GetRecentFractalMemoryAsync(int days, int limit, string? scope, CancellationToken cancellationToken)
+        => GetAsync(BuildFractalRecentUri(days, limit, scope), CoreJsonContext.Default.StructuredMemoryRecentResult, cancellationToken);
+
+    public async Task<StructuredMemoryValidationResult> ValidateFractalMemoryAsync(CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminMemoryFractalValidateUri);
+        return await SendAsync(req, CoreJsonContext.Default.StructuredMemoryValidationResult, cancellationToken);
+    }
+
+    public async Task<StructuredMemoryValidationResult> RefreshFractalMemoryIndexAsync(CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminMemoryFractalIndexRefreshUri);
+        return await SendAsync(req, CoreJsonContext.Default.StructuredMemoryValidationResult, cancellationToken);
+    }
+
+    public async Task<StructuredMemoryHandoffResult> CreateFractalMemoryHandoffAsync(string path, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path is required.", nameof(path));
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminMemoryFractalHandoffUri)
+        {
+            Content = BuildJsonContent(new StructuredMemoryPathRequest { Path = path }, CoreJsonContext.Default.StructuredMemoryPathRequest)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.StructuredMemoryHandoffResult, cancellationToken);
+    }
+
+    public Task<SharedHarnessStateListResponse> ListSharedHarnessStateAsync(SharedHarnessStateListQuery query, CancellationToken cancellationToken)
+        => GetAsync(BuildSharedHarnessStateListUri(query), CoreJsonContext.Default.SharedHarnessStateListResponse, cancellationToken);
+
+    public Task<SharedHarnessStateDetailResponse> GetSharedHarnessStateAsync(string id, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Shared harness state id is required.", nameof(id));
+
+        return GetAsync(new Uri($"{_adminHarnessSharedStateUri.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(id)}", UriKind.Absolute), CoreJsonContext.Default.SharedHarnessStateDetailResponse, cancellationToken);
+    }
+
+    public Task<SharedHarnessStateDetailResponse> GetSharedHarnessStateForSessionAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            throw new ArgumentException("Session id is required.", nameof(sessionId));
+
+        return GetAsync(new Uri(_baseUri, $"/admin/sessions/{Uri.EscapeDataString(sessionId)}/harness-state"), CoreJsonContext.Default.SharedHarnessStateDetailResponse, cancellationToken);
+    }
+
+    public async Task<SharedHarnessStateMutationResponse> DetectSharedHarnessStateConflictsAsync(string id, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Shared harness state id is required.", nameof(id));
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, new Uri($"{_adminHarnessSharedStateUri.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(id)}/detect-conflicts", UriKind.Absolute));
+        return await SendAsync(req, CoreJsonContext.Default.SharedHarnessStateMutationResponse, cancellationToken);
+    }
+
     public Task<AgentBundleExportBundle> ExportAgentBundleAsync(
         string? actorId,
         string? projectId,
@@ -625,6 +822,50 @@ public sealed class OpenClawHttpClient : IDisposable
     {
         using var req = new HttpRequestMessage(HttpMethod.Delete, BuildAutomationUri(automationId));
         return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
+    }
+
+    public Task<IntegrationAutomationRunsResponse> GetAutomationRunsAsync(string automationId, CancellationToken cancellationToken)
+        => GetAsync(BuildAutomationRunsUri(automationId), CoreJsonContext.Default.IntegrationAutomationRunsResponse, cancellationToken);
+
+    public Task<IntegrationAutomationRunDetailResponse> GetAutomationRunAsync(string automationId, string runId, CancellationToken cancellationToken)
+        => GetAsync(BuildAutomationRunDetailUri(automationId, runId), CoreJsonContext.Default.IntegrationAutomationRunDetailResponse, cancellationToken);
+
+    public async Task<MutationResponse> ReplayAutomationRunAsync(string automationId, string runId, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, BuildAutomationRunReplayUri(automationId, runId));
+        return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
+    }
+
+    public async Task<MutationResponse> ClearAutomationQuarantineAsync(string automationId, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, BuildAutomationQuarantineClearUri(automationId));
+        return await SendAsync(req, CoreJsonContext.Default.MutationResponse, cancellationToken);
+    }
+
+    public Task<IntegrationWorkflowsResponse> ListWorkflowsAsync(CancellationToken cancellationToken)
+        => GetAsync(_integrationWorkflowsUri, CoreJsonContext.Default.IntegrationWorkflowsResponse, cancellationToken);
+
+    public async Task<AgentWorkflowRunResult> RunWorkflowAsync(string workflowId, AgentWorkflowRequest request, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, BuildWorkflowRunsUri(workflowId))
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.AgentWorkflowRequest)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.AgentWorkflowRunResult, cancellationToken);
+    }
+
+    public Task<AgentWorkflowRunSnapshot> GetWorkflowRunAsync(string workflowId, string runId, CancellationToken cancellationToken)
+        => GetAsync(BuildWorkflowRunUri(workflowId, runId), CoreJsonContext.Default.AgentWorkflowRunSnapshot, cancellationToken);
+
+    public async Task<AgentWorkflowRunSnapshot> RespondWorkflowRunAsync(string workflowId, string runId, AgentWorkflowResponse response, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, BuildWorkflowRunResponsesUri(workflowId, runId))
+        {
+            Content = BuildJsonContent(response, CoreJsonContext.Default.AgentWorkflowResponse)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.AgentWorkflowRunSnapshot, cancellationToken);
     }
 
     public Task<IntegrationRuntimeEventsResponse> QueryRuntimeEventsAsync(
@@ -757,6 +998,34 @@ public sealed class OpenClawHttpClient : IDisposable
     public Task<HeartbeatStatusResponse> GetHeartbeatStatusAsync(CancellationToken cancellationToken)
         => GetAsync(_adminHeartbeatStatusUri, CoreJsonContext.Default.HeartbeatStatusResponse, cancellationToken);
 
+    public Task<PulseStatusResponse> GetPulseStatusAsync(CancellationToken cancellationToken)
+        => GetAsync(_adminPulseStatusUri, CoreJsonContext.Default.PulseStatusResponse, cancellationToken);
+
+    public async Task<PulseRunResponse> RunPulseAsync(PulseRunRequest request, CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminPulseRunUri)
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.PulseRunRequest)
+        };
+
+        return await SendAsync(req, CoreJsonContext.Default.PulseRunResponse, cancellationToken);
+    }
+
+    public Task<RuntimeEventListResponse> GetPulseEventsAsync(int limit, CancellationToken cancellationToken)
+        => GetAsync(new Uri($"{_adminPulseEventsUri.AbsoluteUri}?limit={Math.Clamp(limit, 1, 500)}", UriKind.Absolute), CoreJsonContext.Default.RuntimeEventListResponse, cancellationToken);
+
+    public async Task<PulseStatusResponse> EnablePulseAsync(CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminPulseEnableUri);
+        return await SendAsync(req, CoreJsonContext.Default.PulseStatusResponse, cancellationToken);
+    }
+
+    public async Task<PulseStatusResponse> DisablePulseAsync(CancellationToken cancellationToken)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, _adminPulseDisableUri);
+        return await SendAsync(req, CoreJsonContext.Default.PulseStatusResponse, cancellationToken);
+    }
+
     public Task<SecurityPostureResponse> GetSecurityPostureAsync(CancellationToken cancellationToken)
         => GetAsync(_adminPostureUri, CoreJsonContext.Default.SecurityPostureResponse, cancellationToken);
 
@@ -774,6 +1043,35 @@ public sealed class OpenClawHttpClient : IDisposable
         };
 
         return await SendAsync(httpRequest, CoreJsonContext.Default.ModelEvaluationReport, cancellationToken);
+    }
+
+    public Task<ExternalCliConnectorListResponse> ListExternalCliConnectorsAsync(CancellationToken cancellationToken)
+        => GetAsync(_adminExternalCliConnectorsUri, CoreJsonContext.Default.ExternalCliConnectorListResponse, cancellationToken);
+
+    public Task<ExternalCliConnectorStatus> GetExternalCliConnectorStatusAsync(string connector, CancellationToken cancellationToken)
+        => GetAsync(BuildExternalCliConnectorUri(connector), CoreJsonContext.Default.ExternalCliConnectorStatus, cancellationToken);
+
+    public Task<ExternalCliCommandListResponse> ListExternalCliCommandsAsync(string connector, CancellationToken cancellationToken)
+        => GetAsync(BuildExternalCliConnectorCommandsUri(connector), CoreJsonContext.Default.ExternalCliCommandListResponse, cancellationToken);
+
+    public async Task<ExternalCliPreviewResponse> PreviewExternalCliAsync(ExternalCliPreviewRequest request, CancellationToken cancellationToken)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _adminExternalCliPreviewUri)
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.ExternalCliPreviewRequest)
+        };
+
+        return await SendAsync(httpRequest, CoreJsonContext.Default.ExternalCliPreviewResponse, cancellationToken);
+    }
+
+    public async Task<ExternalCliExecutionResult> ExecuteExternalCliAsync(ExternalCliExecuteRequest request, CancellationToken cancellationToken)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _adminExternalCliExecuteUri)
+        {
+            Content = BuildJsonContent(request, CoreJsonContext.Default.ExternalCliExecuteRequest)
+        };
+
+        return await SendAsync(httpRequest, CoreJsonContext.Default.ExternalCliExecutionResult, cancellationToken);
     }
 
     public async Task<ApprovalSimulationResponse> SimulateApprovalAsync(
@@ -1008,6 +1306,7 @@ public sealed class OpenClawHttpClient : IDisposable
         JsonTypeInfo<TResult> resultTypeInfo,
         CancellationToken cancellationToken)
     {
+        var protocolVersion = ResolveMcpProtocolVersion(method, parameters);
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {
@@ -1016,15 +1315,7 @@ public sealed class OpenClawHttpClient : IDisposable
             writer.WriteString("id", Interlocked.Increment(ref _mcpRequestId).ToString());
             writer.WriteString("method", method);
             writer.WritePropertyName("params");
-            if (parameters is null || jsonTypeInfo is null)
-            {
-                writer.WriteStartObject();
-                writer.WriteEndObject();
-            }
-            else
-            {
-                JsonSerializer.Serialize(writer, parameters, jsonTypeInfo);
-            }
+            WriteMcpParams(writer, parameters, jsonTypeInfo, protocolVersion);
             writer.WriteEndObject();
         }
 
@@ -1036,6 +1327,10 @@ public sealed class OpenClawHttpClient : IDisposable
         req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
+        req.Headers.TryAddWithoutValidation("mcp-protocol-version", protocolVersion);
+        req.Headers.TryAddWithoutValidation("Mcp-Method", method);
+        if (TryResolveMcpName(method, parameters, out var mcpName))
+            req.Headers.TryAddWithoutValidation("Mcp-Name", mcpName);
 
         using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         if (!resp.IsSuccessStatusCode)
@@ -1047,7 +1342,7 @@ public sealed class OpenClawHttpClient : IDisposable
         if (envelope is null)
             throw new InvalidOperationException("Empty MCP response body.");
         if (envelope.Error is not null)
-            throw new InvalidOperationException($"MCP {envelope.Error.Code}: {envelope.Error.Message}");
+            throw new McpProtocolException(resp.StatusCode, envelope.Error.Code, envelope.Error.Message);
 
         var result = envelope.Result.Deserialize(resultTypeInfo);
         if (result is null)
@@ -1055,6 +1350,125 @@ public sealed class OpenClawHttpClient : IDisposable
 
         return result;
     }
+
+    private string ResolveMcpProtocolVersion<TParams>(string method, TParams? parameters)
+    {
+        return parameters switch
+        {
+            McpInitializeRequest { ProtocolVersion: { Length: > 0 } protocolVersion } => protocolVersion,
+            _ when !string.IsNullOrWhiteSpace(_negotiatedMcpProtocolVersion) => _negotiatedMcpProtocolVersion!,
+            _ when string.Equals(method, "server/discover", StringComparison.Ordinal) => LatestMcpProtocolVersion,
+            _ => LatestLegacyMcpProtocolVersion
+        };
+    }
+
+    private static void WriteMcpParams<TParams>(
+        Utf8JsonWriter writer,
+        TParams? parameters,
+        JsonTypeInfo<TParams>? jsonTypeInfo,
+        string protocolVersion)
+    {
+        if (StringComparer.Ordinal.Compare(protocolVersion, LatestMcpProtocolVersion) < 0)
+        {
+            if (parameters is null || jsonTypeInfo is null)
+            {
+                writer.WriteStartObject();
+                writer.WriteEndObject();
+            }
+            else
+            {
+                JsonSerializer.Serialize(writer, parameters, jsonTypeInfo);
+            }
+
+            return;
+        }
+
+        var serializedParams = parameters is null || jsonTypeInfo is null
+            ? default
+            : JsonSerializer.SerializeToElement(parameters, jsonTypeInfo);
+        if (serializedParams.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Object))
+            throw new InvalidOperationException("MCP request parameters must serialize as a JSON object.");
+
+        JsonElement existingMeta = default;
+        writer.WriteStartObject();
+        if (serializedParams.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in serializedParams.EnumerateObject())
+            {
+                if (property.NameEquals("_meta"))
+                {
+                    existingMeta = property.Value;
+                    continue;
+                }
+
+                property.WriteTo(writer);
+            }
+        }
+
+        writer.WritePropertyName("_meta");
+        writer.WriteStartObject();
+        if (existingMeta.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in existingMeta.EnumerateObject())
+            {
+                if (property.NameEquals(McpProtocolVersionMetaKey) ||
+                    property.NameEquals(McpClientInfoMetaKey) ||
+                    property.NameEquals(McpClientCapabilitiesMetaKey))
+                {
+                    continue;
+                }
+
+                property.WriteTo(writer);
+            }
+        }
+
+        writer.WriteString(McpProtocolVersionMetaKey, protocolVersion);
+        writer.WritePropertyName(McpClientInfoMetaKey);
+        JsonSerializer.Serialize(
+            writer,
+            new McpClientInfo { Name = "openclaw-client", Version = "1.0.0" },
+            McpJsonContext.Default.McpClientInfo);
+        writer.WritePropertyName(McpClientCapabilitiesMetaKey);
+        JsonSerializer.Serialize(writer, new McpClientCapabilities(), McpJsonContext.Default.McpClientCapabilities);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static bool TryResolveMcpName<TParams>(string method, TParams? parameters, out string name)
+    {
+        switch (method)
+        {
+            case "tools/call" when parameters is McpCallToolRequest toolRequest && !string.IsNullOrWhiteSpace(toolRequest.Name):
+                name = toolRequest.Name;
+                return true;
+            case "resources/read" when parameters is McpReadResourceRequest resourceRequest && !string.IsNullOrWhiteSpace(resourceRequest.Uri):
+                name = resourceRequest.Uri;
+                return true;
+            case "prompts/get" when parameters is McpGetPromptRequest promptRequest && !string.IsNullOrWhiteSpace(promptRequest.Name):
+                name = promptRequest.Name;
+                return true;
+            default:
+                name = string.Empty;
+                return false;
+        }
+    }
+
+    private void RememberNegotiatedProtocolVersion(string? protocolVersion)
+    {
+        if (!string.IsNullOrWhiteSpace(protocolVersion))
+            _negotiatedMcpProtocolVersion = protocolVersion;
+    }
+
+    private static string ResolveNegotiatedProtocolVersion(McpDiscoverResult result)
+        => !string.IsNullOrWhiteSpace(result.ProtocolVersion)
+            ? result.ProtocolVersion
+            : result.SupportedVersions.Contains(LatestMcpProtocolVersion, StringComparer.Ordinal)
+                ? LatestMcpProtocolVersion
+                : result.SupportedVersions
+                    .Where(static version => !string.IsNullOrWhiteSpace(version))
+                    .OrderDescending(StringComparer.Ordinal)
+                    .FirstOrDefault()
+                  ?? LatestLegacyMcpProtocolVersion;
 
     private static async Task<string> ExtractMcpResponseJsonAsync(HttpResponseMessage resp, CancellationToken cancellationToken)
     {
@@ -1284,6 +1698,45 @@ public sealed class OpenClawHttpClient : IDisposable
     private Uri BuildAutomationRunUri(string automationId)
         => new($"{BuildAutomationUri(automationId).AbsoluteUri}/run", UriKind.Absolute);
 
+    private Uri BuildAutomationRunsUri(string automationId)
+        => new($"{BuildAutomationUri(automationId).AbsoluteUri}/runs", UriKind.Absolute);
+
+    private Uri BuildAutomationRunDetailUri(string automationId, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new ArgumentException("Automation run id is required.", nameof(runId));
+
+        return new Uri($"{BuildAutomationRunsUri(automationId).AbsoluteUri}/{Uri.EscapeDataString(runId)}", UriKind.Absolute);
+    }
+
+    private Uri BuildAutomationRunReplayUri(string automationId, string runId)
+        => new($"{BuildAutomationRunDetailUri(automationId, runId).AbsoluteUri}/replay", UriKind.Absolute);
+
+    private Uri BuildAutomationQuarantineClearUri(string automationId)
+        => new($"{BuildAutomationUri(automationId).AbsoluteUri}/quarantine/clear", UriKind.Absolute);
+
+    private Uri BuildWorkflowUri(string workflowId)
+    {
+        if (string.IsNullOrWhiteSpace(workflowId))
+            throw new ArgumentException("Workflow id is required.", nameof(workflowId));
+
+        return new Uri($"{_integrationWorkflowsUri.AbsoluteUri.TrimEnd('/')}/{Uri.EscapeDataString(workflowId)}", UriKind.Absolute);
+    }
+
+    private Uri BuildWorkflowRunsUri(string workflowId)
+        => new($"{BuildWorkflowUri(workflowId).AbsoluteUri}/runs", UriKind.Absolute);
+
+    private Uri BuildWorkflowRunUri(string workflowId, string runId)
+    {
+        if (string.IsNullOrWhiteSpace(runId))
+            throw new ArgumentException("Workflow run id is required.", nameof(runId));
+
+        return new Uri($"{BuildWorkflowRunsUri(workflowId).AbsoluteUri}/{Uri.EscapeDataString(runId)}", UriKind.Absolute);
+    }
+
+    private Uri BuildWorkflowRunResponsesUri(string workflowId, string runId)
+        => new($"{BuildWorkflowRunUri(workflowId, runId).AbsoluteUri}/responses", UriKind.Absolute);
+
     private Uri BuildAutomationTemplatesUri(bool admin)
     {
         var baseUri = admin ? _adminAutomationsUri : _integrationAutomationsUri;
@@ -1400,6 +1853,89 @@ public sealed class OpenClawHttpClient : IDisposable
         return new Uri($"{_adminMemoryExportUri}?{string.Join("&", pairs)}", UriKind.RelativeOrAbsolute);
     }
 
+    private Uri BuildFractalSearchUri(string query, int limit, string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            throw new ArgumentException("Query is required.", nameof(query));
+
+        var pairs = new List<string>
+        {
+            $"query={Uri.EscapeDataString(query)}",
+            $"limit={Math.Clamp(limit, 1, 50)}"
+        };
+        if (!string.IsNullOrWhiteSpace(scope))
+            pairs.Add($"scope={Uri.EscapeDataString(scope)}");
+        return new Uri($"{_adminMemoryFractalSearchUri}?{string.Join("&", pairs)}", UriKind.Absolute);
+    }
+
+    private Uri BuildFractalOpenUri(string path, int? depth, string? view)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path is required.", nameof(path));
+
+        var pairs = new List<string>
+        {
+            $"path={Uri.EscapeDataString(path)}"
+        };
+        if (depth.HasValue)
+            pairs.Add($"depth={Math.Clamp(depth.Value, 0, 3)}");
+        if (!string.IsNullOrWhiteSpace(view))
+            pairs.Add($"view={Uri.EscapeDataString(view)}");
+        return new Uri($"{_adminMemoryFractalOpenUri}?{string.Join("&", pairs)}", UriKind.Absolute);
+    }
+
+    private Uri BuildFractalExportUri(string path, string? mode)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Path is required.", nameof(path));
+
+        var pairs = new List<string>
+        {
+            $"path={Uri.EscapeDataString(path)}"
+        };
+        if (!string.IsNullOrWhiteSpace(mode))
+            pairs.Add($"mode={Uri.EscapeDataString(mode)}");
+        return new Uri($"{_adminMemoryFractalExportUri}?{string.Join("&", pairs)}", UriKind.Absolute);
+    }
+
+    private Uri BuildFractalRecentUri(int days, int limit, string? scope)
+    {
+        var pairs = new List<string>
+        {
+            $"days={Math.Clamp(days, 1, 3650)}",
+            $"limit={Math.Clamp(limit, 1, 100)}"
+        };
+        if (!string.IsNullOrWhiteSpace(scope))
+            pairs.Add($"scope={Uri.EscapeDataString(scope)}");
+        return new Uri($"{_adminMemoryFractalRecentUri}?{string.Join("&", pairs)}", UriKind.Absolute);
+    }
+
+    private Uri BuildSharedHarnessStateListUri(SharedHarnessStateListQuery? query)
+    {
+        query ??= new SharedHarnessStateListQuery();
+        var pairs = new List<string>
+        {
+            $"limit={Math.Clamp(query.Limit, 1, 500)}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(query.SessionId))
+            pairs.Add($"sessionId={Uri.EscapeDataString(query.SessionId)}");
+        if (!string.IsNullOrWhiteSpace(query.ParentSessionId))
+            pairs.Add($"parentSessionId={Uri.EscapeDataString(query.ParentSessionId)}");
+        if (!string.IsNullOrWhiteSpace(query.HarnessContractId))
+            pairs.Add($"harnessContractId={Uri.EscapeDataString(query.HarnessContractId)}");
+        if (!string.IsNullOrWhiteSpace(query.Status))
+            pairs.Add($"status={Uri.EscapeDataString(query.Status)}");
+        if (!string.IsNullOrWhiteSpace(query.Tag))
+            pairs.Add($"tag={Uri.EscapeDataString(query.Tag)}");
+        if (query.CreatedFromUtc.HasValue)
+            pairs.Add($"createdFromUtc={Uri.EscapeDataString(query.CreatedFromUtc.Value.ToString("O"))}");
+        if (query.CreatedToUtc.HasValue)
+            pairs.Add($"createdToUtc={Uri.EscapeDataString(query.CreatedToUtc.Value.ToString("O"))}");
+
+        return new Uri($"{_adminHarnessSharedStateUri}?{string.Join("&", pairs)}", UriKind.Absolute);
+    }
+
     private Uri BuildAgentBundleExportUri(
         string? actorId,
         string? projectId,
@@ -1491,6 +2027,22 @@ public sealed class OpenClawHttpClient : IDisposable
         return new Uri($"{_integrationRuntimeEventsUri}?{string.Join("&", pairs)}", UriKind.RelativeOrAbsolute);
     }
 
+    private Uri BuildExternalCliConnectorUri(string connector)
+    {
+        if (string.IsNullOrWhiteSpace(connector))
+            throw new ArgumentException("Connector is required.", nameof(connector));
+
+        return new Uri(_adminExternalCliConnectorsUri, $"/admin/external-cli/connectors/{Uri.EscapeDataString(connector)}");
+    }
+
+    private Uri BuildExternalCliConnectorCommandsUri(string connector)
+    {
+        if (string.IsNullOrWhiteSpace(connector))
+            throw new ArgumentException("Connector is required.", nameof(connector));
+
+        return new Uri(_adminExternalCliConnectorsUri, $"/admin/external-cli/connectors/{Uri.EscapeDataString(connector)}/commands");
+    }
+
     private Uri BuildChannelAuthUri(string channelId, string? accountId)
     {
         if (string.IsNullOrWhiteSpace(channelId))
@@ -1518,6 +2070,22 @@ public sealed class OpenClawHttpClient : IDisposable
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 
+    private static Uri BuildPaymentUri(Uri baseUri, string? provider, string? environment, bool yes)
+    {
+        var pairs = new List<string>();
+        if (!string.IsNullOrWhiteSpace(provider))
+            pairs.Add($"provider={Uri.EscapeDataString(provider)}");
+        if (!string.IsNullOrWhiteSpace(environment))
+            pairs.Add($"environment={Uri.EscapeDataString(environment)}");
+        if (yes)
+            pairs.Add("yes=true");
+        if (pairs.Count == 0)
+            return baseUri;
+
+        var separator = string.IsNullOrEmpty(baseUri.Query) ? "?" : "&";
+        return new Uri(baseUri.AbsoluteUri + separator + string.Join("&", pairs), UriKind.Absolute);
+    }
+
     private static void ApplyPresetHeader(HttpRequestMessage request, string? presetId)
     {
         if (!string.IsNullOrWhiteSpace(presetId))
@@ -1537,13 +2105,51 @@ public sealed class OpenClawHttpClient : IDisposable
 
         var status = $"{(int)resp.StatusCode} {resp.ReasonPhrase}".Trim();
         if (string.IsNullOrWhiteSpace(body))
-            return new HttpRequestException($"HTTP {status}");
+            return new HttpRequestException($"HTTP {status}", inner: null, resp.StatusCode);
 
         body = body.Trim();
+        if (TryParseMcpError(body, out var rpcCode, out var rpcMessage))
+            return new McpProtocolException(resp.StatusCode, rpcCode, rpcMessage);
+
         if (body.Length > 8000)
             body = body[..8000] + "…";
 
-        return new HttpRequestException($"HTTP {status}\n{body}");
+        return new HttpRequestException($"HTTP {status}\n{body}", inner: null, resp.StatusCode);
+    }
+
+    private static bool TryParseMcpError(string body, out int rpcCode, out string rpcMessage)
+    {
+        rpcCode = 0;
+        rpcMessage = string.Empty;
+
+        try
+        {
+            var envelope = JsonSerializer.Deserialize(body, McpJsonContext.Default.McpJsonRpcResponse);
+            if (envelope?.Error is null)
+                return false;
+
+            rpcCode = envelope.Error.Code;
+            rpcMessage = envelope.Error.Message;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private sealed class McpProtocolException : HttpRequestException
+    {
+        public McpProtocolException(HttpStatusCode statusCode, int? rpcCode, string message)
+            : base($"HTTP {(int)statusCode} ({(rpcCode.HasValue ? $"MCP {rpcCode.Value}" : "MCP")}): {message}", null, statusCode)
+        {
+            StatusCode = statusCode;
+            RpcCode = rpcCode;
+        }
+
+        public new HttpStatusCode StatusCode { get; }
+
+        public int? RpcCode { get; }
     }
 
     public void Dispose()

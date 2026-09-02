@@ -1,5 +1,7 @@
 using ModelContextProtocol;
+using ModelContextProtocol.Extensions.Tasks;
 using ModelContextProtocol.Protocol;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Composition;
@@ -20,7 +22,7 @@ internal static class McpServiceExtensions
         this IServiceCollection services,
         GatewayStartupContext startup)
     {
-        services.AddSingleton<GatewayRuntimeHolder>();
+        services.TryAddSingleton<GatewayRuntimeHolder>();
 
         services.AddSingleton<IntegrationApiFacade>(sp =>
         {
@@ -36,7 +38,14 @@ internal static class McpServiceExtensions
                     Version = "1.0.0"
                 };
             })
-            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithHttpTransport(options =>
+            {
+                // Stateless (discovery-first) when EnableDiscoveryFirst is set and ForceLegacyInitialize is not.
+                options.Stateless = startup.Config.McpCompatibility.EnableDiscoveryFirst
+                    && !startup.Config.McpCompatibility.ForceLegacyInitialize;
+                options.ConfigureSessionOptions = AppsMcpProxyEndpoint.ConfigureSessionOptionsAsync;
+            })
+            .WithTasks(new InMemoryMcpTaskStore())
             .WithTools<OpenClawMcpTools>()
             .WithResources<OpenClawMcpResources>()
             .WithPrompts<OpenClawMcpPrompts>();

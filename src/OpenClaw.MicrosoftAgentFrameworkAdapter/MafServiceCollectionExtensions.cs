@@ -7,7 +7,7 @@ namespace OpenClaw.MicrosoftAgentFrameworkAdapter;
 
 public static class MafServiceCollectionExtensions
 {
-    public static IServiceCollection AddMicrosoftAgentFrameworkExperiment(
+    public static IServiceCollection AddMicrosoftAgentFramework(
         this IServiceCollection services,
         IConfiguration configuration)
     {

@@ -5,10 +5,11 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
+using OpenClaw.Core.Security;
 
 namespace OpenClaw.Core.Memory;
 
-public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNoteCatalog, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore, IDisposable
+public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNoteCatalog, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore, IBackgroundSessionStore, IDisposable
 {
     private readonly string _dbPath;
     private readonly bool _enableFtsRequested;
@@ -16,6 +17,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
     private readonly IEmbeddingGenerator<string, Embedding<float>>? _embeddingGenerator;
     private readonly bool _enableVectors;
     private readonly ILogger? _logger;
+    private readonly IRedactionPipeline? _redaction;
 
     public SqliteMemoryStore(string dbPath, bool enableFts)
         : this(dbPath, enableFts, embeddingGenerator: null, enableVectors: false, logger: null)
@@ -25,13 +27,15 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
     public SqliteMemoryStore(string dbPath, bool enableFts,
         IEmbeddingGenerator<string, Embedding<float>>? embeddingGenerator = null,
         bool enableVectors = false,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IRedactionPipeline? redaction = null)
     {
         _dbPath = dbPath ?? throw new ArgumentNullException(nameof(dbPath));
         _enableFtsRequested = enableFts;
         _embeddingGenerator = embeddingGenerator;
         _enableVectors = enableVectors && embeddingGenerator is not null;
         _logger = logger;
+        _redaction = redaction;
 
         var dir = Path.GetDirectoryName(Path.GetFullPath(_dbPath));
         if (!string.IsNullOrWhiteSpace(dir))
@@ -179,7 +183,8 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         if (session is null)
             throw new ArgumentNullException(nameof(session));
 
-        var json = JsonSerializer.Serialize(session, CoreJsonContext.Default.Session);
+        var persistedSession = _redaction?.RedactSession(session) ?? session;
+        var json = JsonSerializer.Serialize(persistedSession, CoreJsonContext.Default.Session);
         var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         await using var conn = new SqliteConnection(ConnectionString);
@@ -198,7 +203,68 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         cmd.Parameters.AddWithValue("$updated_at", updatedAt);
 
         await cmd.ExecuteNonQueryAsync(ct);
-        await SyncSessionSearchIndexAsync(conn, session, ct);
+        await SyncSessionSearchIndexAsync(conn, persistedSession, ct);
+    }
+
+    public async ValueTask<IReadOnlyList<Session>> ListBackgroundRunnableSessionsAsync(int limit, CancellationToken ct)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        var sessions = new List<Session>();
+
+        await using var conn = new SqliteConnection(ConnectionString);
+        await conn.OpenAsync(ct);
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT json FROM sessions ORDER BY updated_at ASC;";
+
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            ct.ThrowIfCancellationRequested();
+            Session? session;
+            try
+            {
+                var json = reader.GetString(0);
+                session = JsonSerializer.Deserialize(json, CoreJsonContext.Default.Session);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session row during background recovery scan");
+                session = null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session row during background recovery scan");
+                session = null;
+            }
+
+            if (session is { BackgroundRun: not null, RunState: SessionRunState.Running or SessionRunState.Continuing })
+                sessions.Add(session);
+        }
+
+        return sessions
+            .OrderBy(static s => s.BackgroundRun?.LastContinuedAtUtc ?? s.LastActiveAt)
+            .Take(limit)
+            .ToArray();
+    }
+    
+    public async ValueTask DeleteSessionAsync(string sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        await using var conn = new SqliteConnection(ConnectionString);
+        await conn.OpenAsync(ct);
+
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        var ids = new[] { sessionId };
+        await DeleteSessionSearchRowsAsync(conn, ids, ct);
+        await DeleteSessionsByIdAsync(conn, ids, ct);
+        await tx.CommitAsync(ct);
     }
 
     public async ValueTask<string?> LoadNoteAsync(string key, CancellationToken ct)
@@ -221,7 +287,7 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         if (string.IsNullOrWhiteSpace(key))
             throw new ArgumentException("key must be set.", nameof(key));
 
-        content ??= "";
+        content = _redaction?.Redact(content) ?? content ?? "";
         var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         await using var conn = new SqliteConnection(ConnectionString);
@@ -541,7 +607,8 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
         if (branch is null)
             throw new ArgumentNullException(nameof(branch));
 
-        var json = JsonSerializer.Serialize(branch, CoreJsonContext.Default.SessionBranch);
+        var persistedBranch = _redaction?.RedactBranch(branch) ?? branch;
+        var json = JsonSerializer.Serialize(persistedBranch, CoreJsonContext.Default.SessionBranch);
         var updatedAt = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         await using var conn = new SqliteConnection(ConnectionString);
@@ -1170,6 +1237,11 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
                 HistoryTurns = session.History.Count,
                 TotalInputTokens = session.TotalInputTokens,
                 TotalOutputTokens = session.TotalOutputTokens,
+                TotalCacheReadTokens = session.TotalCacheReadTokens,
+                TotalCacheWriteTokens = session.TotalCacheWriteTokens,
+                RunState = session.RunState,
+                BackgroundRunObjective = session.BackgroundRun?.Objective,
+                BackgroundContinuationCount = session.BackgroundRun?.ContinuationCount ?? 0,
                 IsActive = false
             });
         }

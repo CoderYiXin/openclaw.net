@@ -11,7 +11,7 @@ public static class ModelDoctorEvaluator
     public static ModelSelectionDoctorResponse Build(
         GatewayConfig config,
         IModelProfileRegistry? registry = null,
-        IReadOnlyList<ProviderTurnUsageEntry>? recentTurns = null)
+        IReadOnlyList<TurnTokenUsageRecord>? recentTurns = null)
     {
         if (registry is not null)
             return BuildFromRegistry(registry, recentTurns);
@@ -44,7 +44,7 @@ public static class ModelDoctorEvaluator
 
     private static ModelSelectionDoctorResponse BuildFromRegistry(
         IModelProfileRegistry registry,
-        IReadOnlyList<ProviderTurnUsageEntry>? recentTurns)
+        IReadOnlyList<TurnTokenUsageRecord>? recentTurns)
     {
         var statuses = registry.ListStatuses();
         var warnings = new List<string>();
@@ -94,6 +94,9 @@ public static class ModelDoctorEvaluator
                 IsDefault = string.Equals(normalizedId, defaultProfileId, StringComparison.OrdinalIgnoreCase),
                 IsImplicit = config.Models.Profiles.Count == 0 && string.Equals(normalizedId, "default", StringComparison.OrdinalIgnoreCase),
                 IsAvailable = validationIssues.Length == 0,
+                ProviderGateway = ResolveProviderGateway(profile, providerId),
+                AuthMode = Normalize(profile.AuthMode) ?? Normalize(config.Llm.AuthMode) ?? "bearer",
+                SendRequestMetadata = profile.SendRequestMetadata ?? config.Llm.SendRequestMetadata,
                 Tags = ResolveTags(profile),
                 Capabilities = ResolveCapabilities(profile, providerId),
                 PromptCaching = MergePromptCaching(config.Llm.PromptCaching, profile.PromptCaching),
@@ -162,7 +165,7 @@ public static class ModelDoctorEvaluator
             yield return "BaseUrl is required for this provider unless inherited from OpenClaw:Llm:Endpoint.";
         }
 
-        if (RequiresCredentials(providerId) &&
+        if (RequiresCredentials(providerId, profile, config) &&
             string.IsNullOrWhiteSpace(ResolveSecretValue(profile.ApiKey)) &&
             string.IsNullOrWhiteSpace(ResolveSecretValue(config.Llm.ApiKey)))
         {
@@ -171,30 +174,61 @@ public static class ModelDoctorEvaluator
     }
 
     private static bool RequiresEndpoint(string providerId)
-        => providerId is "openai-compatible" or "groq" or "together" or "lmstudio" or "anthropic-vertex" or "amazon-bedrock" or "azure-openai";
+        => providerId is "openai-compatible" or "aperture" or "groq" or "together" or "lmstudio" or "anthropic-vertex" or "amazon-bedrock" or "azure-openai";
 
-    private static bool RequiresCredentials(string providerId)
-        => providerId is not "ollama" and not "lmstudio";
+    private static bool RequiresCredentials(string providerId, ModelProfileConfig profile, GatewayConfig config)
+    {
+        if (providerId is "ollama" or "lmstudio" or "embedded")
+            return false;
+
+        var authMode = Normalize(profile.AuthMode) ?? Normalize(config.Llm.AuthMode);
+        return !(providerId is "aperture" or "openai-compatible" &&
+                 string.Equals(authMode, "tailnet-identity", StringComparison.OrdinalIgnoreCase));
+    }
 
     private static ModelCapabilities GuessCapabilities(string providerId)
     {
         var provider = Normalize(providerId) ?? string.Empty;
-        var supportsTools = provider is "openai" or "openai-compatible" or "azure-openai" or "groq" or "together" or "lmstudio" or "anthropic" or "claude" or "anthropic-vertex" or "amazon-bedrock" or "gemini" or "google";
-        var supportsVision = provider is "openai" or "openai-compatible" or "azure-openai" or "gemini" or "google" or "ollama" or "amazon-bedrock";
+        if (provider == "embedded")
+        {
+            return new ModelCapabilities
+            {
+                SupportsTools = false,
+                SupportsVision = false,
+                SupportsJsonSchema = false,
+                SupportsStructuredOutputs = false,
+                SupportsStreaming = true,
+                SupportsParallelToolCalls = false,
+                SupportsReasoningEffort = false,
+                SupportsSystemMessages = true,
+                SupportsImageInput = false,
+                SupportsVideoInput = false,
+                SupportsAudioInput = false,
+                MaxContextTokens = 4096,
+                MaxOutputTokens = 1024
+            };
+        }
+
+        if (provider == DeepSeekProviderDefaults.ProviderId)
+            return DeepSeekProviderDefaults.BuildCapabilities();
+
+        var supportsTools = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai" or "groq" or "together" or "lmstudio" or "anthropic" or "claude" or "anthropic-vertex" or "amazon-bedrock" or "gemini" or "google";
+        var supportsVision = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai" or "gemini" or "google" or "ollama" or "amazon-bedrock";
         var supportsPromptCaching = provider is "openai" or "azure-openai" or "anthropic" or "claude" or "anthropic-vertex" or "gemini" or "google";
         var supportsExplicitCacheRetention = provider is "anthropic" or "claude" or "anthropic-vertex";
         return new ModelCapabilities
         {
             SupportsTools = supportsTools,
             SupportsVision = supportsVision,
-            SupportsJsonSchema = provider is "openai" or "openai-compatible" or "azure-openai",
-            SupportsStructuredOutputs = provider is "openai" or "openai-compatible" or "azure-openai",
+            SupportsJsonSchema = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai",
+            SupportsStructuredOutputs = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai",
             SupportsStreaming = true,
-            SupportsParallelToolCalls = provider is "openai" or "openai-compatible" or "azure-openai",
-            SupportsReasoningEffort = provider is "openai" or "openai-compatible" or "azure-openai",
+            SupportsParallelToolCalls = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai",
+            SupportsReasoningEffort = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai",
             SupportsSystemMessages = true,
             SupportsImageInput = supportsVision,
-            SupportsAudioInput = provider is "openai" or "openai-compatible" or "azure-openai",
+            SupportsVideoInput = supportsVision,
+            SupportsAudioInput = provider is "openai" or "openai-compatible" or "aperture" or "azure-openai",
             SupportsPromptCaching = supportsPromptCaching,
             SupportsExplicitCacheRetention = supportsExplicitCacheRetention,
             ReportsCacheReadTokens = supportsPromptCaching,
@@ -254,6 +288,19 @@ public static class ModelDoctorEvaluator
             .ToArray();
     }
 
+    private static string? ResolveProviderGateway(ModelProfileConfig profile, string providerId)
+    {
+        if (providerId.Equals("aperture", StringComparison.OrdinalIgnoreCase) ||
+            profile.Tags.Contains("aperture", StringComparer.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(profile.BaseUrl) &&
+             profile.BaseUrl.Contains("aperture", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Aperture";
+        }
+
+        return null;
+    }
+
     private static IReadOnlyList<string> ResolveCompatibilityNotes(ModelProfileConfig profile, GatewayConfig config)
     {
         var notes = new List<string>();
@@ -277,13 +324,23 @@ public static class ModelDoctorEvaluator
     private static IReadOnlyList<string> BuildPresetWarnings(
         ModelProfileStatus status,
         GatewayConfig? config,
-        IReadOnlyList<ProviderTurnUsageEntry>? recentTurns)
+        IReadOnlyList<TurnTokenUsageRecord>? recentTurns)
     {
         var warnings = new List<string>();
         if (status.ProviderId.Equals("ollama", StringComparison.OrdinalIgnoreCase) &&
             string.IsNullOrWhiteSpace(status.PresetId))
         {
             warnings.Add($"Profile '{status.Id}' is an Ollama profile without a PresetId. Use a local preset so doctor and setup can apply local-model guidance.");
+        }
+
+        if (status.ProviderId.Equals("embedded", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(status.PresetId))
+                warnings.Add($"Profile '{status.Id}' is embedded local but has no PresetId. Use an embedded preset so model install and verification can find the package.");
+            if (config is not null && !config.LocalInference.Enabled)
+                warnings.Add($"Profile '{status.Id}' uses the embedded provider but OpenClaw:LocalInference:Enabled is false.");
+            if (status.FallbackProfileIds.Length == 0 && status.FallbackModels.Length == 0)
+                warnings.Add($"Profile '{status.Id}' has no fallback profile configured for tool-heavy or long-context routes.");
         }
 
         if (status.UsesCompatibilityTransport)

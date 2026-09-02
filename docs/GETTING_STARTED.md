@@ -11,7 +11,8 @@ OpenClaw.NET is a self-hosted .NET agent platform made of a few distinct layers:
 1. A gateway process that exposes HTTP, WebSocket, web UI, admin UI, and webhook endpoints.
 2. An agent runtime that runs the model loop, selects tools, and coordinates sessions, memory, approvals, and routing.
 3. Tool backends and integrations that let the agent read files, run shell commands, search the web, talk to channels, and call external systems.
-4. Optional client surfaces such as the CLI, desktop Companion, TUI, and typed .NET client.
+4. Optional orchestration backends such as Microsoft Agent Framework and durable workflow hosts.
+5. Optional client surfaces such as the CLI, desktop Companion, TUI, and typed .NET client.
 
 The fastest way to stay oriented is to think of it like this:
 
@@ -53,12 +54,15 @@ These are the directories most people need first:
 | `src/OpenClaw.Tui` | Terminal UI. |
 | `src/OpenClaw.Client` | Typed .NET client for the integration API and MCP facade. |
 | `src/OpenClaw.SemanticKernelAdapter` | Semantic Kernel integration layer. |
-| `src/OpenClaw.MicrosoftAgentFrameworkAdapter` | Optional Microsoft Agent Framework adapter. |
+| `src/OpenClaw.MicrosoftAgentFrameworkAdapter` | Supported optional Microsoft Agent Framework adapter. |
+| `src/OpenClaw.Protocols.Browser` | Optional Playwright-backed browser automation tool, composed by the gateway when browser tooling is enabled and available. |
+| `src/OpenClaw.Protocols.Mqtt` | Optional MQTT native tools and event bridge, composed by the gateway when MQTT is enabled. |
 | `src/OpenClaw.PluginKit` | Support code for plugin authoring and plugin integration. |
 | `src/OpenClaw.Tests` | Unit and integration-style tests for the runtime and services. |
 | `src/OpenClaw.WhatsApp.BaileysWorker` | .NET-facing WhatsApp worker integration project. |
 | `src/whatsapp-baileys-worker` | Node.js worker used by the WhatsApp Baileys bridge. |
 | `src/whatsapp-whatsmeow-worker` | Go worker for WhatsApp-related integration work. |
+| `samples/OpenClaw.DurableAgentReview` | Durable workflow delegation sample for the `maf-durable-http` backend contract. |
 
 ## How The Pieces Fit Together
 
@@ -211,6 +215,13 @@ dotnet build
 dotnet run --project src/OpenClaw.Cli -c Release -- setup
 ```
 
+For DeepSeek, use `DEEPSEEK_API_KEY` and the named provider so setup writes the DeepSeek OpenAI-compatible endpoint automatically:
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+dotnet run --project src/OpenClaw.Cli -c Release -- setup --non-interactive --profile local --workspace ./workspace --provider deepseek --api-key env:DEEPSEEK_API_KEY
+```
+
 What `setup` gives you:
 
 - an external config file, usually at `~/.openclaw/config/openclaw.settings.json`
@@ -255,6 +266,24 @@ Important:
 - the browser chat entrypoint is `/chat`
 - the operator/admin entrypoint is `/admin`
 - the root URL currently redirects to `/chat`, but `/chat` is the explicit browser UI entrypoint
+
+## A2A Task Quick View
+
+If A2A is enabled (`OpenClaw:MicrosoftAgentFramework:EnableA2A=true`), OpenClaw exposes:
+
+- HTTP+JSON: `/a2a`
+- JSON-RPC: `/a2a/rpc`
+- Agent Card: `/.well-known/agent-card.json`
+
+A2A requests run with protocol task semantics. `message:send` and `message:stream` both execute in task context, and streaming follows the standard lifecycle:
+
+- `submitted`
+- `working`
+- terminal `completed` or `failed`
+
+Task cancellation is wired through the A2A handler when a task id is provided. The current task store is in-memory (`ITaskStore`), so task state is not durable across process restarts.
+
+For the full A2A behavior and operator notes, see [a2a.md](a2a.md).
 
 ### If You Start The Gateway Directly From Visual Studio
 

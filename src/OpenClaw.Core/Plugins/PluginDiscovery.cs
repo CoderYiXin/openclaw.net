@@ -10,6 +10,9 @@ namespace OpenClaw.Core.Plugins;
 /// </summary>
 public static class PluginDiscovery
 {
+    private const int MaxPluginScanDepth = 8;
+    private const int MaxSymlinkResolutionDepth = 64;
+
     private const string ManifestFileName = "openclaw.plugin.json";
     private const string PackageJsonFileName = "package.json";
 
@@ -111,24 +114,16 @@ public static class PluginDiscovery
             TryAddPluginFromFile(file, seen, result);
         foreach (var file in Directory.EnumerateFiles(extensionsDir, "*.mjs"))
             TryAddPluginFromFile(file, seen, result);
+        foreach (var file in Directory.EnumerateFiles(extensionsDir, "*.cjs"))
+            TryAddPluginFromFile(file, seen, result);
 
-        // Scan for subdirectories with index.ts, index.js, or index.mjs
-        foreach (var subDir in Directory.EnumerateDirectories(extensionsDir))
-        {
-            var indexTs = Path.Combine(subDir, "index.ts");
-            var indexJs = Path.Combine(subDir, "index.js");
-            var indexMjs = Path.Combine(subDir, "index.mjs");
-
-            if (File.Exists(indexTs))
-                TryAddPluginFromFile(indexTs, seen, result);
-            else if (File.Exists(indexJs))
-                TryAddPluginFromFile(indexJs, seen, result);
-            else if (File.Exists(indexMjs))
-                TryAddPluginFromFile(indexMjs, seen, result);
-        }
+        // Scan each installed directory using native-plugin precedence followed by
+        // compatible bundle detection.
+        foreach (var subDir in Directory.EnumerateDirectories(extensionsDir, "*", PluginDirectoryEnumerationOptions()))
+            ScanDirectory(subDir, seen, result);
     }
 
-    private static void ScanDirectory(string dir, HashSet<string> seen, PluginDiscoveryResult result)
+    private static void ScanDirectory(string dir, HashSet<string> seen, PluginDiscoveryResult result, int depth = 0)
     {
         // Check if this directory is itself a plugin (has manifest)
         var manifestPath = Path.Combine(dir, ManifestFileName);
@@ -138,18 +133,89 @@ public static class PluginDiscovery
             return;
         }
 
-        // Check for package pack (package.json with openclaw.extensions)
+        // Native package metadata takes precedence over compatible bundle markers.
         var packageJsonPath = Path.Combine(dir, PackageJsonFileName);
-        if (File.Exists(packageJsonPath))
+        if (File.Exists(packageJsonPath) && TryAddPluginPack(dir, packageJsonPath, seen, result))
+            return;
+
+        var conventionalEntry = new[] { "index.js", "index.mjs", "index.cjs", "index.ts" }
+            .Select(candidate => Path.Combine(dir, candidate))
+            .FirstOrDefault(File.Exists);
+        if (conventionalEntry is not null && !PluginBundleDetector.HasExplicitOrStrongMarker(dir))
         {
-            TryAddPluginPack(dir, packageJsonPath, seen, result);
+            TryAddPluginFromFile(conventionalEntry, seen, result);
             return;
         }
 
-        // Scan subdirectories
-        foreach (var subDir in Directory.EnumerateDirectories(dir))
-            ScanDirectory(subDir, seen, result);
+        if (PluginBundleDetector.TryDetect(dir, out var bundle, out var bundleDiagnostic))
+        {
+            if (bundleDiagnostic is not null)
+            {
+                result.Reports.Add(new PluginLoadReport
+                {
+                    PluginId = Path.GetFileName(dir),
+                    SourcePath = Path.GetFullPath(dir),
+                    EntryPath = null,
+                    Origin = PluginFormats.Bundle,
+                    Loaded = false,
+                    Diagnostics = [bundleDiagnostic]
+                });
+                return;
+            }
+
+            if (bundle is not null && seen.Add(bundle.Manifest.Id))
+            {
+                result.Plugins.Add(bundle);
+            }
+            else if (bundle is not null)
+            {
+                result.Reports.Add(new PluginLoadReport
+                {
+                    PluginId = bundle.Manifest.Id,
+                    SourcePath = bundle.RootPath,
+                    EntryPath = null,
+                    Origin = PluginFormats.Bundle,
+                    Loaded = false,
+                    Diagnostics =
+                    [
+                        new PluginCompatibilityDiagnostic
+                        {
+                            Code = "duplicate_plugin_id",
+                            Message = $"Plugin id '{bundle.Manifest.Id}' was discovered more than once. Later entries are skipped.",
+                            Surface = "bundle_manifest",
+                            Path = bundle.RootPath
+                        }
+                    ]
+                });
+            }
+            return;
+        }
+
+        if (conventionalEntry is not null)
+        {
+            TryAddPluginFromFile(conventionalEntry, seen, result);
+            return;
+        }
+
+        // Scan subdirectories without following links or traversing arbitrary depth.
+        if (depth >= MaxPluginScanDepth)
+            return;
+
+        foreach (var subDir in Directory.EnumerateDirectories(dir, "*", PluginDirectoryEnumerationOptions()))
+        {
+            var name = Path.GetFileName(subDir);
+            if (name is "node_modules" or ".git")
+                continue;
+            ScanDirectory(subDir, seen, result, depth + 1);
+        }
     }
+
+    private static EnumerationOptions PluginDirectoryEnumerationOptions()
+        => new()
+        {
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint
+        };
 
     private static void TryAddPluginFromFile(string filePath, HashSet<string> seen, PluginDiscoveryResult result)
     {
@@ -169,11 +235,16 @@ public static class PluginDiscovery
             if (!seen.Add(id))
                 return;
 
+            var packageMetadata = ReadPackageMetadata(dir);
+
             result.Plugins.Add(new DiscoveredPlugin
             {
                 Manifest = new PluginManifest { Id = id },
                 RootPath = dir,
-                EntryPath = Path.GetFullPath(filePath)
+                EntryPath = Path.GetFullPath(filePath),
+                PluginApiRange = packageMetadata.PluginApiRange,
+                MinHostVersion = packageMetadata.MinHostVersion,
+                ExpectedIntegrity = packageMetadata.ExpectedIntegrity
             });
         }
     }
@@ -208,7 +279,25 @@ public static class PluginDiscovery
         }
 
         if (manifest is null)
+        {
+            result.Reports.Add(new PluginLoadReport
+            {
+                PluginId = Path.GetFileName(pluginRoot),
+                SourcePath = Path.GetFullPath(pluginRoot),
+                EntryPath = null,
+                Loaded = false,
+                Diagnostics =
+                [
+                    new PluginCompatibilityDiagnostic
+                    {
+                        Code = "invalid_manifest",
+                        Message = $"Manifest '{manifestPath}' must contain a JSON object.",
+                        Path = Path.GetFullPath(manifestPath)
+                    }
+                ]
+            });
             return;
+        }
 
         if (!seen.Add(manifest.Id))
         {
@@ -246,7 +335,7 @@ public static class PluginDiscovery
                     new PluginCompatibilityDiagnostic
                     {
                         Code = entryDiagnostic?.Code ?? "entry_not_found",
-                        Message = entryDiagnostic?.Message ?? $"No plugin entry file was found for '{manifest.Id}'. Expected index.ts, index.js, index.mjs, src/index.*, or a package.json openclaw.extensions entry.",
+                        Message = entryDiagnostic?.Message ?? $"No plugin entry file was found for '{manifest.Id}'. Expected index.js/mjs/cjs/ts, src/index.*, or a package.json openclaw.runtimeExtensions/openclaw.extensions entry.",
                         Path = entryDiagnostic?.Path ?? Path.GetFullPath(pluginRoot)
                     }
                 ]
@@ -254,15 +343,40 @@ public static class PluginDiscovery
             return;
         }
 
+        if (!TryResolveContainedPath(pluginRoot, Path.GetRelativePath(pluginRoot, entryPath), out var containedEntryPath))
+        {
+            result.Reports.Add(new PluginLoadReport
+            {
+                PluginId = manifest.Id,
+                SourcePath = Path.GetFullPath(pluginRoot),
+                EntryPath = Path.GetFullPath(entryPath),
+                Loaded = false,
+                Diagnostics =
+                [
+                    new PluginCompatibilityDiagnostic
+                    {
+                        Code = "entry_outside_root",
+                        Message = $"Plugin entry file for '{manifest.Id}' resolves outside the plugin root.",
+                        Path = Path.GetFullPath(entryPath)
+                    }
+                ]
+            });
+            return;
+        }
+
+        var packageMetadata = ReadPackageMetadata(pluginRoot);
         result.Plugins.Add(new DiscoveredPlugin
         {
             Manifest = manifest,
             RootPath = Path.GetFullPath(pluginRoot),
-            EntryPath = Path.GetFullPath(entryPath)
+            EntryPath = containedEntryPath,
+            PluginApiRange = packageMetadata.PluginApiRange,
+            MinHostVersion = packageMetadata.MinHostVersion,
+            ExpectedIntegrity = packageMetadata.ExpectedIntegrity
         });
     }
 
-    private static void TryAddPluginPack(string dir, string packageJsonPath, HashSet<string> seen, PluginDiscoveryResult result)
+    private static bool TryAddPluginPack(string dir, string packageJsonPath, HashSet<string> seen, PluginDiscoveryResult result)
     {
         try
         {
@@ -271,11 +385,11 @@ public static class PluginDiscovery
             var root = doc.RootElement;
 
             if (!root.TryGetProperty("openclaw", out var ocProp))
-                return;
-            if (!ocProp.TryGetProperty("extensions", out var extProp))
-                return;
+                return false;
+            if (!TryGetRuntimeEntryArray(ocProp, out var extProp))
+                return false;
             if (extProp.ValueKind != JsonValueKind.Array)
-                return;
+                return false;
 
             var packName = root.TryGetProperty("name", out var nameProp)
                 ? nameProp.GetString() ?? Path.GetFileName(dir)
@@ -378,13 +492,19 @@ public static class PluginDiscovery
                     manifest = new PluginManifest { Id = pluginId };
                 }
 
+                var packageMetadata = ReadPackageMetadata(dir);
                 result.Plugins.Add(new DiscoveredPlugin
                 {
                     Manifest = manifest,
                     RootPath = Path.GetFullPath(dir),
-                    EntryPath = entryPath
+                    EntryPath = entryPath,
+                    PluginApiRange = packageMetadata.PluginApiRange,
+                    MinHostVersion = packageMetadata.MinHostVersion,
+                    ExpectedIntegrity = packageMetadata.ExpectedIntegrity
                 });
             }
+
+            return true;
         }
         catch
         {
@@ -404,27 +524,14 @@ public static class PluginDiscovery
                     }
                 ]
             });
+            return false;
         }
     }
 
     private static string? FindEntryFile(string pluginRoot, out PluginCompatibilityDiagnostic? diagnostic)
     {
         diagnostic = null;
-        // Check common entry points
-        string[] candidates =
-        [
-            "index.ts", "index.js", "index.mjs",
-            "src/index.ts", "src/index.js", "src/index.mjs"
-        ];
-
-        foreach (var candidate in candidates)
-        {
-            var path = Path.Combine(pluginRoot, candidate);
-            if (File.Exists(path))
-                return path;
-        }
-
-        // Check package.json for openclaw.extensions
+        // Installed packages publish built runtime entries separately from source entries.
         var packageJson = Path.Combine(pluginRoot, PackageJsonFileName);
         if (File.Exists(packageJson))
         {
@@ -435,8 +542,7 @@ public static class PluginDiscovery
                 var root = doc.RootElement;
 
                 if (root.TryGetProperty("openclaw", out var ocProp) &&
-                    ocProp.TryGetProperty("extensions", out var extProp) &&
-                    extProp.ValueKind == JsonValueKind.Array)
+                    TryGetRuntimeEntryArray(ocProp, out var extProp))
                 {
                     foreach (var ext in extProp.EnumerateArray())
                     {
@@ -466,8 +572,21 @@ public static class PluginDiscovery
             }
         }
 
+        // Check common entry points after package-owned runtime metadata.
+        string[] candidates =
+        [
+            "index.js", "index.mjs", "index.cjs", "index.ts",
+            "src/index.js", "src/index.mjs", "src/index.cjs", "src/index.ts"
+        ];
+
+        var conventionalEntry = candidates
+            .Select(candidate => Path.Combine(pluginRoot, candidate))
+            .FirstOrDefault(File.Exists);
+        if (conventionalEntry is not null)
+            return conventionalEntry;
+
         // Fallback: any .ts, .js, or .mjs file in root
-        foreach (var ext in new[] { "*.ts", "*.js", "*.mjs" })
+        foreach (var ext in new[] { "*.js", "*.mjs", "*.cjs", "*.ts" })
         {
             var files = Directory.GetFiles(pluginRoot, ext);
             if (files.Length == 1)
@@ -477,9 +596,76 @@ public static class PluginDiscovery
         return null;
     }
 
+    private static bool TryGetRuntimeEntryArray(JsonElement openClaw, out JsonElement entries)
+    {
+        if (openClaw.TryGetProperty("runtimeExtensions", out entries) && entries.ValueKind == JsonValueKind.Array)
+            return true;
+
+        return openClaw.TryGetProperty("extensions", out entries) && entries.ValueKind == JsonValueKind.Array;
+    }
+
+    private static PluginPackageMetadata ReadPackageMetadata(string pluginRoot)
+    {
+        var packageJson = Path.Combine(pluginRoot, PackageJsonFileName);
+        if (!File.Exists(packageJson))
+            return new PluginPackageMetadata();
+
+        try
+        {
+            using var stream = File.OpenRead(packageJson);
+            using var document = JsonDocument.Parse(stream);
+            if (!document.RootElement.TryGetProperty("openclaw", out var openClaw))
+                return new PluginPackageMetadata();
+
+            string? pluginApiRange = null;
+            string? minHostVersion = null;
+            string? expectedIntegrity = null;
+            if (openClaw.TryGetProperty("compat", out var compat) && compat.ValueKind == JsonValueKind.Object)
+            {
+                pluginApiRange = GetString(compat, "pluginApi");
+                minHostVersion = GetString(compat, "minGatewayVersion");
+            }
+
+            if (openClaw.TryGetProperty("install", out var install) && install.ValueKind == JsonValueKind.Object)
+            {
+                minHostVersion ??= GetString(install, "minHostVersion");
+                expectedIntegrity = GetString(install, "expectedIntegrity");
+            }
+
+            return new PluginPackageMetadata(pluginApiRange, minHostVersion, expectedIntegrity);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return new PluginPackageMetadata();
+        }
+    }
+
+    private static string? GetString(JsonElement value, string propertyName)
+        => value.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
+
+    private sealed record PluginPackageMetadata(
+        string? PluginApiRange = null,
+        string? MinHostVersion = null,
+        string? ExpectedIntegrity = null);
+
     public static bool TryResolveContainedPath(string rootPath, string relativePath, out string resolvedPath)
     {
-        resolvedPath = Path.GetFullPath(Path.Combine(rootPath, relativePath));
+        if (Path.IsPathRooted(relativePath))
+        {
+            resolvedPath = string.Empty;
+            return false;
+        }
+
+        var candidatePath = Path.GetFullPath(Path.Join(rootPath, relativePath));
+        if (IsUnresolvedLink(candidatePath))
+        {
+            resolvedPath = string.Empty;
+            return false;
+        }
+
+        resolvedPath = candidatePath;
         var fullRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
 
         // Resolve symlinks for both paths to prevent symlink-based escape from the root.
@@ -497,30 +683,99 @@ public static class PluginDiscovery
     }
 
     /// <summary>
-    /// Resolves the real filesystem path, following symlinks.
-    /// Falls back to the normalized path when the target does not exist.
+    /// Resolves the real filesystem path, following symlinked ancestors and final targets.
+    /// Falls back to the normalized segment path when a segment does not exist.
     /// </summary>
     private static string ResolveRealPath(string path)
+        => ResolveRealPath(path, new HashSet<string>(GetPathComparer()), depth: 0);
+
+    private static string ResolveRealPath(string path, HashSet<string> visited, int depth)
+    {
+        var full = Path.GetFullPath(path);
+        if (depth >= MaxSymlinkResolutionDepth || !visited.Add(full))
+            return full;
+
+        var root = Path.GetPathRoot(full);
+        if (string.IsNullOrEmpty(root))
+            return full;
+
+        var current = root;
+        var remaining = full[root.Length..];
+        var segments = remaining.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var segment in segments)
+        {
+            if (Path.IsPathRooted(segment))
+                return Path.GetFullPath(current);
+
+            current = Path.Join(current, segment);
+            var resolved = TryResolveLinkTarget(current);
+            if (resolved is not null)
+                current = ResolveRealPath(resolved, visited, depth + 1);
+        }
+
+        return Path.GetFullPath(current);
+    }
+
+    private static string? TryResolveLinkTarget(string path)
     {
         try
         {
-            if (File.Exists(path))
-            {
-                var resolved = File.ResolveLinkTarget(path, returnFinalTarget: true);
-                return resolved?.FullName ?? path;
-            }
-
-            if (Directory.Exists(path))
-            {
-                var resolved = Directory.ResolveLinkTarget(path, returnFinalTarget: true);
-                return resolved?.FullName ?? path;
-            }
+            var target = File.ResolveLinkTarget(path, returnFinalTarget: true);
+            if (target is not null)
+                return target.FullName;
         }
-        catch
+        catch (IOException)
         {
-            // Symlink resolution failed — fall through to the unresolved path.
+            // Expected when discovery probes inaccessible or broken filesystem entries.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Expected when discovery probes roots the current process cannot inspect.
         }
 
-        return path;
+        try
+        {
+            var target = Directory.ResolveLinkTarget(path, returnFinalTarget: true);
+            if (target is not null)
+                return target.FullName;
+        }
+        catch (IOException)
+        {
+            // Expected when discovery probes inaccessible or broken filesystem entries.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Expected when discovery probes roots the current process cannot inspect.
+        }
+
+        return null;
     }
+
+    private static bool IsUnresolvedLink(string path)
+    {
+        try
+        {
+            FileSystemInfo info = File.Exists(path)
+                ? new FileInfo(path)
+                : new DirectoryInfo(path);
+
+            return !string.IsNullOrEmpty(info.LinkTarget) && TryResolveLinkTarget(path) is null;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static StringComparer GetPathComparer()
+        => OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
 }

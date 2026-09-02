@@ -73,7 +73,7 @@ public sealed class ChannelAdapterSecurityTests
                 enqueued = true;
                 return ValueTask.CompletedTask;
             },
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(403, result.StatusCode);
         Assert.False(enqueued);
@@ -113,7 +113,7 @@ public sealed class ChannelAdapterSecurityTests
             signatureHeader: null,
             timestampHeader: null,
             (msg, ct) => ValueTask.CompletedTask,
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(403, result.StatusCode);
         Assert.Equal("blocked-user", recentSenders.TryGetLatest("discord")?.SenderId);
@@ -150,7 +150,7 @@ public sealed class ChannelAdapterSecurityTests
             signatureHeader: null,
             rawBody: "user_id=user-1",
             (msg, ct) => ValueTask.CompletedTask,
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(403, result.StatusCode);
     }
@@ -189,7 +189,7 @@ public sealed class ChannelAdapterSecurityTests
                 RecipientId = "123",
                 Text = "hello"
             },
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Equal(2, requestCount);
     }
@@ -221,7 +221,7 @@ public sealed class ChannelAdapterSecurityTests
                 Text = "[IMAGE_URL:https://cdn.example.test/cat.png]\ncaption",
                 ReplyToMessageId = "msg-1"
             },
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedPayload);
         var payload = JsonDocument.Parse(capturedPayload!).RootElement;
@@ -252,7 +252,7 @@ public sealed class ChannelAdapterSecurityTests
                 RecipientId = "15551234567",
                 Text = "hello"
             },
-            CancellationToken.None).AsTask());
+            TestContext.Current.CancellationToken).AsTask());
     }
 
     [Fact]
@@ -275,7 +275,7 @@ public sealed class ChannelAdapterSecurityTests
                 RecipientId = "15551234567",
                 Text = "[IMAGE_PATH:/tmp/cat.png]"
             },
-            CancellationToken.None).AsTask());
+            TestContext.Current.CancellationToken).AsTask());
 
         Assert.Contains("does not support marker kind", ex.Message, StringComparison.Ordinal);
     }
@@ -305,7 +305,7 @@ public sealed class ChannelAdapterSecurityTests
                 RecipientId = "group-1@g.us",
                 Text = "[VIDEO_URL:https://cdn.example.test/clip.mp4]"
             },
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedPayload);
         var payload = JsonDocument.Parse(capturedPayload!).RootElement;
@@ -370,12 +370,154 @@ public sealed class ChannelAdapterSecurityTests
             context.Request.Method = HttpMethods.Post;
             context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
 
-            var result = await handler.HandleAsync(context, (_, _) => ValueTask.CompletedTask, CancellationToken.None);
+            var result = await handler.HandleAsync(context, (_, _) => ValueTask.CompletedTask, TestContext.Current.CancellationToken);
             var latest = recentSenders.TryGetLatest("whatsapp");
 
             Assert.Equal(200, result.StatusCode);
             Assert.NotNull(latest);
             Assert.Equal("Alice", latest!.SenderName);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WhatsAppWebhookHandler_BridgeWebhookMapsMediaAndGroupMetadata()
+    {
+        var root = Path.Join(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var recentSenders = new RecentSendersStore(root, NullLogger<RecentSendersStore>.Instance);
+            var allowlists = new AllowlistManager(root, NullLogger<AllowlistManager>.Instance);
+            var handler = new WhatsAppWebhookHandler(
+                new WhatsAppChannelConfig
+                {
+                    Enabled = true,
+                    Type = "bridge",
+                    BridgeToken = "bridge-secret"
+                },
+                allowlists,
+                recentSenders,
+                AllowlistSemantics.Legacy,
+                NullLogger<WhatsAppWebhookHandler>.Instance);
+
+            var body =
+                """
+                {
+                  "from": "15551234567@s.whatsapp.net",
+                  "account_id": "business",
+                  "session_id": "whatsapp:group:team@g.us",
+                  "sender_name": "Alice",
+                  "text": "caption",
+                  "message_id": "wamid-2",
+                  "reply_to_message_id": "wamid-1",
+                  "is_group": true,
+                  "group_id": "team@g.us",
+                  "group_name": "Team",
+                  "mentioned_ids": ["bot@s.whatsapp.net"],
+                  "media_type": "image",
+                  "media_url": "https://cdn.example.test/cat.jpg",
+                  "media_mime_type": "image/jpeg",
+                  "media_file_name": "cat.jpg"
+                }
+                """;
+
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Headers.Authorization = "Bearer bridge-secret";
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(body));
+
+            InboundMessage? captured = null;
+            var result = await handler.HandleAsync(
+                context,
+                (message, _) =>
+                {
+                    captured = message;
+                    return ValueTask.CompletedTask;
+                },
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(200, result.StatusCode);
+            Assert.NotNull(captured);
+            Assert.Equal("15551234567@s.whatsapp.net", captured!.SenderId);
+            Assert.Equal("business", captured.AccountId);
+            Assert.Equal("whatsapp:group:team@g.us", captured.SessionId);
+            Assert.Equal("Alice", captured.SenderName);
+            Assert.Equal("[IMAGE_URL:https://cdn.example.test/cat.jpg]\ncaption", captured.Text);
+            Assert.Equal("wamid-2", captured.MessageId);
+            Assert.Equal("wamid-1", captured.ReplyToMessageId);
+            Assert.True(captured.IsGroup);
+            Assert.Equal("team@g.us", captured.GroupId);
+            Assert.Equal("Team", captured.GroupName);
+            Assert.NotNull(captured.MentionedIds);
+            Assert.Equal(["bot@s.whatsapp.net"], captured.MentionedIds!);
+            Assert.Equal("image", captured.MediaType);
+            Assert.Equal("https://cdn.example.test/cat.jpg", captured.MediaUrl);
+            Assert.Equal("image/jpeg", captured.MediaMimeType);
+            Assert.Equal("cat.jpg", captured.MediaFileName);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task WhatsAppWebhookHandler_BridgeAttachmentDerivesPrimaryMediaMetadata()
+    {
+        var root = Path.Join(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var handler = new WhatsAppWebhookHandler(
+                new WhatsAppChannelConfig
+                {
+                    Enabled = true,
+                    Type = "bridge"
+                },
+                new AllowlistManager(root, NullLogger<AllowlistManager>.Instance),
+                new RecentSendersStore(root, NullLogger<RecentSendersStore>.Instance),
+                AllowlistSemantics.Legacy,
+                NullLogger<WhatsAppWebhookHandler>.Instance);
+
+            var context = new DefaultHttpContext();
+            context.Request.Method = HttpMethods.Post;
+            context.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+                """
+                {
+                  "from": "15551234567@s.whatsapp.net",
+                  "text": "document caption",
+                  "attachments": [
+                    {
+                      "type": "document",
+                      "url": "https://cdn.example.test/report.pdf",
+                      "mimeType": "application/pdf",
+                      "fileName": "report.pdf"
+                    }
+                  ]
+                }
+                """));
+
+            InboundMessage? captured = null;
+            var result = await handler.HandleAsync(
+                context,
+                (message, _) =>
+                {
+                    captured = message;
+                    return ValueTask.CompletedTask;
+                },
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(200, result.StatusCode);
+            Assert.NotNull(captured);
+            Assert.Equal("[FILE_URL:https://cdn.example.test/report.pdf]\ndocument caption", captured!.Text);
+            Assert.Equal("document", captured.MediaType);
+            Assert.Equal("https://cdn.example.test/report.pdf", captured.MediaUrl);
+            Assert.Equal("application/pdf", captured.MediaMimeType);
+            Assert.Equal("report.pdf", captured.MediaFileName);
         }
         finally
         {

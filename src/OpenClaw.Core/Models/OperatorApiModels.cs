@@ -61,27 +61,13 @@ public sealed class ProviderRouteHealthSnapshot
     public string? LastError { get; init; }
 }
 
-public sealed class ProviderTurnUsageEntry
-{
-    public DateTimeOffset TimestampUtc { get; init; } = DateTimeOffset.UtcNow;
-    public required string SessionId { get; init; }
-    public required string ChannelId { get; init; }
-    public required string ProviderId { get; init; }
-    public required string ModelId { get; init; }
-    public long InputTokens { get; init; }
-    public long OutputTokens { get; init; }
-    public long CacheReadTokens { get; init; }
-    public long CacheWriteTokens { get; init; }
-    public required InputTokenComponentEstimate EstimatedInputTokensByComponent { get; init; }
-}
-
 public sealed class ProviderAdminResponse
 {
     public IReadOnlyList<ProviderRouteHealthSnapshot> Routes { get; init; } = [];
     public ModelProfilesStatusResponse? ModelProfiles { get; init; }
     public IReadOnlyList<ProviderUsageSnapshot> Usage { get; init; } = [];
     public IReadOnlyList<ProviderPolicyRule> Policies { get; init; } = [];
-    public IReadOnlyList<ProviderTurnUsageEntry> RecentTurns { get; init; } = [];
+    public IReadOnlyList<TurnTokenUsageRecord> RecentTurns { get; init; } = [];
 }
 
 public sealed class RuntimeEventQuery
@@ -132,6 +118,7 @@ public sealed class PluginHealthSnapshot
 {
     public required string PluginId { get; init; }
     public required string Origin { get; init; }
+    public string? BundleFormat { get; init; }
     public bool Loaded { get; init; }
     public bool BlockedByRuntimeMode { get; init; }
     public bool Disabled { get; init; }
@@ -159,6 +146,7 @@ public sealed class PluginHealthSnapshot
     public int ToolCount { get; init; }
     public int ChannelCount { get; init; }
     public int CommandCount { get; init; }
+    public int CliCommandCount { get; init; }
     public int ProviderCount { get; init; }
     public IReadOnlyList<string> BudgetViolations { get; init; } = [];
     public IReadOnlyList<PluginCompatibilityDiagnostic> Diagnostics { get; init; } = [];
@@ -173,7 +161,10 @@ public sealed class SkillHealthSnapshot
 {
     public required string Name { get; init; }
     public string Description { get; init; } = "";
+    public string? Emoji { get; init; }
     public required string Source { get; init; }
+    /// <summary>True when the skill was installed by the user via the workspace (can be deleted).</summary>
+    public bool IsUserInstalled { get; init; }
     public required string Location { get; init; }
     public string TrustLevel { get; init; } = "untrusted";
     public string TrustReason { get; init; } = "";
@@ -194,7 +185,71 @@ public sealed class SkillHealthSnapshot
 
 public sealed class SkillListResponse
 {
+    [System.Text.Json.Serialization.JsonPropertyName("skills")]
     public IReadOnlyList<SkillHealthSnapshot> Items { get; init; } = [];
+}
+
+public sealed class SkillInstallRequest
+{
+    public string Name { get; init; } = "";
+    public string Content { get; init; } = "";
+}
+
+public sealed class SkillMutationResponse
+{
+    public bool Success { get; init; }
+    public string? Error { get; init; }
+    public int TotalLoaded { get; init; }
+    public IReadOnlyList<string> LoadedNames { get; init; } = [];
+}
+
+/// <summary>
+/// Per-skill cost breakdown for the SKILL progressive-disclosure dashboard.
+/// All values are character counts of the prompt fragments emitted by
+/// <see cref="OpenClaw.Core.Skills.SkillPromptBuilder"/>.
+/// </summary>
+public sealed class SkillCostBreakdown
+{
+    public required string Name { get; init; }
+    public string Description { get; init; } = "";
+    /// <summary>Characters contributed to the eager <c>Build</c> output by this skill (entry + body).</summary>
+    public int EagerCharacters { get; init; }
+    /// <summary>Characters contributed to the <c>BuildIndex</c> output by this skill (entry + resource manifest, no body).</summary>
+    public int IndexCharacters { get; init; }
+    /// <summary>Number of L3 resources declared by this skill (references + scripts).</summary>
+    public int ResourceCount { get; init; }
+    /// <summary>Length of the SKILL.md body (instructions). Equals <c>EagerCharacters - IndexCharacters</c> modulo XML overhead.</summary>
+    public int InstructionsLength { get; init; }
+    /// <summary>True when <c>DisableModelInvocation</c> is set — this skill is excluded from both budgets.</summary>
+    public bool ExcludedFromModel { get; init; }
+}
+
+/// <summary>
+/// Aggregate response for <c>GET /admin/skills/cost-estimate</c>:
+/// compares the eager (<see cref="OpenClaw.Core.Skills.SkillPromptBuilder.EstimateCharacterCost"/>)
+/// and progressive-disclosure index (<see cref="OpenClaw.Core.Skills.SkillPromptBuilder.EstimateIndexCharacterCost"/>)
+/// system-prompt sizes for the currently loaded skill set.
+/// </summary>
+public sealed class SkillCostEstimateResponse
+{
+    public int TotalSkills { get; init; }
+    public int ModelInvocableSkills { get; init; }
+    /// <summary>Total characters when injecting every skill's full body up-front (legacy eager mode).</summary>
+    public int EagerCharacters { get; init; }
+    /// <summary>Total characters when injecting only the index + resource manifest (progressive disclosure).</summary>
+    public int IndexCharacters { get; init; }
+    /// <summary>Absolute number of characters saved by switching to progressive disclosure.</summary>
+    public int CharactersSaved { get; init; }
+    /// <summary>Fraction of characters saved, in [0, 1]. Zero when eager cost is also zero.</summary>
+    public double SavedRatio { get; init; }
+    /// <summary>Rough token estimate using a 4-chars-per-token heuristic for the eager budget.</summary>
+    public int EagerTokensEstimate { get; init; }
+    /// <summary>Rough token estimate using a 4-chars-per-token heuristic for the index budget.</summary>
+    public int IndexTokensEstimate { get; init; }
+    /// <summary>Per-skill breakdown, sorted by <see cref="SkillCostBreakdown.EagerCharacters"/> descending.</summary>
+    public IReadOnlyList<SkillCostBreakdown> Items { get; init; } = [];
+    /// <summary>UTC timestamp when the snapshot was computed.</summary>
+    public DateTimeOffset GeneratedAt { get; init; }
 }
 
 public sealed class ChannelAuthStatusResponse
@@ -445,6 +500,13 @@ public sealed class LearningProposalProvenance
 {
     public string? ActorId { get; init; }
     public IReadOnlyList<string> SourceSessionIds { get; init; } = [];
+    public IReadOnlyList<string> SourceTurnIds { get; init; } = [];
+    public IReadOnlyList<string> ToolNames { get; init; } = [];
+    public IReadOnlyList<string> ToolSequence { get; init; } = [];
+    public IReadOnlyList<LearningToolObservation> ToolObservations { get; init; } = [];
+    public int RepeatedCount { get; init; }
+    public string? ProposalFingerprint { get; init; }
+    public string? CreatedReason { get; init; }
     public float Confidence { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset UpdatedAtUtc { get; init; }
@@ -566,7 +628,7 @@ public sealed class SessionTimelineResponse
 {
     public required string SessionId { get; init; }
     public IReadOnlyList<RuntimeEventEntry> Events { get; init; } = [];
-    public IReadOnlyList<ProviderTurnUsageEntry> ProviderTurns { get; init; } = [];
+    public IReadOnlyList<TurnTokenUsageRecord> ProviderTurns { get; init; } = [];
 }
 
 public sealed class SessionExportItem
@@ -637,6 +699,21 @@ public sealed class ActorRateLimitResponse
 {
     public IReadOnlyList<ActorRateLimitPolicy> Policies { get; init; } = [];
     public IReadOnlyList<ActorRateLimitStatus> Active { get; init; } = [];
+}
+
+public sealed class WorkspaceBrowseEntry
+{
+    public string Name { get; init; } = "";
+    public string Path { get; init; } = "";
+    public bool IsDirectory { get; init; }
+    public long? Size { get; init; }
+}
+
+public sealed class WorkspaceBrowseResponse
+{
+    public bool Success { get; init; }
+    public string? Error { get; init; }
+    public IReadOnlyList<WorkspaceBrowseEntry> Files { get; init; } = [];
 }
 
 public sealed class SecurityPostureResponse

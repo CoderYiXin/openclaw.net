@@ -1,45 +1,75 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>
-    <OpenClawEnableMafExperiment Condition="'$(OpenClawEnableMafExperiment)' == ''">false</OpenClawEnableMafExperiment>
+    <OpenClawEnableMempalace Condition="'$(OpenClawEnableMempalace)' == ''">false</OpenClawEnableMempalace>
     <OpenClawEnableOpenSandbox Condition="'$(OpenClawEnableOpenSandbox)' == ''">false</OpenClawEnableOpenSandbox>
     <RootNamespace>OpenClaw.Tests</RootNamespace>
+    <NoWarn>$(NoWarn);xUnit1051</NoWarn>
     <InterceptorsNamespaces>$(InterceptorsNamespaces);Microsoft.AspNetCore.OpenApi.Generated</InterceptorsNamespaces>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
     <ProjectReference Include="..\OpenClaw.Agent\OpenClaw.Agent.csproj" />
+    <ProjectReference Include="..\mcpapp\OpenClaw.McpApp\OpenClaw.McpApp.csproj" />
     <ProjectReference Include="..\OpenClaw.Channels\OpenClaw.Channels.csproj" />
     <ProjectReference Include="..\OpenClaw.Cli\OpenClaw.Cli.csproj" />
     <ProjectReference Include="..\OpenClaw.Companion\OpenClaw.Companion.csproj" />
     <ProjectReference Include="..\OpenClaw.Gateway\OpenClaw.Gateway.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.Abstractions\OpenClaw.Payments.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.Core\OpenClaw.Payments.Core.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.StripeLink\OpenClaw.Payments.StripeLink.csproj" />
+    <ProjectReference Include="..\OpenClaw.Providers.MicrosoftExtensionsAI\OpenClaw.Providers.MicrosoftExtensionsAI.csproj" />
+    <ProjectReference Include="..\OpenClaw.Protocols.Browser\OpenClaw.Protocols.Browser.csproj" />
+    <ProjectReference Include="..\OpenClaw.Protocols.Mqtt\OpenClaw.Protocols.Mqtt.csproj" />
+    <ProjectReference Include="..\OpenClaw.Plugins.Payment\OpenClaw.Plugins.Payment.csproj" />
+    <ProjectReference Include="..\OpenClaw.Routing.Onnx\OpenClaw.Routing.Onnx.csproj" />
     <ProjectReference Include="..\OpenClaw.SemanticKernelAdapter\OpenClaw.SemanticKernelAdapter.csproj" />
+    <ProjectReference Include="..\OpenClaw.SkillKit.Abstractions\OpenClaw.SkillKit.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenClaw.SkillKit\OpenClaw.SkillKit.csproj" />
     <ProjectReference Include="..\OpenClaw.PluginKit\OpenClaw.PluginKit.csproj" />
+    <ProjectReference Include="..\OpenClaw.Plugins.TokenJuice\OpenClaw.Plugins.TokenJuice.csproj" />
+    <ProjectReference Include="..\OpenClaw.Testing\OpenClaw.Testing.csproj" />
+
+    <None Update="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\OpenClaw.TestPluginFixtures\OpenClaw.TestPluginFixtures.csproj" />
     <ProjectReference Include="..\OpenClaw.WhatsApp.BaileysWorker\OpenClaw.WhatsApp.BaileysWorker.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(OpenClawEnableMafExperiment)' == 'true'">
+  <ItemGroup>
     <ProjectReference Include="..\OpenClaw.MicrosoftAgentFrameworkAdapter\OpenClaw.MicrosoftAgentFrameworkAdapter.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OpenClawEnableMempalace)' == 'true'">
+    <ProjectReference Include="..\OpenClaw.Plugins.Mempalace\OpenClaw.Plugins.Mempalace.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.10.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A" Version="1.10.0-preview.260610.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.10.0-preview.260610.1" />
+    <PackageReference Include="A2A" Version="1.0.0-preview2" />
+    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview2" />
   </ItemGroup>
   <ItemGroup Condition="'$(OpenClawEnableOpenSandbox)' == 'true'">
     <ProjectReference Include="..\OpenClawNet.Sandbox.OpenSandbox\OpenClawNet.Sandbox.OpenSandbox.csproj" />
   </ItemGroup>
 
-  <PropertyGroup Condition="'$(OpenClawEnableMafExperiment)' == 'true'">
-    <DefineConstants>$(DefineConstants);OPENCLAW_ENABLE_MAF_EXPERIMENT</DefineConstants>
+  <PropertyGroup Condition="'$(OpenClawEnableMempalace)' == 'true'">
+    <DefineConstants>$(DefineConstants);OPENCLAW_ENABLE_MEMPALACE</DefineConstants>
   </PropertyGroup>
   <PropertyGroup Condition="'$(OpenClawEnableOpenSandbox)' == 'true'">
     <DefineConstants>$(DefineConstants);OPENCLAW_ENABLE_OPENSANDBOX</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
-    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.0-preview.3.25172.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageReference Include="Microsoft.AspNetCore.TestHost" Version="10.0.9" />
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.0.4" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
-    <PackageReference Include="xunit" Version="2.9.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+	<PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
   </ItemGroup>
 </Project>

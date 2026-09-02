@@ -1,5 +1,6 @@
 using OpenClaw.Channels;
 using OpenClaw.Gateway.Bootstrap;
+using OpenClaw.Gateway.Channels;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -8,6 +9,24 @@ internal static class ChannelServicesExtensions
     public static IServiceCollection AddOpenClawChannelServices(this IServiceCollection services, GatewayStartupContext startup)
     {
         var config = startup.Config;
+
+        // Feishu: always registered (supports runtime enable via admin API without restart).
+        services.AddSingleton(config.Channels.Feishu);
+        services.AddSingleton<FeishuChannel>();
+
+        // DingTalk: always registered so Stream mode can be started and hot-reloaded via admin API.
+        services.AddSingleton(config.Channels.DingTalk);
+        services.AddSingleton<DingTalkChannel>();
+
+        // WeCom: always registered so WebSocket long connection can be started and hot-reloaded via admin API.
+        services.AddSingleton(config.Channels.WeCom);
+        services.AddSingleton<WeComChannel>();
+
+        // ChannelConfigStore: persists channel configs to {StoragePath}/channels/channel-{id}.json.
+        services.AddSingleton(sp =>
+            new ChannelConfigStore(
+                config.Memory.StoragePath,
+                sp.GetRequiredService<ILogger<ChannelConfigStore>>()));
 
         if (config.Channels.WhatsApp.Enabled)
         {
@@ -36,7 +55,28 @@ internal static class ChannelServicesExtensions
         if (config.Channels.Telegram.Enabled)
         {
             services.AddSingleton(config.Channels.Telegram);
-            services.AddSingleton<TelegramChannel>();
+            services.AddSingleton<TelegramWebhookHandler>(sp =>
+                new TelegramWebhookHandler(
+                    config.Channels.Telegram,
+                    sp.GetRequiredService<OpenClaw.Core.Security.AllowlistManager>(),
+                    sp.GetRequiredService<OpenClaw.Core.Pipeline.RecentSendersStore>(),
+                    sp.GetRequiredService<OpenClaw.Core.Security.AllowlistSemantics>(),
+                    sp.GetRequiredService<ILogger<TelegramWebhookHandler>>()));
+            services.AddSingleton<TelegramChannel>(sp =>
+            {
+                var handler = sp.GetRequiredService<TelegramWebhookHandler>();
+                var logger = sp.GetRequiredService<ILogger<TelegramChannel>>();
+                return new TelegramChannel(
+                    config.Channels.Telegram,
+                    logger,
+                    http: null,
+                    updateProcessor: async (payload, enqueue, ct) =>
+                    {
+                        var result = await handler.HandleAsync(payload, enqueue, ct);
+                        if (result.StatusCode >= StatusCodes.Status400BadRequest)
+                            logger.LogWarning("Telegram update was rejected with status {StatusCode}.", result.StatusCode);
+                    });
+            });
         }
 
         if (config.Channels.Teams.Enabled)

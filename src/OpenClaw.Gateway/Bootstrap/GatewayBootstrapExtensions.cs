@@ -1,13 +1,13 @@
-using System.Net.Http.Headers;
-using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using Microsoft.Extensions.Configuration;
+using A2A;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Core.Security;
 using OpenClaw.Core.Validation;
 using OpenClaw.Gateway.Extensions;
+using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace OpenClaw.Gateway.Bootstrap;
 
@@ -18,7 +18,14 @@ internal static class GatewayBootstrapExtensions
         ApplyConfigFileOverride(builder, args);
 
         builder.Services.ConfigureHttpJsonOptions(opts =>
-            opts.SerializerOptions.TypeInfoResolverChain.Add(CoreJsonContext.Default));
+        {
+            opts.SerializerOptions.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All);
+            var a2aResolver = A2AJsonUtilities.DefaultOptions.TypeInfoResolver;
+            if (a2aResolver is not null)
+                opts.SerializerOptions.TypeInfoResolverChain.Add(a2aResolver);
+            opts.SerializerOptions.TypeInfoResolverChain.Add(GatewayJsonContext.Default);
+            opts.SerializerOptions.TypeInfoResolverChain.Add(CoreJsonContext.Default);
+        });
 
         var config = LoadGatewayConfig(builder.Configuration);
         var configSources = ConfigurationSourceDiagnosticsBuilder.Build(builder.Configuration, config);
@@ -37,9 +44,11 @@ internal static class GatewayBootstrapExtensions
             };
         }
 
-        if (isNonLoopbackBind && string.IsNullOrWhiteSpace(config.AuthToken))
+        // AuthToken is required for non-loopback unless OIDC mode is selected (OIDC replaces token auth).
+        if (isNonLoopbackBind && string.IsNullOrWhiteSpace(config.AuthToken)
+            && !config.Security.IsOidcMode)
         {
-            var message = "OPENCLAW_AUTH_TOKEN must be set when binding to a non-loopback address.";
+            var message = "OPENCLAW_AUTH_TOKEN must be set when binding to a non-loopback address (or set Security.AuthMode=\"oidc\" with Security.Oidc.Authority configured).";
             WriteConfigSourceDiagnostics(configSources);
             if (isDoctorMode)
             {
@@ -111,6 +120,11 @@ internal static class GatewayBootstrapExtensions
 
         GatewaySecurityExtensions.EnforcePublicBindHardening(config, isNonLoopbackBind);
 
+        // TokenHub thin-client config lives under OpenClaw:TokenUsage (e.g. OpenClaw__TokenUsage__Sink=http).
+        // Bound separately from GatewayConfig so the foundational OpenClaw.Core stays decoupled from the sink.
+        var tokenUsageConfig = builder.Configuration.GetSection("OpenClaw:TokenUsage").Get<TokenUsageConfig>()
+            ?? new TokenUsageConfig();
+
         return new BootstrapResult
         {
             ShouldExit = false,
@@ -121,7 +135,8 @@ internal static class GatewayBootstrapExtensions
                 RuntimeState = runtimeState,
                 IsNonLoopbackBind = isNonLoopbackBind,
                 ConfigSources = configSources,
-                WorkspacePath = Environment.GetEnvironmentVariable("OPENCLAW_WORKSPACE")
+                WorkspacePath = Environment.GetEnvironmentVariable("OPENCLAW_WORKSPACE"),
+                TokenUsage = tokenUsageConfig
             }
         };
     }
@@ -136,6 +151,7 @@ internal static class GatewayBootstrapExtensions
     {
         var openClawSection = configuration.GetSection("OpenClaw");
         var config = openClawSection.Get<GatewayConfig>() ?? new GatewayConfig();
+        ApplyConfiguredLlmOverrides(openClawSection, config);
         ApplyConfiguredToolingOverrides(openClawSection, config);
         HydratePluginEntryConfigJson(config, configuration);
         var pluginAdminSettingsPath = PluginAdminSettingsService.GetSettingsPath(config);
@@ -255,13 +271,23 @@ internal static class GatewayBootstrapExtensions
 
     private static void HydratePluginEntryConfigJson(GatewayConfig config, IConfiguration configuration)
     {
-        var entriesSection = configuration.GetSection("OpenClaw").GetSection("Plugins").GetSection("Entries");
+        var pluginsSection = configuration.GetSection("OpenClaw").GetSection("Plugins");
+        HydrateEntryConfigJson(pluginsSection.GetSection("Entries"), config.Plugins.Entries);
+        HydrateEntryConfigJson(
+            pluginsSection.GetSection("DynamicNative").GetSection("Entries"),
+            config.Plugins.DynamicNative.Entries);
+    }
+
+    private static void HydrateEntryConfigJson(
+        IConfigurationSection entriesSection,
+        Dictionary<string, PluginEntryConfig> entries)
+    {
         foreach (var pluginSection in entriesSection.GetChildren())
         {
-            if (!config.Plugins.Entries.TryGetValue(pluginSection.Key, out var entry))
+            if (!entries.TryGetValue(pluginSection.Key, out var entry))
             {
                 entry = new PluginEntryConfig();
-                config.Plugins.Entries[pluginSection.Key] = entry;
+                entries[pluginSection.Key] = entry;
             }
 
             var pluginConfigSection = pluginSection.GetSection("Config");
@@ -352,6 +378,15 @@ internal static class GatewayBootstrapExtensions
         var allowedWriteRoots = ReadStringArray(toolingSection, "AllowedWriteRoots");
         if (allowedWriteRoots is not null)
             config.Tooling.AllowedWriteRoots = allowedWriteRoots;
+    }
+
+    private static void ApplyConfiguredLlmOverrides(IConfiguration section, GatewayConfig config)
+    {
+        var llmSection = section.GetSection("Llm");
+
+        var enableThinkingRaw = llmSection["EnableThinking"];
+        if (bool.TryParse(enableThinkingRaw, out var enableThinking))
+            config.Llm.EnableThinking = enableThinking;
     }
 
     private static string[]? ReadStringArray(IConfiguration section, string key)

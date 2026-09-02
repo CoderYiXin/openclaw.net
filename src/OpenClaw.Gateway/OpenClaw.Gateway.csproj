@@ -2,11 +2,13 @@
   <PropertyGroup>
     <RootNamespace>OpenClaw.Gateway</RootNamespace>
     <OutputType>Exe</OutputType>
-    <OpenClawEnableMafExperiment Condition="'$(OpenClawEnableMafExperiment)' == ''">false</OpenClawEnableMafExperiment>
     <OpenClawEnableOpenSandbox Condition="'$(OpenClawEnableOpenSandbox)' == ''">false</OpenClawEnableOpenSandbox>
+    <OpenClawSkipDashboardBuild Condition="'$(OpenClawSkipDashboardBuild)' == ''">false</OpenClawSkipDashboardBuild>
     <PublishAot>true</PublishAot>
     <StripSymbols>true</StripSymbols>
     <OptimizationPreference>Size</OptimizationPreference>
+    <!-- The gateway AOT link currently trips Apple's new macOS arm64 linker; keep the classic linker scoped to this project. -->
+    <OpenClawUseClassicMacLd Condition="'$(OpenClawUseClassicMacLd)' == ''">true</OpenClawUseClassicMacLd>
     <!-- Aggressive AOT trimming for minimal binary -->
     <IlcGenerateStackTraceData>false</IlcGenerateStackTraceData>
     <IlcOptimizationPreference>Size</IlcOptimizationPreference>
@@ -16,42 +18,65 @@
     <DebuggerSupport>false</DebuggerSupport>
     <MetricsSupport>true</MetricsSupport>
     <HttpActivityPropagationSupport>false</HttpActivityPropagationSupport>
-    <!-- Playwright is not AOT-compatible (deep reflection usage); keep package-level warnings suppressed while surfacing project-owned trim diagnostics. -->
+    <!-- Exclude skills/ from default Content auto-include so the explicit
+         <Content Include="skills\**\*"> below is the sole source. Without this,
+         the SDK auto-includes files like *.json/manifest.jsonld and trips
+         NETSDK1022 "duplicate Content items". -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);skills\**</DefaultItemExcludes>
+    <!-- Optional protocol packages can carry transitive AOT warnings; keep package-level warnings suppressed while surfacing project-owned trim diagnostics. -->
     <NoWarn>$(NoWarn);IL2104;IL3000;IL3002;IL3053</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <TrimmerRootAssembly Include="Microsoft.Playwright" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\OpenClaw.Core\OpenClaw.Core.csproj" />
+    <ProjectReference Include="..\mcpapp\OpenClaw.McpApp\OpenClaw.McpApp.csproj" />
     <ProjectReference Include="..\OpenClaw.Agent\OpenClaw.Agent.csproj" />
+    <ProjectReference Include="..\OpenClaw.Plugins.TokenJuice\OpenClaw.Plugins.TokenJuice.csproj" />
+    <ProjectReference Include="..\OpenClaw.Routing.Onnx\OpenClaw.Routing.Onnx.csproj" />
     <ProjectReference Include="..\OpenClaw.Channels\OpenClaw.Channels.csproj" />
+    <ProjectReference Include="..\OpenClaw.Protocols.Browser\OpenClaw.Protocols.Browser.csproj" />
+    <ProjectReference Include="..\OpenClaw.Protocols.Mqtt\OpenClaw.Protocols.Mqtt.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.Abstractions\OpenClaw.Payments.Abstractions.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.Core\OpenClaw.Payments.Core.csproj" />
+    <ProjectReference Include="..\OpenClaw.Payments.StripeLink\OpenClaw.Payments.StripeLink.csproj" />
+    <ProjectReference Include="..\OpenClaw.Plugins.Payment\OpenClaw.Plugins.Payment.csproj" />
+    <ProjectReference Include="..\OpenClaw.Plugins.TokenJuice\OpenClaw.Plugins.TokenJuice.csproj" />
   </ItemGroup>
-  <ItemGroup Condition="'$(OpenClawEnableMafExperiment)' == 'true'">
+  <!-- Dashboard Blazor WASM is integrated via CopyDashboardFiles targets below.
+       Keep it out of ProjectReference to avoid Static Web Assets cross-project
+       resolution conflicts in Gateway builds. -->
+  <ItemGroup>
     <ProjectReference Include="..\OpenClaw.MicrosoftAgentFrameworkAdapter\OpenClaw.MicrosoftAgentFrameworkAdapter.csproj" />
+    <PackageReference Include="A2A" Version="1.0.0-preview2" />
+    <PackageReference Include="A2A.AspNetCore" Version="1.0.0-preview2" />
+    <PackageReference Include="Microsoft.Agents.AI" Version="1.10.0" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A" Version="1.10.0-preview.260610.1" />
+    <PackageReference Include="Microsoft.Agents.AI.Hosting.A2A.AspNetCore" Version="1.10.0-preview.260610.1" />
   </ItemGroup>
   <ItemGroup Condition="'$(OpenClawEnableOpenSandbox)' == 'true'">
     <ProjectReference Include="..\OpenClawNet.Sandbox.OpenSandbox\OpenClawNet.Sandbox.OpenSandbox.csproj" />
   </ItemGroup>
-  <PropertyGroup Condition="'$(OpenClawEnableMafExperiment)' == 'true'">
-    <DefineConstants>$(DefineConstants);OPENCLAW_ENABLE_MAF_EXPERIMENT</DefineConstants>
-  </PropertyGroup>
   <PropertyGroup Condition="'$(OpenClawEnableOpenSandbox)' == 'true'">
     <DefineConstants>$(DefineConstants);OPENCLAW_ENABLE_OPENSANDBOX</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Anthropic" Version="12.11.0" />
+    <PackageReference Include="Anthropic" Version="12.29.1" />
+    <!-- Dashboard hosting is done manually via PhysicalFileProvider + URL rewrite in PipelineExtensions.cs.
+         Microsoft.AspNetCore.Components.WebAssembly.Server is intentionally NOT referenced because
+         its Static Web Assets integration conflicts with our ReferenceOutputAssembly=false approach. -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
-    <PackageReference Include="GeminiDotnet.Extensions.AI" Version="0.23.0" />
-    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.0" />
-    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.1.0" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="GeminiDotnet.Extensions.AI" Version="0.25.0" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.9" />
+	<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.9" />
+    <PackageReference Include="Microsoft.OpenApi" Version="2.9.0" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.0.0" />
+    <PackageReference Include="ModelContextProtocol.Extensions.Tasks" Version="2.0.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.16.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.15.1" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.15.1" />
-    <PackageReference Include="QRCoder" Version="1.6.0" />
-    <PackageReference Include="TickerQ" Version="10.3.0" />
+    <PackageReference Include="QRCoder" Version="1.8.0" />
+    <PackageReference Include="TickerQ" Version="10.4.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -65,4 +90,63 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="CleanDashboardFiles" AfterTargets="Build">
+    <RemoveDir Directories="$(OutputPath)wwwroot\dashboard" />
+  </Target>
+
+  <!-- Publish Dashboard WASM so all assets (_framework/, _content/, css/) are materialized on disk.
+       CI build/test loops can set OpenClawSkipDashboardBuild=true; publish still copies Dashboard assets below. -->
+  <Target Name="CopyDashboardFiles" AfterTargets="CleanDashboardFiles" Condition="'$(OpenClawSkipDashboardBuild)' != 'true'">
+    <PropertyGroup>
+      <_DashboardProject>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'OpenClaw.Dashboard.csproj'))</_DashboardProject>
+      <_DashboardPublishDir>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'bin', 'publish'))</_DashboardPublishDir>
+      <_DashboardPublishWwwroot>$(_DashboardPublishDir)\wwwroot</_DashboardPublishWwwroot>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_DashboardPublishDir)" />
+    <Exec Command="dotnet publish &quot;$(_DashboardProject)&quot; -c $(Configuration) -o &quot;$(_DashboardPublishDir)&quot; --nologo -v q" />
+    <ItemGroup>
+      <_DashboardPublishFiles Include="$(_DashboardPublishWwwroot)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DashboardPublishFiles)" DestinationFolder="$(OutputPath)wwwroot\dashboard\%(RecursiveDir)" SkipUnchangedFiles="true" Condition="'@(_DashboardPublishFiles)' != ''" />
+    <!-- Create a non-fingerprinted copy of the Blazor boot script so that the
+         <script src="_framework/blazor.webassembly.js"> reference in index.html
+         resolves to an actual file when served by UseStaticFiles in production. -->
+    <ItemGroup>
+      <_BlazorBootScript Include="$(OutputPath)wwwroot\dashboard\_framework\blazor.webassembly.*.js" Exclude="$(OutputPath)wwwroot\dashboard\_framework\blazor.webassembly.*.js.gz;$(OutputPath)wwwroot\dashboard\_framework\blazor.webassembly.*.js.br;$(OutputPath)wwwroot\dashboard\_framework\blazor.webassembly.js" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BlazorBootScript)" DestinationFiles="$(OutputPath)wwwroot\dashboard\_framework\blazor.webassembly.js" SkipUnchangedFiles="true" Condition="'@(_BlazorBootScript)' != ''" />
+    <ItemGroup>
+      <_DotNetBootScript Include="$(OutputPath)wwwroot\dashboard\_framework\dotnet.*.js" Exclude="$(OutputPath)wwwroot\dashboard\_framework\dotnet.runtime.*.js;$(OutputPath)wwwroot\dashboard\_framework\dotnet.native.*.js;$(OutputPath)wwwroot\dashboard\_framework\dotnet.*.js.gz;$(OutputPath)wwwroot\dashboard\_framework\dotnet.*.js.br;$(OutputPath)wwwroot\dashboard\_framework\dotnet.js" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DotNetBootScript)" DestinationFiles="$(OutputPath)wwwroot\dashboard\_framework\dotnet.js" SkipUnchangedFiles="true" Condition="'@(_DotNetBootScript)' != ''" />
+  </Target>
+
+  <Target Name="CleanDashboardFilesWhenSkipped" AfterTargets="Build" Condition="'$(OpenClawSkipDashboardBuild)' == 'true'">
+    <RemoveDir Directories="$(OutputPath)wwwroot\dashboard" />
+  </Target>
+
+  <!-- Copy Dashboard publish output to Gateway publish dir -->
+  <Target Name="CopyDashboardFilesPublish" AfterTargets="Publish">
+    <PropertyGroup>
+      <_DashboardProjectPub>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'OpenClaw.Dashboard.csproj'))</_DashboardProjectPub>
+      <_DashboardPublishDirPub>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)', '..', 'OpenClaw.Dashboard', 'bin', 'publish'))</_DashboardPublishDirPub>
+      <_DashboardPublishWwwrootPub>$(_DashboardPublishDirPub)\wwwroot</_DashboardPublishWwwrootPub>
+    </PropertyGroup>
+    <RemoveDir Directories="$(_DashboardPublishDirPub);$(PublishDir)wwwroot\dashboard" />
+    <Exec Command="dotnet publish &quot;$(_DashboardProjectPub)&quot; -c $(Configuration) -o &quot;$(_DashboardPublishDirPub)&quot; --nologo -v q" />
+    <ItemGroup>
+      <_DashboardPublishPubFiles Include="$(_DashboardPublishWwwrootPub)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DashboardPublishPubFiles)" DestinationFolder="$(PublishDir)wwwroot\dashboard\%(RecursiveDir)" SkipUnchangedFiles="true" Condition="'@(_DashboardPublishPubFiles)' != ''" />
+    <!-- Create non-fingerprinted boot script copy for production -->
+    <ItemGroup>
+      <_BlazorBootScriptPub Include="$(PublishDir)wwwroot\dashboard\_framework\blazor.webassembly.*.js" Exclude="$(PublishDir)wwwroot\dashboard\_framework\blazor.webassembly.*.js.gz;$(PublishDir)wwwroot\dashboard\_framework\blazor.webassembly.*.js.br;$(PublishDir)wwwroot\dashboard\_framework\blazor.webassembly.js" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BlazorBootScriptPub)" DestinationFiles="$(PublishDir)wwwroot\dashboard\_framework\blazor.webassembly.js" SkipUnchangedFiles="true" Condition="'@(_BlazorBootScriptPub)' != ''" />
+    <ItemGroup>
+      <_DotNetBootScriptPub Include="$(PublishDir)wwwroot\dashboard\_framework\dotnet.*.js" Exclude="$(PublishDir)wwwroot\dashboard\_framework\dotnet.runtime.*.js;$(PublishDir)wwwroot\dashboard\_framework\dotnet.native.*.js;$(PublishDir)wwwroot\dashboard\_framework\dotnet.*.js.gz;$(PublishDir)wwwroot\dashboard\_framework\dotnet.*.js.br;$(PublishDir)wwwroot\dashboard\_framework\dotnet.js" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_DotNetBootScriptPub)" DestinationFiles="$(PublishDir)wwwroot\dashboard\_framework\dotnet.js" SkipUnchangedFiles="true" Condition="'@(_DotNetBootScriptPub)' != ''" />
+  </Target>
 </Project>

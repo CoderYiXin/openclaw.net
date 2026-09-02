@@ -77,7 +77,7 @@ internal static partial class OpenAiEndpoints
                 ? await runtime.SessionManager.GetOrCreateByIdAsync(BuildScopedStableSessionId(stableBinding), "openai-http", requesterKey, ctx.RequestAborted)
                 : await runtime.SessionManager.GetOrCreateAsync("openai-http", requestId, ctx.RequestAborted);
             IAsyncDisposable? stableSessionLock = null;
-            var discardStableSessionOnExit = false;
+            var persistStableSessionOnExit = false;
             ToolApprovalCallback? approvalCallback = null;
 
             try
@@ -91,6 +91,8 @@ internal static partial class OpenAiEndpoints
                         await ctx.Response.WriteAsync(bindingError ?? "Stable session binding is inconsistent with the current requester scope.", ctx.RequestAborted);
                         return;
                     }
+
+                    persistStableSessionOnExit = true;
                 }
 
                 var httpMwCtx = new MessageContext
@@ -132,12 +134,14 @@ internal static partial class OpenAiEndpoints
                         ActivePresetId = presetHeader.Trim()
                     });
                 }
+                ApplyImplicitToolPolicy(session, runtime, presetHeader);
                 approvalCallback = ToolApprovalCallbackFactory.Create(
                     startup.Config,
                     runtime,
                     session,
                     approvalChannelId: "openai-http",
-                    senderId: requesterKey);
+                    senderId: requesterKey,
+                    FeatureFallbackServices.ResolveGovernanceLedgerService(startup, app.Services));
 
                 if (ShouldHydrateRequestHistory(stableSessionId, session))
                 {
@@ -167,6 +171,17 @@ internal static partial class OpenAiEndpoints
                 var completionId = $"chatcmpl-{Guid.NewGuid():N}"[..29];
                 var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 var model = req.Model ?? startup.Config.Llm.Model;
+
+                // Accept an external trace/correlation ID from the caller for end-to-end distributed tracing.
+                var correlationId = ctx.Request.Headers.TryGetValue("X-Request-Id", out var requestIdValues)
+                    && requestIdValues.Count > 0
+                    && !string.IsNullOrWhiteSpace(requestIdValues.ToString())
+                    ? requestIdValues.ToString()
+                    : ctx.Request.Headers.TryGetValue("X-Trace-Id", out var traceIdValues)
+                        && traceIdValues.Count > 0
+                        && !string.IsNullOrWhiteSpace(traceIdValues.ToString())
+                        ? traceIdValues.ToString()
+                        : null;
 
                 if (req.Stream)
                 {
@@ -236,7 +251,8 @@ internal static partial class OpenAiEndpoints
                         session,
                         userText ?? "",
                         ctx.RequestAborted,
-                        approvalCallback: approvalCallback))
+                        approvalCallback: approvalCallback,
+                        correlationId: correlationId))
                     {
                         if (evt.Type == AgentStreamEventType.TextDelta && !string.IsNullOrEmpty(evt.Content))
                         {
@@ -319,7 +335,8 @@ internal static partial class OpenAiEndpoints
                         session,
                         userText ?? "",
                         ctx.RequestAborted,
-                        approvalCallback: approvalCallback);
+                        approvalCallback: approvalCallback,
+                        correlationId: correlationId);
 
                     var response = new OpenAiChatCompletionResponse
                     {
@@ -349,31 +366,14 @@ internal static partial class OpenAiEndpoints
                         ctx.RequestAborted);
                 }
             }
-            catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
-            {
-                discardStableSessionOnExit = !string.IsNullOrWhiteSpace(stableSessionId);
-                throw;
-            }
             finally
             {
-                if (!string.IsNullOrWhiteSpace(stableSessionId))
-                {
-                    if (discardStableSessionOnExit)
-                    {
-                        runtime.SessionManager.RemoveActive(session.Id);
-                    }
-                    else
-                    {
-                        await PersistStableSessionAsync(runtime.SessionManager, session, sessionLockHeld: stableSessionLock is not null);
-                    }
-
-                    if (stableSessionLock is not null)
-                        await stableSessionLock.DisposeAsync();
-                }
-                else
-                {
-                    runtime.SessionManager.RemoveActive(session.Id);
-                }
+                await FinalizeOpenAiSessionAsync(
+                    runtime.SessionManager,
+                    session,
+                    isStableSession: stableBinding is not null,
+                    persistStableSession: persistStableSessionOnExit,
+                    stableSessionLock);
             }
         });
     }

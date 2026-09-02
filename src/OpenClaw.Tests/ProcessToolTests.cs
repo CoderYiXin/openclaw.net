@@ -282,6 +282,51 @@ public sealed class ProcessToolTests
         Assert.True(metrics.RetainedProcesses <= 64);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_WaitWithShortTimeout_ReturnsStillRunningInsteadOfBlocking()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "openclaw-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+
+        var config = new GatewayConfig();
+        config.Tooling.WorkspaceRoot = workspace;
+
+        var router = new ToolExecutionRouter(
+            config,
+            toolSandbox: null,
+            NullLoggerFactory.Instance.CreateLogger<ToolExecutionRouter>());
+        await using var processes = new ExecutionProcessService(router, NullLogger<ExecutionProcessService>.Instance);
+        var tool = new ProcessTool(processes, config.Tooling);
+        var context = new ToolExecutionContext
+        {
+            Session = new Session { Id = "sess_wait_timeout", ChannelId = "websocket", SenderId = "user1" },
+            TurnContext = new TurnContext { SessionId = "sess_wait_timeout", ChannelId = "websocket" }
+        };
+
+        // Start a long-running command (30 s sleep)
+        var longCommand = OperatingSystem.IsWindows()
+            ? "ping 127.0.0.1 -n 30 > nul"
+            : "sleep 30";
+        var start = await tool.ExecuteAsync(
+            $$"""{"action":"start","command":"{{longCommand}}","timeout_seconds":60}""",
+            context, CancellationToken.None);
+        var processId = Regex.Match(start, @"Started process (?<id>\S+)").Groups["id"].Value;
+        Assert.False(string.IsNullOrEmpty(processId), "Process should have started.");
+
+        // Wait with a 1-second timeout ¡ª should return quickly with "still running" message
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var wait = await tool.ExecuteAsync(
+            $$"""{"action":"wait","process_id":"{{processId}}","timeout_seconds":1}""",
+            context, CancellationToken.None);
+        sw.Stop();
+
+        Assert.Contains("still running", wait, StringComparison.OrdinalIgnoreCase);
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(5), $"wait should return within ~1 s but took {sw.Elapsed.TotalSeconds:F1} s");
+
+        // Clean up
+        await tool.ExecuteAsync($$"""{"action":"kill","process_id":"{{processId}}"}""", context, CancellationToken.None);
+    }
+
     private static string CreateCommand()
         => OperatingSystem.IsWindows()
             ? "echo hello && ping 127.0.0.1 -n 3 > nul && echo done"

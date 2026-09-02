@@ -2,7 +2,31 @@
 
 This guide gets OpenClaw.NET to a first working agent with the supported setup path.
 
-If you want the broader overview first, start with [GETTING_STARTED.md](GETTING_STARTED.md). That guide explains what each project is, how the runtime layers fit together, and which parts most contributors actually need.
+If you want the broader evaluator overview first, start with [START_HERE.md](START_HERE.md). If you want the repository map and contributor-oriented project shape, read [GETTING_STARTED.md](GETTING_STARTED.md).
+
+## Clone-To-Success Smoke
+
+Run this before configuring providers. It proves the runtime loop and tool invocation path without external services:
+
+```bash
+git clone https://github.com/clawdotnet/openclaw.net
+cd openclaw.net
+
+dotnet restore OpenClaw.Net.slnx
+dotnet build OpenClaw.Net.slnx --configuration Release --no-restore
+dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
+```
+
+Expected output:
+
+```text
+OpenClaw.HelloAgent
+User: hello
+Agent: hello from OpenClaw.NET
+Tool: echo(hello): ok
+```
+
+After that succeeds, continue with the local gateway flow below.
 
 ## First 10 Minutes
 
@@ -15,6 +39,14 @@ Follow this path end-to-end before branching into anything else. Ignore every "o
 ```bash
 export MODEL_PROVIDER_KEY="sk-..."
 dotnet run --project src/OpenClaw.Cli -c Release -- start
+```
+
+For DeepSeek, use its own provider key variable and named provider:
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+dotnet run --project src/OpenClaw.Cli -c Release -- setup --non-interactive --profile local --workspace ./workspace --provider deepseek --api-key env:DEEPSEEK_API_KEY
+dotnet run --project src/OpenClaw.Cli -c Release -- setup launch --config ~/.openclaw/config/openclaw.settings.json
 ```
 
 Accept the defaults. If the config does not exist yet, `openclaw start` runs setup first, writes `~/.openclaw/config/openclaw.settings.json`, and then launches.
@@ -41,6 +73,57 @@ dotnet run --project src/OpenClaw.Gateway -c Release -- --quickstart
 
 `--quickstart` is the direct terminal fallback. It keeps the gateway on `127.0.0.1`, prompts for missing provider values, retries in-process on the common local startup failures, and after a successful start can save the resulting config to the standard `~/.openclaw/config/openclaw.settings.json`.
 
+## Prebuilt GitHub Release Downloads
+
+For non-technical desktop users, start from the [latest GitHub Release](https://github.com/clawdotnet/openclaw.net/releases/latest) desktop bundle instead of a source checkout or Actions artifact.
+
+Download the matching asset:
+
+- Windows: [`openclaw-desktop-win-x64.zip`](https://github.com/clawdotnet/openclaw.net/releases/latest/download/openclaw-desktop-win-x64.zip)
+- Apple Silicon macOS: [`openclaw-desktop-osx-arm64.zip`](https://github.com/clawdotnet/openclaw.net/releases/latest/download/openclaw-desktop-osx-arm64.zip)
+- Linux: [`openclaw-desktop-linux-x64.zip`](https://github.com/clawdotnet/openclaw.net/releases/latest/download/openclaw-desktop-linux-x64.zip)
+
+Extract the archive and launch Companion from the `companion` folder. Open the **Setup** tab, enter the provider/model/key or choose Ollama, then click **Set Up and Start**. Companion writes the local config, starts the bundled gateway on `127.0.0.1`, and connects to it.
+
+Current Windows and macOS archives are unsigned. Windows users may see SmartScreen warnings; macOS users may need to right-click Open or remove quarantine for local testing. See [RELEASES.md](RELEASES.md) for checksums and release assets.
+
+Operators can still download standalone AOT archives from the same release:
+
+```bash
+gh release download \
+  --repo clawdotnet/openclaw.net \
+  --pattern 'openclaw-gateway-aot-linux-x64.zip' \
+  --dir ./openclaw-gateway-aot
+
+gh release download \
+  --repo clawdotnet/openclaw.net \
+  --pattern 'openclaw-cli-aot-linux-x64.zip' \
+  --dir ./openclaw-cli-aot
+```
+
+After extracting those standalone archives:
+
+```bash
+chmod +x ./openclaw-gateway-aot/OpenClaw.Gateway
+chmod +x ./openclaw-cli-aot/openclaw
+```
+
+For the fastest interactive local run:
+
+```bash
+export MODEL_PROVIDER_KEY="sk-..."
+./openclaw-gateway-aot/OpenClaw.Gateway --quickstart
+```
+
+For a reusable config:
+
+```bash
+./openclaw-cli-aot/openclaw setup
+./openclaw-gateway-aot/OpenClaw.Gateway --config ~/.openclaw/config/openclaw.settings.json
+```
+
+GitHub Actions artifacts remain available for commit validation, but they are not the supported user download surface because they can expire and may require GitHub access.
+
 You explicitly do **not** need any of these to get started:
 
 - Docker
@@ -55,6 +138,8 @@ You explicitly do **not** need any of these to get started:
 
 - .NET 10 SDK
 - Optional: Node.js 20+ if you want upstream-style TS/JS plugin support
+
+The first full `dotnet test` run may download Playwright browser assets for browser-tool coverage. The test suite uses Playwright's normal browser cache after that first install; set `OPENCLAW_TEST_ISOLATE_PLAYWRIGHT_BROWSERS=true` only when you intentionally want an isolated test browser install.
 
 Examples below use `openclaw ...`. From a source checkout, replace that with `dotnet run --project src/OpenClaw.Cli -c Release -- ...`.
 
@@ -131,7 +216,37 @@ openclaw models presets
 openclaw models doctor
 ```
 
-The doctor now warns when an Ollama profile still points at `/v1` or when a local agentic profile is missing a deterministic fallback.
+Plain `openclaw run "hello"` requests work as prompt-only chat with non-tool Ollama profiles when no explicit tool preset is requested. Tool-heavy routes and explicit presets still need a tool-capable model profile or configured fallback. The doctor now warns when an Ollama profile still points at `/v1` or when a local agentic profile is missing a deterministic fallback.
+
+For a DeepSeek hosted setup, use the named provider. It configures the OpenAI-compatible DeepSeek endpoint automatically and defaults to `deepseek-v4-flash`:
+
+```bash
+export DEEPSEEK_API_KEY="sk-..."
+openclaw setup --non-interactive \
+  --profile local \
+  --workspace ./workspace \
+  --provider deepseek \
+  --api-key env:DEEPSEEK_API_KEY
+
+openclaw setup verify --config ~/.openclaw/config/openclaw.settings.json --require-provider
+openclaw setup launch --config ~/.openclaw/config/openclaw.settings.json
+```
+
+Pass `--model deepseek-v4-pro` when you want the higher-capability hosted model.
+
+## Optional Embedded Local Model
+
+Embedded local mode lets OpenClaw manage the model package and local sidecar process. It does not require a provider API key.
+
+```bash
+openclaw setup --provider embedded --model-preset embedded-gemma-small-q4 --model gemma-local-small-q4
+openclaw models packages
+openclaw models install gemma-local-small-q4 --accept-license --path ~/Downloads/model.gguf
+openclaw models verify gemma-local-small-q4
+openclaw setup launch --config ~/.openclaw/config/openclaw.settings.json
+```
+
+Use embedded mode for private/offline helper tasks. Video input support is frame-based and requires local `ffmpeg`/`ffprobe`; OpenClaw samples video into ordered image frames before calling the model. LiteRT-LM packages are experimental and require an adapter binary configured with `OpenClaw:LocalInference:LiteRtRuntimePath`. See [LOCAL_MODELS.md](LOCAL_MODELS.md).
 
 After the first successful run, use the maintenance surface to keep the install healthy without touching user-authored prompt files:
 

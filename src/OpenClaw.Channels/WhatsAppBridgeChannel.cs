@@ -165,13 +165,50 @@ public sealed class WhatsAppBridgeInboundPayload
     public required string From { get; set; }
 
     [JsonPropertyName("text")]
-    public required string Text { get; set; }
+    public string? Text { get; set; }
+
+    [JsonPropertyName("account_id")]
+    public string? AccountId { get; set; }
+
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
 
     [JsonPropertyName("sender_name")]
     public string? SenderName { get; set; }
 
     [JsonPropertyName("message_id")]
     public string? MessageId { get; set; }
+
+    [JsonPropertyName("reply_to_message_id")]
+    public string? ReplyToMessageId { get; set; }
+
+    [JsonPropertyName("is_group")]
+    public bool IsGroup { get; set; }
+
+    [JsonPropertyName("group_id")]
+    public string? GroupId { get; set; }
+
+    [JsonPropertyName("group_name")]
+    public string? GroupName { get; set; }
+
+    [JsonPropertyName("mentioned_ids")]
+    public string[]? MentionedIds { get; set; }
+
+    [JsonPropertyName("media_type")]
+    public string? MediaType { get; set; }
+
+    [JsonPropertyName("media_url")]
+    public string? MediaUrl { get; set; }
+
+    [JsonPropertyName("media_mime_type")]
+    public string? MediaMimeType { get; set; }
+
+    [JsonPropertyName("media_file_name")]
+    public string? MediaFileName { get; set; }
+
+    [JsonPropertyName("attachments")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WhatsAppBridgeAttachmentPayload[]? Attachments { get; set; }
 }
 
 [JsonSerializable(typeof(WhatsAppBridgeSendPayload))]

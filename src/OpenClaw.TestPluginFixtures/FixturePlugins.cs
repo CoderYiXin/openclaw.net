@@ -1,5 +1,6 @@
 using System.Text.Json;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Memory;
 using OpenClaw.PluginKit;
 
 namespace OpenClaw.TestPluginFixtures;
@@ -18,6 +19,12 @@ public sealed class ToolAndCommandPlugin : INativeDynamicPlugin
             startPath = configuredStartPath;
         if (TryGetConfigValue(context.Config, "stopPath", out var configuredStopPath))
             stopPath = configuredStopPath;
+
+        if (TryGetConfigValue(context.Config, "memoryProviderId", out var memoryProviderId))
+        {
+            context.RegisterMemoryProvider(memoryProviderId, providerContext =>
+                new FileMemoryStore(providerContext.GatewayConfig.Memory.StoragePath));
+        }
 
         if (!string.IsNullOrWhiteSpace(startPath) || !string.IsNullOrWhiteSpace(stopPath))
         {

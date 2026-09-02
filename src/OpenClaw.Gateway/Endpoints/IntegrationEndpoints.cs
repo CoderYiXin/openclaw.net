@@ -3,6 +3,8 @@ using OpenClaw.Core.Models;
 using System.Text.Json;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Composition;
+using OpenClaw.Payments.Abstractions;
+using OpenClaw.Payments.Core;
 
 namespace OpenClaw.Gateway.Endpoints;
 
@@ -309,6 +311,126 @@ internal static class IntegrationEndpoints
                 CoreJsonContext.Default.IntegrationToolPresetsResponse);
         });
 
+        group.MapGet("/workflows", (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            return Results.Json(
+                facade.ListWorkflows(),
+                CoreJsonContext.Default.IntegrationWorkflowsResponse);
+        });
+
+        group.MapPost("/workflows/{workflowId}/runs", async (HttpContext ctx, string workflowId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            AgentWorkflowRequest? request;
+            try
+            {
+                request = await JsonSerializer.DeserializeAsync(
+                    ctx.Request.Body,
+                    CoreJsonContext.Default.AgentWorkflowRequest,
+                    ctx.RequestAborted);
+            }
+            catch (JsonException)
+            {
+                return BadIntegrationRequest("Invalid JSON request body.");
+            }
+            catch (NotSupportedException)
+            {
+                return BadIntegrationRequest("Invalid JSON request body.");
+            }
+
+            if (request is null)
+                return BadIntegrationRequest("request body is required.");
+
+            try
+            {
+                return Results.Json(
+                    await facade.RunWorkflowAsync(workflowId, request, ctx.RequestAborted),
+                    CoreJsonContext.Default.AgentWorkflowRunResult,
+                    statusCode: StatusCodes.Status202Accepted);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return IntegrationNotFound(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return IntegrationBackendFailure(ex.Message);
+            }
+        });
+
+        group.MapGet("/workflows/{workflowId}/runs/{runId}", async (HttpContext ctx, string workflowId, string runId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            try
+            {
+                return Results.Json(
+                    await facade.GetWorkflowRunAsync(workflowId, runId, ctx.RequestAborted),
+                    CoreJsonContext.Default.AgentWorkflowRunSnapshot);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return IntegrationNotFound(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return IntegrationBackendFailure(ex.Message);
+            }
+        });
+
+        group.MapPost("/workflows/{workflowId}/runs/{runId}/responses", async (HttpContext ctx, string workflowId, string runId) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
+            if (failure is not null)
+                return failure;
+
+            AgentWorkflowResponse? response;
+            try
+            {
+                response = await JsonSerializer.DeserializeAsync(
+                    ctx.Request.Body,
+                    CoreJsonContext.Default.AgentWorkflowResponse,
+                    ctx.RequestAborted);
+            }
+            catch (JsonException)
+            {
+                return BadIntegrationRequest("Invalid JSON request body.");
+            }
+            catch (NotSupportedException)
+            {
+                return BadIntegrationRequest("Invalid JSON request body.");
+            }
+
+            if (response is null)
+                return BadIntegrationRequest("request body is required.");
+            if (string.IsNullOrWhiteSpace(response.PortId))
+                return BadIntegrationRequest("portId is required.");
+
+            try
+            {
+                return Results.Json(
+                    await facade.RespondWorkflowRunAsync(workflowId, runId, response, ctx.RequestAborted),
+                    CoreJsonContext.Default.AgentWorkflowRunSnapshot);
+            }
+            catch (KeyNotFoundException ex)
+            {
+                return IntegrationNotFound(ex.Message);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return IntegrationBackendFailure(ex.Message);
+            }
+        });
+
         group.MapGet("/profiles/{actorId}", async (HttpContext ctx, string actorId) =>
         {
             var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
@@ -541,6 +663,148 @@ internal static class IntegrationEndpoints
             return Results.Json(facade.QueryRuntimeEvents(query), CoreJsonContext.Default.IntegrationRuntimeEventsResponse);
         });
 
+        group.MapGet("/payment/setup", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+
+            var provider = GetOptionalQueryString(ctx, "provider") ?? startup.Config.Payments.Provider;
+            return Results.Json(
+                await runtime.PaymentRuntime.GetSetupStatusAsync(provider, ctx.RequestAborted),
+                PaymentJsonContext.Default.PaymentSetupStatus);
+        });
+
+        group.MapGet("/payment/funding", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+            if (!startup.Config.Payments.Enabled)
+                return PaymentDisabled();
+
+            var provider = GetOptionalQueryString(ctx, "provider") ?? startup.Config.Payments.Provider;
+            try
+            {
+                var items = await runtime.PaymentRuntime.ListFundingSourcesAsync(
+                    provider,
+                    BuildPaymentContext(ctx, startup.Config),
+                    ctx.RequestAborted);
+                return Results.Json(new List<FundingSource>(items), PaymentJsonContext.Default.ListFundingSource);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+        });
+
+        group.MapPost("/payment/virtual-card", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+            if (!startup.Config.Payments.Enabled)
+                return PaymentDisabled();
+
+            VirtualCardRequest? request;
+            try
+            {
+                request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, PaymentJsonContext.Default.VirtualCardRequest, ctx.RequestAborted);
+            }
+            catch (JsonException)
+            {
+                return BadPaymentRequest("Invalid JSON request body.");
+            }
+
+            if (request is null || string.IsNullOrWhiteSpace(request.MerchantName))
+                return BadPaymentRequest("merchantName is required.");
+
+            try
+            {
+                var handle = await runtime.PaymentRuntime.IssueVirtualCardAsync(
+                    request with
+                    {
+                        ProviderId = request.ProviderId ?? startup.Config.Payments.Provider,
+                        Environment = NormalizePaymentEnvironment(string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment)
+                    },
+                    BuildPaymentContext(ctx, startup.Config),
+                    ctx.RequestAborted);
+                return Results.Json(handle, PaymentJsonContext.Default.VirtualCardHandle);
+            }
+            catch (PaymentPolicyDeniedException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+        });
+
+        group.MapPost("/payment/execute", async (HttpContext ctx) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+            if (!startup.Config.Payments.Enabled)
+                return PaymentDisabled();
+
+            MachinePaymentRequest? request;
+            try
+            {
+                request = await JsonSerializer.DeserializeAsync(ctx.Request.Body, PaymentJsonContext.Default.MachinePaymentRequest, ctx.RequestAborted);
+            }
+            catch (JsonException)
+            {
+                return BadPaymentRequest("Invalid JSON request body.");
+            }
+
+            if (request is null)
+                return BadPaymentRequest("request body is required.");
+
+            try
+            {
+                var result = await runtime.PaymentRuntime.ExecuteMachinePaymentAsync(
+                    request with
+                    {
+                        ProviderId = request.ProviderId ?? startup.Config.Payments.Provider,
+                        Environment = NormalizePaymentEnvironment(string.IsNullOrWhiteSpace(request.Environment) ? startup.Config.Payments.Environment : request.Environment)
+                    },
+                    BuildPaymentContext(ctx, startup.Config),
+                    ctx.RequestAborted);
+                return Results.Json(result, PaymentJsonContext.Default.MachinePaymentResult);
+            }
+            catch (PaymentPolicyDeniedException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+        });
+
+        group.MapGet("/payment/status/{id}", async (HttpContext ctx, string id) =>
+        {
+            var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.read", requireCsrf: false);
+            if (failure is not null)
+                return failure;
+            if (!startup.Config.Payments.Enabled)
+                return PaymentDisabled();
+
+            var provider = GetOptionalQueryString(ctx, "provider") ?? startup.Config.Payments.Provider;
+            try
+            {
+                return Results.Json(
+                    await runtime.PaymentRuntime.GetPaymentStatusAsync(id, provider, BuildPaymentContext(ctx, startup.Config), ctx.RequestAborted),
+                    PaymentJsonContext.Default.PaymentStatus);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadPaymentRequest(ex.Message);
+            }
+        });
+
         group.MapPost("/messages", async (HttpContext ctx) =>
         {
             var failure = AuthorizeAndConsume(ctx, startup, runtime, browserSessions, endpointScope: "integration.mutate", requireCsrf: true);
@@ -577,6 +841,50 @@ internal static class IntegrationEndpoints
                 statusCode: StatusCodes.Status202Accepted);
         });
     }
+
+    private static PaymentExecutionContext BuildPaymentContext(HttpContext ctx, GatewayConfig config)
+        => new()
+        {
+            SessionId = GetOptionalQueryString(ctx, "sessionId"),
+            ChannelId = GetOptionalQueryString(ctx, "channelId"),
+            SenderId = GetOptionalQueryString(ctx, "senderId"),
+            Environment = NormalizePaymentEnvironment(GetOptionalQueryString(ctx, "environment") ?? config.Payments.Environment),
+            CliConfirmed = GetQueryBool(ctx, "yes") == true,
+            AllowTestModeWithoutApproval = config.Payments.Policy.AllowTestModeWithoutApproval
+        };
+
+    private static string NormalizePaymentEnvironment(string? environment)
+        => PaymentEnvironments.Normalize(environment);
+
+    private static IResult PaymentDisabled()
+        => Results.Json(
+            new OperationStatusResponse { Success = false, Error = "Native payments are disabled by configuration." },
+            CoreJsonContext.Default.OperationStatusResponse,
+            statusCode: StatusCodes.Status409Conflict);
+
+    private static IResult BadPaymentRequest(string message)
+        => Results.Json(
+            new OperationStatusResponse { Success = false, Error = message },
+            CoreJsonContext.Default.OperationStatusResponse,
+            statusCode: StatusCodes.Status400BadRequest);
+
+    private static IResult BadIntegrationRequest(string message)
+        => Results.Json(
+            new OperationStatusResponse { Success = false, Error = message },
+            CoreJsonContext.Default.OperationStatusResponse,
+            statusCode: StatusCodes.Status400BadRequest);
+
+    private static IResult IntegrationNotFound(string message)
+        => Results.Json(
+            new OperationStatusResponse { Success = false, Error = message },
+            CoreJsonContext.Default.OperationStatusResponse,
+            statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult IntegrationBackendFailure(string message)
+        => Results.Json(
+            new OperationStatusResponse { Success = false, Error = message },
+            CoreJsonContext.Default.OperationStatusResponse,
+            statusCode: StatusCodes.Status502BadGateway);
 
     private static IResult? AuthorizeAndConsume(
         HttpContext ctx,

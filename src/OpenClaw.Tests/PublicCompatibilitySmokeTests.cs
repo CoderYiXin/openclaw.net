@@ -13,6 +13,7 @@ namespace OpenClaw.Tests;
 public sealed class PublicCompatibilitySmokeTests : IDisposable
 {
     private const string SmokeEnvVar = "OPENCLAW_PUBLIC_SMOKE";
+    private const string LatestCanaryEnvVar = "OPENCLAW_LATEST_CANARY";
     private readonly string _tempDir;
 
     public PublicCompatibilitySmokeTests()
@@ -50,9 +51,37 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
         }
     }
 
+    public static IEnumerable<object[]> LatestNpmScenarioIds()
+        => PublicCompatibilityCatalog.GetCatalog().Items
+            .Where(static entry => string.Equals(entry.Kind, "npm-plugin", StringComparison.Ordinal))
+            .GroupBy(static entry => entry.PackageName, StringComparer.Ordinal)
+            .Select(static group => group
+                .OrderByDescending(entry => string.Equals(entry.CompatibilityStatus, "compatible", StringComparison.Ordinal))
+                .First())
+            .OrderBy(static entry => entry.Id, StringComparer.Ordinal)
+            .Select(static entry => new object[] { entry.Id });
+
+    [Theory]
+    [MemberData(nameof(LatestNpmScenarioIds))]
+    [Trait("Category", "LatestCanary")]
+    public async Task LatestNpmPackage_ReportsCompatibilityDrift(string scenarioId)
+    {
+        if (!IsLatestCanaryEnabled())
+            return;
+        Assert.True(HasNode(), "OPENCLAW_LATEST_CANARY is enabled, but Node.js is unavailable.");
+
+        var entry = PublicCompatibilityCatalog.GetCatalog().Items.Single(item => item.Id == scenarioId);
+        Assert.False(string.IsNullOrWhiteSpace(entry.PackageName));
+        await VerifyNpmPluginAsync(
+            entry,
+            packageSpecOverride: $"{entry.PackageName}@latest",
+            scenarioIdOverride: $"latest-{entry.Id}");
+    }
+
     private async Task VerifyClawHubSkillAsync(CompatibilityCatalogEntry entry)
     {
         Assert.False(string.IsNullOrWhiteSpace(entry.SkillSlug), $"Smoke entry '{entry.Id}' must declare a skill slug.");
+        Assert.False(string.IsNullOrWhiteSpace(entry.SkillRef), $"Smoke entry '{entry.Id}' must declare an owner-qualified skill ref.");
         Assert.False(string.IsNullOrWhiteSpace(entry.PackageVersion), $"Smoke entry '{entry.Id}' must declare a skill version.");
         Assert.False(string.IsNullOrWhiteSpace(entry.ExpectedRelativePath), $"Smoke entry '{entry.Id}' must declare expectedRelativePath.");
 
@@ -64,7 +93,7 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
             "--workdir", workdir,
             "--dir", "skills",
             "--no-input",
-            "install", entry.SkillSlug!,
+            "install", entry.SkillRef!,
             "--version", entry.PackageVersion!);
 
         var expectedPath = Path.Combine(workdir, entry.ExpectedRelativePath!
@@ -84,18 +113,21 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
         Assert.NotEmpty(skills);
     }
 
-    private async Task VerifyNpmPluginAsync(CompatibilityCatalogEntry entry)
+    private async Task VerifyNpmPluginAsync(
+        CompatibilityCatalogEntry entry,
+        string? packageSpecOverride = null,
+        string? scenarioIdOverride = null)
     {
         Assert.False(string.IsNullOrWhiteSpace(entry.PackageSpec), $"Smoke entry '{entry.Id}' must declare an npm spec.");
         Assert.False(string.IsNullOrWhiteSpace(entry.PackageName), $"Smoke entry '{entry.Id}' must declare packageName.");
         Assert.False(string.IsNullOrWhiteSpace(entry.PluginId), $"Smoke entry '{entry.Id}' must declare pluginId.");
         Assert.False(string.IsNullOrWhiteSpace(entry.CompatibilityStatus), $"Smoke entry '{entry.Id}' must declare expectedStatus.");
 
-        var scenarioDir = CreateScenarioDirectory(entry.Id);
+        var scenarioDir = CreateScenarioDirectory(scenarioIdOverride ?? entry.Id);
         var installDir = Path.Combine(scenarioDir, "npm");
         Directory.CreateDirectory(installDir);
 
-        var packages = new List<string> { entry.PackageSpec! };
+        var packages = new List<string> { packageSpecOverride ?? entry.PackageSpec! };
         if (entry.InstallExtraPackages is { Length: > 0 })
             packages.AddRange(entry.InstallExtraPackages);
         await InstallPackagesAsync(installDir, packages);
@@ -104,21 +136,26 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
             .Replace('/', Path.DirectorySeparatorChar)
             .Replace('\\', Path.DirectorySeparatorChar));
         Assert.True(Directory.Exists(packageDir), $"Installed package directory '{packageDir}' was not found.");
+        var installedVersion = ReadInstalledPackageVersion(packageDir);
+        var scenarioLabel = $"{entry.PackageName}@{installedVersion ?? "unknown"}";
 
         var workspaceDir = Path.Combine(scenarioDir, "workspace");
         Directory.CreateDirectory(workspaceDir);
 
         await using var host = CreateHost(BuildPluginConfig(entry, packageDir));
-        var tools = await host.LoadAsync(workspaceDir, CancellationToken.None);
+        var tools = await host.LoadAsync(workspaceDir, TestContext.Current.CancellationToken);
         var report = host.Reports.LastOrDefault(r => string.Equals(r.PluginId, entry.PluginId, StringComparison.Ordinal));
         Assert.NotNull(report);
 
         if (string.Equals(entry.CompatibilityStatus, "compatible", StringComparison.Ordinal))
         {
-            Assert.True(report!.Loaded, $"Expected plugin '{entry.Id}' to load. Error: {report.Error}");
+            Assert.True(report!.Loaded, $"Expected plugin '{entry.Id}' ({scenarioLabel}) to load. Error: {report.Error}. Diagnostics: [{string.Join(", ", report.Diagnostics.Select(d => d.Code))}]");
 
             foreach (var toolName in entry.ExpectedToolNames ?? [])
                 Assert.Contains(tools, tool => string.Equals(tool.Name, toolName, StringComparison.Ordinal));
+
+            foreach (var commandName in entry.ExpectedCliCommandNames ?? [])
+                Assert.Contains(report.CliCommandNames, name => string.Equals(name, commandName, StringComparison.Ordinal));
 
             if (entry.ExpectedSkillNames is { Length: > 0 })
             {
@@ -143,7 +180,7 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
             {
                 Assert.True(
                     report.Diagnostics.Any(diag => string.Equals(diag.Code, diagnosticCode, StringComparison.Ordinal)),
-                    $"Expected plugin '{entry.Id}' to report diagnostic '{diagnosticCode}', but got: [{string.Join(", ", report.Diagnostics.Select(d => d.Code))}]");
+                    $"Expected plugin '{entry.Id}' ({scenarioLabel}) to report diagnostic '{diagnosticCode}', but got: [{string.Join(", ", report.Diagnostics.Select(d => d.Code))}]");
             }
         }
         else
@@ -187,6 +224,18 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
             ResolveCommand("npm"),
             workdir,
             args.ToArray());
+    }
+
+    private static string? ReadInstalledPackageVersion(string packageDir)
+    {
+        var packageJson = Path.Combine(packageDir, "package.json");
+        if (!File.Exists(packageJson))
+            return null;
+
+        using var document = JsonDocument.Parse(File.ReadAllText(packageJson));
+        return document.RootElement.TryGetProperty("version", out var version) && version.ValueKind == JsonValueKind.String
+            ? version.GetString()
+            : null;
     }
 
     private string CreateScenarioDirectory(string id)
@@ -258,6 +307,9 @@ public sealed class PublicCompatibilitySmokeTests : IDisposable
 
     private static bool IsSmokeEnabled()
         => string.Equals(Environment.GetEnvironmentVariable(SmokeEnvVar), "1", StringComparison.Ordinal);
+
+    private static bool IsLatestCanaryEnabled()
+        => string.Equals(Environment.GetEnvironmentVariable(LatestCanaryEnvVar), "1", StringComparison.Ordinal);
 
     private static string ResolveCommand(string name)
         => OperatingSystem.IsWindows() ? $"{name}.cmd" : name;

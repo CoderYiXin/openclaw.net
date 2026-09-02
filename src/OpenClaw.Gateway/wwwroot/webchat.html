@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 
 <head>
     <meta charset="UTF-8">
@@ -9,2336 +9,822 @@
     <!-- Highlight.js for Code Blocks -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
 
-    <style>
-        :root {
-            color-scheme: dark;
-            --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif;
-            --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-
-            --bg: #000000;
-            --bg-elevated: #1c1c1e;
-            --bg-elevated-2: #2c2c2e;
-            --bg-field: rgba(118, 118, 128, 0.24);
-            --bg-field-hover: rgba(118, 118, 128, 0.36);
-
-            --text: #f5f5f7;
-            --text-secondary: rgba(235, 235, 245, 0.60);
-            --text-tertiary: rgba(235, 235, 245, 0.30);
-
-            --separator: rgba(255, 255, 255, 0.08);
-            --separator-strong: rgba(255, 255, 255, 0.14);
-
-            --accent: #0a84ff;
-            --accent-hover: #409cff;
-            --accent-pressed: #0060d4;
-            --success: #30d158;
-            --warning: #ff9f0a;
-            --error: #ff453a;
-
-            --radius-chip: 980px;
-            --radius-bubble: 18px;
-            --radius-input: 22px;
-            --radius-card: 14px;
-
-            --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
-            --ease-bounce: cubic-bezier(0.175, 0.885, 0.32, 1.275);
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        html, body {
-            height: 100%;
-        }
-
-        body {
-            font-family: var(--font-sans);
-            font-feature-settings: "ss01", "cv11";
-            background: var(--bg);
-            color: var(--text);
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-            letter-spacing: -0.01em;
-        }
-
-        button {
-            font-family: inherit;
-        }
-
-        /* ============================== Header ============================== */
-
-        #header {
-            background: rgba(28, 28, 30, 0.72);
-            backdrop-filter: saturate(180%) blur(28px);
-            -webkit-backdrop-filter: saturate(180%) blur(28px);
-            padding: 0.75rem 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--separator);
-            z-index: 10;
-            flex-shrink: 0;
-        }
-
-        .header-brand {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-
-        .header-brand img {
-            width: 28px;
-            height: 28px;
-            object-fit: contain;
-        }
-
-        #header h2 {
-            font-size: 1.0625rem;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-            color: var(--text);
-        }
-
-        #header .header-right {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-        }
-
-        /* ============================== Controls ============================== */
-
-        #token-input,
-        #doctor-button,
-        #mode-select,
-        #live-provider-select,
-        #speech-provider-select,
-        #voice-id-input,
-        #live-connect-button,
-        #live-mic-button,
-        #live-interrupt-button,
-        .live-status-badge {
-            background: var(--bg-field);
-            border: 1px solid transparent;
-            color: var(--text);
-            padding: 0.4rem 0.9rem;
-            height: 32px;
-            border-radius: var(--radius-chip);
-            font-family: var(--font-sans);
-            font-size: 0.8125rem;
-            font-weight: 500;
-            transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease), transform 90ms var(--ease);
-            line-height: 1;
-        }
-
-        #token-input,
-        #voice-id-input {
-            width: 220px;
-            font-family: var(--font-mono);
-            font-size: 0.78rem;
-            font-weight: 400;
-            letter-spacing: 0;
-        }
-
-        #token-input::placeholder,
-        #voice-id-input::placeholder,
-        #message-input::placeholder {
-            color: var(--text-tertiary);
-        }
-
-        #token-input:focus,
-        #voice-id-input:focus {
-            outline: none;
-            background: var(--bg-elevated-2);
-            border-color: var(--accent);
-        }
-
-        #doctor-button:hover,
-        #mode-select:hover,
-        #live-provider-select:hover,
-        #speech-provider-select:hover,
-        #live-connect-button:hover,
-        #live-mic-button:hover:not(:disabled),
-        #live-interrupt-button:hover:not(:disabled) {
-            background: var(--bg-field-hover);
-        }
-
-        #doctor-button:active:not(:disabled),
-        #live-connect-button:active:not(:disabled),
-        #live-mic-button:active:not(:disabled),
-        #live-interrupt-button:active:not(:disabled) {
-            transform: scale(0.97);
-        }
-
-        #doctor-button,
-        #live-connect-button,
-        #live-mic-button,
-        #live-interrupt-button,
-        #mode-select,
-        #live-provider-select,
-        #speech-provider-select {
-            cursor: pointer;
-        }
-
-        #mode-select,
-        #live-provider-select,
-        #speech-provider-select {
-            appearance: none;
-            -webkit-appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            padding-right: 2rem;
-            min-width: 0;
-        }
-
-        #live-mic-button[disabled],
-        #live-interrupt-button[disabled] {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-
-        #live-mic-button.active {
-            background: rgba(48, 209, 88, 0.18);
-            color: #a7f0be;
-        }
-
-        .live-status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            color: var(--text-secondary);
-            padding: 0.4rem 0.8rem 0.4rem 0.75rem;
-            cursor: default;
-        }
-
-        .live-status-badge::before {
-            content: '';
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--text-tertiary);
-            transition: background 150ms var(--ease), box-shadow 150ms var(--ease);
-        }
-
-        .live-status-badge.online {
-            color: var(--text);
-        }
-
-        .live-status-badge.online::before {
-            background: var(--success);
-            box-shadow: 0 0 0 3px rgba(48, 209, 88, 0.18);
-        }
-
-        #remember-token-wrap {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            color: var(--text-secondary);
-            font-size: 0.75rem;
-            white-space: nowrap;
-            user-select: none;
-        }
-
-        #remember-token {
-            accent-color: var(--accent);
-            width: 14px;
-            height: 14px;
-            cursor: pointer;
-        }
-
-        /* ============================== Chat Stream ============================== */
-
-        #workspace {
-            flex-grow: 1;
-            min-height: 0;
-            display: flex;
-            background: var(--bg);
-        }
-
-        #chat-wrapper {
-            flex-grow: 1;
-            overflow-y: auto;
-            display: flex;
-            justify-content: center;
-            scroll-behavior: smooth;
-            background: var(--bg);
-        }
-
-        #canvas-panel {
-            width: min(44vw, 560px);
-            min-width: 360px;
-            border-right: 1px solid var(--separator);
-            background: #101012;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-        }
-
-        #canvas-panel[hidden] {
-            display: none;
-        }
-
-        #canvas-header {
-            height: 42px;
-            padding: 0 1rem;
-            border-bottom: 1px solid var(--separator);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 1rem;
-            color: var(--text-secondary);
-            font-size: 0.8125rem;
-        }
-
-        #canvas-header strong {
-            color: var(--text);
-            font-weight: 600;
-        }
-
-        #canvas-surface {
-            min-height: 0;
-            flex: 1;
-            overflow: auto;
-            padding: 1rem;
-        }
-
-        #canvas-html-frame {
-            width: 100%;
-            min-height: 420px;
-            border: 1px solid var(--separator);
-            border-radius: 8px;
-            background: white;
-        }
-
-        #a2ui-root {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-
-        .a2ui-card,
-        .a2ui-frame {
-            border: 1px solid var(--separator-strong);
-            background: rgba(255, 255, 255, 0.045);
-            border-radius: 8px;
-            padding: 0.875rem;
-        }
-
-        .a2ui-title {
-            font-weight: 650;
-            margin-bottom: 0.35rem;
-        }
-
-        .a2ui-muted {
-            color: var(--text-secondary);
-            font-size: 0.8125rem;
-        }
-
-        .a2ui-control {
-            width: 100%;
-            min-height: 34px;
-            border-radius: 8px;
-            border: 1px solid var(--separator-strong);
-            background: var(--bg-field);
-            color: var(--text);
-            padding: 0.45rem 0.6rem;
-            font: inherit;
-        }
-
-        .a2ui-button {
-            min-height: 34px;
-            border: 0;
-            border-radius: 8px;
-            background: var(--accent);
-            color: white;
-            padding: 0.45rem 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
-        .a2ui-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.875rem;
-        }
-
-        .a2ui-table th,
-        .a2ui-table td {
-            border-bottom: 1px solid var(--separator);
-            padding: 0.45rem;
-            text-align: left;
-            vertical-align: top;
-        }
-
-        .a2ui-progress {
-            width: 100%;
-            accent-color: var(--accent);
-        }
-
-        .a2ui-chart-bar {
-            height: 22px;
-            min-width: 2px;
-            border-radius: 5px;
-            background: var(--accent);
-        }
-
-        #chat-state-bar {
-            width: 100%;
-            max-width: 780px;
-            padding: 0.75rem 1.5rem 0;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.5rem;
-        }
-
-        .state-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.45rem 0.75rem;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            color: var(--text-secondary);
-            font-size: 0.88rem;
-        }
-
-        .state-pill strong {
-            color: var(--text-primary);
-            font-weight: 600;
-        }
-
-        #chat-container {
-            width: 100%;
-            max-width: 780px;
-            padding: 2rem 1.5rem 1rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        /* ============================== Message rows ============================== */
-
-        .message-row {
-            display: flex;
-            width: 100%;
-            gap: 0.625rem;
-            align-items: flex-end;
-            animation: fadeSlide 280ms var(--ease) forwards;
-            opacity: 0;
-            transform: translateY(8px);
-        }
-
-        @keyframes fadeSlide {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .message-row.user-row {
-            justify-content: flex-start;
-            flex-direction: row-reverse;
-        }
-
-        .message-row.assistant-row {
-            justify-content: flex-start;
-        }
-
-        .message-row.system-row {
-            justify-content: center;
-        }
-
-        .agent-avatar,
-        .user-avatar {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            margin-bottom: 2px;
-        }
-
-        .agent-avatar {
-            background: var(--bg-elevated);
-            border: 1px solid var(--separator);
-            overflow: hidden;
-        }
-
-        .agent-avatar img {
-            width: 18px;
-            height: 18px;
-            object-fit: contain;
-        }
-
-        .user-avatar {
-            background: var(--bg-elevated-2);
-            color: var(--text);
-            font-weight: 600;
-            font-size: 0.7rem;
-            letter-spacing: 0.02em;
-        }
-
-        /* ============================== Message bubbles ============================== */
-
-        .message {
-            max-width: 68%;
-            padding: 0.5rem 0.875rem;
-            border-radius: var(--radius-bubble);
-            line-height: 1.4;
-            word-wrap: break-word;
-            font-size: 0.9375rem;
-        }
-
-        .message.user {
-            background: var(--accent);
-            color: #ffffff;
-            border-bottom-right-radius: 6px;
-        }
-
-        .message.assistant {
-            background: var(--bg-elevated);
-            color: var(--text);
-            border-bottom-left-radius: 6px;
-        }
-
-        .message.system {
-            background: transparent;
-            color: var(--text-secondary);
-            font-size: 0.8125rem;
-            text-align: center;
-            padding: 0.25rem 0.75rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            max-width: 100%;
-        }
-
-        .message.system.error {
-            color: var(--error);
-            background: rgba(255, 69, 58, 0.12);
-            border-radius: var(--radius-chip);
-            padding: 0.25rem 0.75rem;
-        }
-
-        /* ============================== Tool pills ============================== */
-
-        .tool-pill {
-            background: var(--bg-elevated);
-            border: 1px solid var(--separator);
-            color: var(--text-secondary);
-            padding: 0.25rem 0.75rem;
-            border-radius: var(--radius-chip);
-            font-size: 0.75rem;
-            font-weight: 500;
-            letter-spacing: 0;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
-            margin: 0.125rem auto;
-            align-self: center;
-        }
-
-        .tool-pill::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: var(--accent);
-            animation: pulse-dot 1.8s infinite var(--ease);
-        }
-
-        /* ============================== Markdown in assistant bubble ============================== */
-
-        .message.assistant p:not(:last-child) {
-            margin-bottom: 0.75rem;
-        }
-
-        .message.assistant a {
-            color: var(--accent);
-            text-decoration: none;
-        }
-
-        .message.assistant a:hover {
-            text-decoration: underline;
-        }
-
-        .message.assistant code:not(pre code) {
-            background: var(--bg-elevated-2);
-            padding: 0.1em 0.4em;
-            border-radius: 5px;
-            font-family: var(--font-mono);
-            font-size: 0.86em;
-            color: #ff9f8a;
-        }
-
-        .message.assistant pre {
-            background: var(--bg);
-            border: 1px solid var(--separator);
-            border-radius: 10px;
-            padding: 0.875rem 1rem;
-            margin: 0.75rem 0;
-            overflow-x: auto;
-        }
-
-        .message.assistant pre code {
-            font-family: var(--font-mono);
-            font-size: 0.8125rem;
-            line-height: 1.55;
-            padding: 0;
-            background: transparent;
-            color: #d4d4d4;
-        }
-
-        .message.assistant ul,
-        .message.assistant ol {
-            padding-left: 1.25rem;
-            margin-bottom: 0.75rem;
-        }
-
-        .message.assistant li {
-            margin-bottom: 0.2rem;
-        }
-
-        .message.assistant h1,
-        .message.assistant h2,
-        .message.assistant h3 {
-            font-weight: 600;
-            letter-spacing: -0.01em;
-            margin: 0.75rem 0 0.4rem;
-        }
-
-        .message.assistant h1 { font-size: 1.1rem; }
-        .message.assistant h2 { font-size: 1.0rem; }
-        .message.assistant h3 { font-size: 0.95rem; }
-
-        /* ============================== Typing indicator ============================== */
-
-        .typing-row {
-            display: none;
-            justify-content: flex-start;
-            width: 100%;
-            gap: 0.625rem;
-            align-items: flex-end;
-            margin: 0.125rem 0;
-        }
-
-        .typing-indicator {
-            background: var(--bg-elevated);
-            padding: 0.75rem 1rem;
-            border-radius: var(--radius-bubble);
-            border-bottom-left-radius: 6px;
-            display: flex;
-            gap: 0.3rem;
-            align-items: center;
-        }
-
-        .dot {
-            width: 6px;
-            height: 6px;
-            background: var(--text-tertiary);
-            border-radius: 50%;
-            animation: bounce 1.3s infinite ease-in-out both;
-        }
-
-        .dot:nth-child(1) { animation-delay: -0.32s; }
-        .dot:nth-child(2) { animation-delay: -0.16s; }
-
-        @keyframes bounce {
-            0%, 80%, 100% {
-                transform: scale(0.6);
-                opacity: 0.4;
-            }
-            40% {
-                transform: scale(1);
-                opacity: 1;
-            }
-        }
-
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
-        }
-
-        /* ============================== Composer ============================== */
-
-        #input-wrapper {
-            background: rgba(28, 28, 30, 0.80);
-            backdrop-filter: saturate(180%) blur(28px);
-            -webkit-backdrop-filter: saturate(180%) blur(28px);
-            border-top: 1px solid var(--separator);
-            padding: 1rem 0 1.25rem;
-            display: flex;
-            justify-content: center;
-            z-index: 10;
-            flex-shrink: 0;
-        }
-
-        #composer-shell {
-            width: 100%;
-            max-width: 780px;
-            padding: 0 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-
-        #live-toolbar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.4rem;
-            align-items: center;
-        }
-
-        #input-container {
-            width: 100%;
-            display: flex;
-            gap: 0.625rem;
-            align-items: flex-end;
-        }
-
-        #attach-button {
-            background: var(--bg-elevated);
-            color: var(--text-secondary);
-            border: 1px solid var(--separator);
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            flex-shrink: 0;
-            margin-bottom: 6px;
-        }
-
-        #attach-button.has-files {
-            color: var(--accent);
-            border-color: var(--accent);
-        }
-
-        #image-input {
-            display: none;
-        }
-
-        #message-input {
-            flex-grow: 1;
-            background: var(--bg-elevated);
-            border: 1px solid var(--separator);
-            color: var(--text);
-            padding: 0.75rem 1rem;
-            border-radius: var(--radius-input);
-            font-family: var(--font-sans);
-            font-size: 0.9375rem;
-            line-height: 1.4;
-            resize: none;
-            min-height: 44px;
-            max-height: 200px;
-            transition: border-color 150ms var(--ease), background-color 150ms var(--ease);
-        }
-
-        #message-input:focus {
-            outline: none;
-            border-color: var(--accent);
-            background: var(--bg-elevated-2);
-        }
-
-        #message-input:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        #send-button {
-            background: var(--accent);
-            color: #ffffff;
-            border: none;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: background-color 150ms var(--ease), transform 90ms var(--ease);
-            flex-shrink: 0;
-            margin-bottom: 6px;
-        }
-
-        #send-button svg {
-            width: 16px;
-            height: 16px;
-        }
-
-        #send-button:hover:not(:disabled) {
-            background: var(--accent-hover);
-        }
-
-        #send-button:active:not(:disabled) {
-            transform: scale(0.92);
-            background: var(--accent-pressed);
-        }
-
-        #send-button:disabled {
-            background: var(--bg-field);
-            color: var(--text-tertiary);
-            cursor: not-allowed;
-        }
-
-        /* ============================== Scrollbars ============================== */
-
-        ::-webkit-scrollbar {
-            width: 10px;
-            height: 10px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.10);
-            border-radius: 10px;
-            border: 2px solid transparent;
-            background-clip: padding-box;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.20);
-            background-clip: padding-box;
-            border: 2px solid transparent;
-        }
-
-        /* ============================== Responsive ============================== */
-
-        @media (max-width: 768px) {
-            #header {
-                padding: 0.75rem 1rem;
-                flex-wrap: wrap;
-                gap: 0.5rem;
-            }
-
-            #composer-shell {
-                padding: 0 1rem;
-            }
-
-            #chat-container {
-                padding: 1.25rem 1rem 0.75rem;
-            }
-
-            .message {
-                max-width: 82%;
-            }
-
-            #workspace {
-                flex-direction: column;
-            }
-
-            #canvas-panel {
-                width: 100%;
-                min-width: 0;
-                max-height: 45vh;
-                border-right: 0;
-                border-bottom: 1px solid var(--separator);
-            }
-
-            #token-input,
-            #voice-id-input {
-                width: 160px;
-            }
-        }
-
-        @media (prefers-reduced-motion: reduce) {
-            * {
-                animation-duration: 0.01ms !important;
-                animation-iteration-count: 1 !important;
-                transition-duration: 0.01ms !important;
-            }
-
-            #chat-wrapper {
-                scroll-behavior: auto;
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="webchat.css">
 </head>
 
 <body>
-    <div id="header">
-        <div class="header-brand">
+    <header class="app-bar" id="header">
+        <div class="app-bar__brand">
             <img src="image.png" alt="OpenClaw.NET Logo">
-            <h2>OpenClaw.NET</h2>
+            <div class="app-bar__title">
+                <strong>OpenClaw.NET</strong>
+                <span>Runtime Chat</span>
+            </div>
         </div>
-        <div class="header-right">
-            <button id="doctor-button" title="Fetch /doctor/text">Doctor</button>
-            <select id="mode-select" title="Composer mode">
-                <option value="chat">Chat</option>
-                <option value="live">Live</option>
-            </select>
-            <input type="password" id="token-input" placeholder="Auth Token (optional)">
-            <label id="remember-token-wrap" title="Persist token in this browser">
-                <input type="checkbox" id="remember-token">
-                Remember
-            </label>
+        <div class="app-bar__right">
+            <button id="connection-pill" class="conn-pill" type="button" data-state="connecting" title="Connection status (click for details)">
+                <span class="conn-pill__label">Connecting</span>
+            </button>
+
+            <span class="segmented" title="Composer mode">
+                <select id="mode-select" aria-label="Composer mode">
+                    <option value="chat">Chat</option>
+                    <option value="live">Live</option>
+                </select>
+            </span>
+
+            <button id="doctor-button" class="btn-icon" type="button" title="Doctor diagnostics" aria-label="Doctor diagnostics">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 12a9 9 0 1018 0 9 9 0 00-18 0z"/>
+                    <path d="M12 7v5l3 2"/>
+                </svg>
+            </button>
+
+            <button id="settings-button" class="btn-icon" type="button" title="Settings" aria-label="Open settings" aria-expanded="false" aria-controls="settings-drawer">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>
+                </svg>
+            </button>
+
+            <!-- Session sidebar toggle -->
+            <button id="sessions-toggle-btn" class="btn-icon" type="button" title="Sessions" aria-label="Sessions">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+                </svg>
+            </button>
+            <!-- MCP Servers button -->
+            <button id="mcp-panel-btn" class="btn-icon" type="button" title="MCP Servers">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+                </svg>
+            </button>
+            <!-- Channel Config button -->
+            <button id="channel-panel-btn" class="btn-icon" type="button" title="Channel configuration">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/>
+                </svg>
+            </button>
+            <!-- Digital Employee button -->
+            <button id="de-panel-btn" class="btn-icon" type="button" title="Digital employee management">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/>
+                </svg>
+            </button>
+            <!-- Workspace Files button -->
+            <button id="wf-panel-btn" class="btn-icon" type="button" title="Workspace files">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                </svg>
+            </button>
+            <!-- Cron / Automation button -->
+            <button id="cron-panel-btn" class="btn-icon" type="button" title="Scheduled tasks">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+            </button>
+
+            <button id="theme-toggle" class="btn-icon" type="button" title="Toggle theme" aria-label="Toggle theme">
+                <svg id="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4"/>
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+                </svg>
+                <svg id="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+                </svg>
+            </button>
         </div>
+    </header>
+
+    <!-- Legacy runtime-status-strip retained as a hidden container so existing JS references stay valid. -->
+    <div id="runtime-status-strip" hidden aria-hidden="true">
+        <span id="status-connection"></span>
+        <span id="status-auth"></span>
+        <span id="status-surface"></span>
+        <span id="status-capabilities"></span>
+        <button id="status-canvas" type="button" hidden>Canvas</button>
+        <span id="status-live" hidden></span>
+        <span id="header-runtime-badge"></span>
     </div>
 
-    <div id="workspace">
-        <section id="canvas-panel" aria-label="Canvas" hidden>
-            <div id="canvas-header">
-                <strong>Canvas</strong>
-                <span id="canvas-status">Ready</span>
+    <main class="workspace" id="workspace">
+        <!-- Session Sidebar -->
+        <aside id="session-sidebar" class="session-sidebar" hidden>
+            <div class="session-sidebar__header">
+                <span class="session-sidebar__title">Session history</span>
+                <div style="display:flex;gap:0.4rem;">
+                    <button id="new-chat-btn" class="btn btn-sm btn-primary" type="button">New chat</button>
+                    <button id="session-sidebar-close" class="btn-icon" type="button" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                    </button>
+                </div>
             </div>
-            <div id="canvas-surface">
-                <iframe id="canvas-html-frame" title="Canvas HTML" sandbox="allow-scripts" hidden></iframe>
-                <div id="a2ui-root"></div>
+            <div class="session-sidebar__search">
+                <input type="search" id="session-search-input" class="input" placeholder="Search sessions...">
+            </div>
+            <div id="session-list" class="session-list">
+                <div class="session-empty">No session history</div>
+            </div>
+            <div class="session-sidebar__footer">
+                <button id="clear-all-sessions-btn" class="btn btn-sm btn-ghost" type="button">Clear all sessions</button>
+            </div>
+        </aside>
+
+        <section class="chat-pane">
+            <!-- History session banner -->
+            <div id="history-banner" class="banner banner--info" hidden role="status" style="margin-top: 0.6rem;">
+                <span class="banner__text" id="history-banner-text">Viewing a previous session</span>
+                <button id="history-banner-close" class="btn btn-sm btn-secondary" type="button">Return to current</button>
+            </div>
+            <!-- Connection / auth banners (only visible when relevant). -->
+            <div id="connection-banner" class="banner banner--warning" hidden style="margin-top: 0.6rem;" role="status">
+                <span class="banner__text" id="connection-banner-text">Connection lost. Reconnecting...</span>
+                <button id="connection-banner-action" class="btn btn-sm btn-secondary" type="button" hidden>Reconnect</button>
+            </div>
+            <div id="auth-banner" class="banner banner--warning" hidden style="margin-top: 0.6rem;" role="status">
+                <span class="banner__text">Token required to use this runtime surface.</span>
+                <button id="auth-banner-action" class="btn btn-sm btn-secondary" type="button">Open connection settings</button>
+            </div>
+
+            <div id="chat-wrapper" class="chat-scroll">
+                <div id="chat-container">
+                    <!-- Hidden legacy bar (existing JS writes pills into chatStateBar). -->
+                    <div id="chat-state-bar" hidden aria-hidden="true"></div>
+
+                    <!-- First-run welcome / empty state. -->
+                    <div id="empty-state" class="empty-state">
+                        <h1>Chat with your OpenClaw.NET runtime</h1>
+                        <p class="lede">Connect a provider or use local runtime defaults to inspect tools, run agents, and render UI.</p>
+
+                        <div id="first-run-card" class="setup-card" aria-label="First-run setup">
+                            <h2>Get started</h2>
+                            <div class="setup-card__rows">
+                                <div class="setup-card__row"><span>Connection</span><strong id="first-run-connection">Connecting</strong></div>
+                                <div class="setup-card__row"><span>Provider</span><strong id="first-run-provider">Local / runtime default</strong></div>
+                            </div>
+                            <div class="setup-card__actions">
+                                <button id="first-run-connect-provider" class="btn btn-primary btn-sm" type="button">Connect provider</button>
+                                <button id="first-run-use-defaults" class="btn btn-secondary btn-sm" type="button">Use local/runtime defaults</button>
+                                <button id="first-run-advanced" class="setup-card__advanced" type="button">Advanced setup</button>
+                            </div>
+                        </div>
+
+                        <div class="starter-prompts">
+                            <button class="chip chip-button suggested-prompt" type="button" data-action="doctor">Run doctor diagnostics</button>
+                            <button class="chip chip-button suggested-prompt" type="button" data-prompt="Show available tools">Show available tools</button>
+                            <button class="chip chip-button suggested-prompt" type="button" data-prompt="Create a small canvas UI">Create a small canvas UI</button>
+                            <button class="chip chip-button suggested-prompt" type="button" data-prompt="Explain the active tool preset">Explain the active tool preset</button>
+                        </div>
+                    </div>
+
+                    <!-- Typing indicator stays at the end of the conversation list. -->
+                    <div class="message-row typing-row" id="typing-row" style="display:none">
+                        <div class="agent-avatar"><img src="image.png" alt="Agent" /></div>
+                        <div class="typing-indicator">
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="composer-wrap">
+                <div class="composer-inner">
+                    <!-- Live mode bar: visible only when mode = live. -->
+                    <div id="live-toolbar" class="live-bar" hidden>
+                        <button id="live-connect-button" class="btn btn-primary btn-sm" type="button" title="Connect live session">Start Live</button>
+                        <span id="live-status-badge" class="live-bar__status">Live offline</span>
+                        <span id="live-mic-status" class="live-bar__status">Mic muted</span>
+                        <button id="live-mic-button" class="btn btn-secondary btn-sm" type="button" title="Toggle microphone streaming" disabled>Mic</button>
+                        <button id="live-interrupt-button" class="btn btn-danger btn-sm" type="button" title="Interrupt live generation" disabled hidden>Interrupt</button>
+                        <div id="live-timeline" aria-live="polite"></div>
+                    </div>
+
+                    <!-- Attachment summary (only when files present). -->
+                    <div id="attachment-summary" hidden>
+                        <span id="attachment-count"></span>
+                        <span id="attachment-list"></span>
+                        <button id="clear-attachments-button" class="btn btn-ghost btn-sm" type="button">Clear</button>
+                    </div>
+
+                    <!-- File chips (non-image uploaded files) -->
+                    <div id="file-chips" class="file-chips" hidden></div>
+
+                    <div class="composer-shell" id="composer-shell">
+                        <button id="attach-button" type="button" title="Attach image" aria-label="Attach image">+</button>
+                        <input id="image-input" type="file" accept="image/*" multiple>
+                        <!-- File upload (non-image) -->
+                        <button id="attach-file-btn" type="button" title="Attach file" aria-label="Attach file" style="background:none;border:none;cursor:pointer;padding:0 0.4rem;color:var(--text-secondary);font-size:0.8rem;">📎</button>
+                        <input id="file-input" type="file" multiple style="display:none;">
+                        <textarea id="message-input" rows="1" placeholder="Message OpenClaw.NET..." aria-label="Message OpenClaw.NET" disabled></textarea>
+                        <button id="send-button" type="button" disabled title="Send message" aria-label="Send message">
+                            <span class="icon-send">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </span>
+                            <span class="icon-stop">
+                                <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+                                    <rect x="5" y="5" width="14" height="14" rx="2"/>
+                                </svg>
+                            </span>
+                        </button>
+                    </div>
+
+                    <div class="composer-hint">
+                        <span>Enter to send · Shift+Enter for newline</span>
+                        <span id="composer-disabled-reason"></span>
+                    </div>
+                </div>
             </div>
         </section>
 
-        <div id="chat-wrapper">
-            <div id="chat-container">
-                <div id="chat-state-bar"></div>
-                <!-- Messages will render here -->
-                <div class="message-row typing-row" id="typing-row">
-                    <div class="agent-avatar"><img src="image.png" alt="Agent" /></div>
-                    <div class="typing-indicator">
-                        <div class="dot"></div>
-                        <div class="dot"></div>
-                        <div class="dot"></div>
+        <!-- Canvas pane: hidden until a canvas message arrives or user opens it. -->
+        <aside id="canvas-panel" class="canvas-pane" hidden aria-label="Canvas workspace">
+            <div class="canvas-header" id="canvas-header">
+                <div class="canvas-header__title">
+                    <strong>Canvas Workspace</strong>
+                    <span id="canvas-status">Ready</span>
+                </div>
+                <div class="canvas-actions" aria-label="Canvas actions">
+                    <button id="canvas-hide-button" class="btn btn-ghost btn-sm" type="button">Hide</button>
+                    <button id="canvas-reset-button" class="btn btn-ghost btn-sm" type="button">Reset</button>
+                    <button id="canvas-snapshot-button" class="btn btn-secondary btn-sm" type="button">Snapshot</button>
+                </div>
+            </div>
+
+            <details id="canvas-meta" class="canvas-meta" aria-label="Canvas metadata">
+                <summary>Details</summary>
+                <div class="canvas-meta__grid">
+                    <div class="canvas-meta-item"><span>Surface</span><strong id="canvas-meta-surface">none</strong></div>
+                    <div class="canvas-meta-item"><span>Frames</span><strong id="canvas-meta-count">0</strong></div>
+                    <div class="canvas-meta-item"><span>Protocol</span><strong id="canvas-meta-protocol">pending</strong></div>
+                    <div class="canvas-meta-item"><span>Updated</span><strong id="canvas-meta-updated">never</strong></div>
+                </div>
+            </details>
+
+            <div id="canvas-surface">
+                <div id="canvas-empty">
+                    <div><strong>Canvas ready</strong>Ask the agent to render UI.</div>
+                </div>
+                <iframe id="canvas-html-frame" title="Canvas HTML" sandbox="" hidden></iframe>
+                <div id="a2ui-surfaces">
+                    <div id="a2ui-tabs" aria-label="A2UI surfaces"></div>
+                    <div id="a2ui-surface-host"></div>
+                </div>
+                <div id="canvas-diagnostics" hidden></div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Settings drawer (right-side sheet). -->
+    <div id="settings-backdrop" class="backdrop" hidden></div>
+    <aside id="settings-drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="settings-drawer-title">
+        <div class="drawer__header">
+            <h2 id="settings-drawer-title">Settings</h2>
+            <button id="settings-close-button" class="btn-icon" type="button" aria-label="Close settings">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div class="drawer__body">
+
+            <!-- Connection -->
+            <section class="drawer-section" aria-label="Connection">
+                <h3>Connection</h3>
+
+                <!-- Auth mode toggle -->
+                <div class="form-field" style="flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap;">
+                    <span>Auth mode</span>
+                    <label class="toggle" style="margin:0;gap:0.35rem;">
+                        <input type="radio" name="client-auth-mode" id="auth-mode-token" value="token">
+                        <span>Token</span>
+                    </label>
+                    <label class="toggle" style="margin:0;gap:0.35rem;">
+                        <input type="radio" name="client-auth-mode" id="auth-mode-oidc" value="oidc">
+                        <span>OIDC</span>
+                    </label>
+                </div>
+
+                <!-- Token inputs -->
+                <div id="auth-token-section">
+                    <label class="form-field">
+                        <span>Token</span>
+                        <input type="password" id="token-input" placeholder="Auth token (optional)" autocomplete="off">
+                    </label>
+                    <label id="remember-token-wrap" class="toggle">
+                        <input type="checkbox" id="remember-token">
+                        <span>Remember token on this browser</span>
+                    </label>
+                </div>
+
+                <!-- OIDC inputs -->
+                <div id="auth-oidc-section" hidden>
+                    <label class="form-field">
+                        <span>Authority URL</span>
+                        <input type="url" id="oidc-authority-input" placeholder="https://auth.example.com/realms/myrealm" autocomplete="off">
+                    </label>
+                    <label class="form-field">
+                        <span>Client ID</span>
+                        <input type="text" id="oidc-client-id-input" placeholder="my-client" autocomplete="off">
+                    </label>
+                    <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.4rem;">
+                        <button id="oidc-config-save" class="btn btn-primary btn-sm" type="button">Sign in with OIDC</button>
+                        <button id="oidc-config-clear" class="btn btn-secondary btn-sm" type="button">Sign out</button>
                     </div>
+                    <span style="font-size:0.72rem;color:var(--text-muted);display:block;margin-top:0.4rem;line-height:1.4">The authority and client ID are stored in localStorage. PKCE sign-in does not require a client secret.</span>
+                </div>
+
+                <div class="drawer-section__row"><span>Server auth</span><strong id="auth-summary-mode">unknown</strong></div>
+                <div class="drawer-section__row"><span>Surface</span><strong id="auth-summary-surface">web</strong></div>
+                <div class="drawer-section__row"><span>Remember</span><strong id="auth-summary-remember">off</strong></div>
+                <button id="reconnect-button" class="btn btn-secondary btn-sm" type="button">Reconnect</button>
+            </section>
+
+            <!-- Provider -->
+            <section class="drawer-section" aria-label="Provider">
+                <h3>Provider</h3>
+                <div class="drawer-section__row"><span>Status</span><strong id="provider-status">Local / runtime default</strong></div>
+                <div class="drawer-section__row"><span>Configured</span><strong id="provider-config-summary">None</strong></div>
+                <button id="drawer-connect-provider" class="btn btn-primary btn-sm" type="button">Connect provider</button>
+                <span class="drawer-details" style="color: var(--text-muted);">Tip: you can also configure providers by chat with the runtime.</span>
+            </section>
+
+            <!-- Runtime -->
+            <section class="drawer-section" aria-label="Runtime">
+                <h3>Runtime</h3>
+                <div class="drawer-section__row"><span>Capabilities</span><strong id="auth-summary-capabilities">loading</strong></div>
+                <details class="drawer-details">
+                    <summary>Show raw runtime state</summary>
+                    <pre id="raw-runtime-state">{}</pre>
+                </details>
+            </section>
+
+            <!-- Live mode -->
+            <section class="drawer-section" aria-label="Live mode">
+                <h3>Live mode</h3>
+                <label class="form-field">
+                    <span>Live provider</span>
+                    <select id="live-provider-select" title="Live provider">
+                        <option value="gemini">Gemini Live</option>
+                    </select>
+                </label>
+                <label class="form-field">
+                    <span>Speech output</span>
+                    <select id="speech-provider-select" title="Speech output">
+                        <option value="live-native">Live native audio</option>
+                        <option value="gemini">Gemini TTS</option>
+                        <option value="elevenlabs">ElevenLabs TTS</option>
+                    </select>
+                </label>
+                <details class="drawer-details">
+                    <summary>Advanced</summary>
+                    <label class="form-field" style="margin-top: 0.5rem;">
+                        <span>Voice ID</span>
+                        <input id="voice-id-input" placeholder="Voice ID (optional)" title="Provider voice id override">
+                    </label>
+                </details>
+            </section>
+
+            <!-- Appearance -->
+            <section class="drawer-section" aria-label="Appearance">
+                <h3>Appearance</h3>
+                <div class="drawer-section__row">
+                    <span>Theme</span>
+                    <div class="theme-toggle-group" role="group" aria-label="Theme">
+                        <button type="button" data-theme-value="light" aria-pressed="true">Light</button>
+                        <button type="button" data-theme-value="dark" aria-pressed="false">Dark</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Advanced -->
+            <section class="drawer-section" aria-label="Advanced">
+                <h3>Advanced</h3>
+                <button id="advanced-clear-token" class="btn btn-secondary btn-sm" type="button">Clear local token</button>
+                <button id="advanced-reset-ui" class="btn btn-secondary btn-sm" type="button">Reset UI state</button>
+                <span class="drawer-details" style="color: var(--text-muted);">Reset clears local UI flags (first-run, provider setup). It does not touch the server session.</span>
+            </section>
+        </div>
+    </aside>
+
+    <!-- Provider Setup modal. -->
+    <div id="provider-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="provider-modal-title">Connect a provider</h3>
+                <button id="provider-modal-close" class="btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <label class="form-field">
+                    <span>Provider</span>
+                    <select id="provider-select" class="input">
+                        <option value="runtime">Local / runtime default</option>
+                        <option value="openai-compatible">OpenAI-compatible endpoint</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="gemini">Gemini</option>
+                    </select>
+                </label>
+                <label class="form-field" id="provider-key-field">
+                    <span>API key / token</span>
+                    <input type="password" id="provider-key-input" class="input" placeholder="Stored locally only" autocomplete="off">
+                </label>
+                <label class="form-field" id="provider-base-url-field" hidden>
+                    <span>Base URL</span>
+                    <input type="text" id="provider-base-url-input" class="input" placeholder="https://api.example.com/v1">
+                </label>
+                <label class="form-field">
+                    <span>Model (optional)</span>
+                    <input type="text" id="provider-model-input" class="input" placeholder="e.g. gpt-4o-mini">
+                </label>
+                <p style="color: var(--text-muted); font-size: 0.78rem;">
+                    Provider settings persist in this browser. The API key is kept only for this session (sessionStorage) — you'll re-enter it after a restart. Backend persistence is not wired yet.
+                </p>
+            </div>
+            <div class="modal-actions">
+                <button id="provider-skip-button" class="btn btn-ghost" type="button">Skip for now</button>
+                <button id="provider-save-button" class="btn btn-primary" type="button">Save and start chatting</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool approval modal. -->
+    <div id="approval-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="approval-title">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="approval-title">Tool approval required</h3>
+                <button id="approval-close-button" class="btn-icon" type="button" aria-label="Deny approval and close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-field"><span>Tool</span><strong id="approval-tool-name"></strong></div>
+                <div class="modal-field"><span>Approval ID</span><code id="approval-id"></code></div>
+                <div class="modal-field modal-field--risk"><span>Risk</span><strong id="approval-risk">Review arguments before approving.</strong></div>
+                <div class="modal-field"><span>Arguments</span><pre id="approval-args" class="modal-pre"></pre></div>
+            </div>
+            <div class="modal-actions">
+                <button id="approval-deny-button" class="btn btn-danger" type="button">Deny</button>
+                <button id="approval-approve-button" class="btn btn-primary" type="button">Approve</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Doctor diagnostics modal. -->
+    <div id="doctor-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="doctor-title">
+        <div class="modal-card modal-card--wide">
+            <div class="modal-header">
+                <h3 id="doctor-title">Doctor diagnostics</h3>
+                <button id="doctor-close-button" class="btn-icon" type="button" aria-label="Close diagnostics">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <pre id="doctor-output" class="modal-pre">Loading diagnostics...</pre>
+            </div>
+            <div class="modal-actions">
+                <button id="doctor-copy-button" class="btn btn-secondary" type="button">Copy</button>
+                <button id="doctor-add-chat-button" class="btn btn-secondary" type="button">Also add to chat</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         MCP Servers Panel
+         ============================================================ -->
+    <div id="mcp-overlay" class="panel-overlay" hidden>
+        <div class="panel-card">
+            <div class="panel-header">
+                <h2>MCP Servers</h2>
+                <button id="mcp-close-btn" class="btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="panel-body">
+                <div id="mcp-server-list" class="panel-list"></div>
+                <div id="mcp-form-section" class="panel-form" hidden>
+                    <div class="panel-form-header">
+                        <h3 id="mcp-form-title">Add Server</h3>
+                        <div id="mcp-form-error" class="panel-error" hidden></div>
+                    </div>
+                    <label class="form-field">
+                        <span>Server ID</span>
+                        <input type="text" id="mcp-f-id" class="input" placeholder="my-server">
+                    </label>
+                    <label class="form-field">
+                        <span>Display Name</span>
+                        <input type="text" id="mcp-f-name" class="input" placeholder="Optional name">
+                    </label>
+                    <label class="form-field">
+                        <span>Transport</span>
+                        <select id="mcp-f-transport" class="input">
+                            <option value="streamable-http">Streamable HTTP</option>
+                            <option value="sse">SSE</option>
+                        </select>
+                    </label>
+                    <label class="form-field">
+                        <span>URL</span>
+                        <input type="url" id="mcp-f-url" class="input" placeholder="https://...">
+                    </label>
+                    <label class="form-field">
+                        <span>Bearer Token (optional)</span>
+                        <input type="password" id="mcp-f-token" class="input" placeholder="Leave blank for none" autocomplete="off">
+                    </label>
+                    <div class="form-field">
+                        <span>Extra Headers <span style="font-size:0.72rem;color:var(--text-muted)">(optional, key / value pairs)</span></span>
+                        <div id="mcp-f-headers-wrap" style="display:flex;flex-direction:column;gap:0.25rem;">
+                            <div id="mcp-f-headers-rows"></div>
+                            <button type="button" id="mcp-f-add-header-btn" class="btn btn-ghost btn-sm" style="align-self:flex-start;margin-top:0.15rem">+ Add Header</button>
+                        </div>
+                    </div>
+                    <label class="form-field">
+                        <span>Tool Name Prefix (optional)</span>
+                        <input type="text" id="mcp-f-prefix" class="input" placeholder="my-server.">
+                    </label>
+                    <label class="form-field">
+                        <span>Startup Timeout (seconds)</span>
+                        <input type="number" id="mcp-f-startup-timeout" class="input" placeholder="30" min="1">
+                    </label>
+                    <label class="form-field">
+                        <span>Request Timeout (seconds)</span>
+                        <input type="number" id="mcp-f-request-timeout" class="input" placeholder="60" min="1">
+                    </label>
+                    <label class="toggle">
+                        <input type="checkbox" id="mcp-f-enabled" checked>
+                        <span>Enabled</span>
+                    </label>
+                    <div class="panel-form-actions">
+                        <button id="mcp-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+                        <button id="mcp-save-btn" class="btn btn-primary" type="button">Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <div id="mcp-panel-status" class="panel-status" hidden></div>
+                <button id="mcp-add-btn" class="btn btn-primary btn-sm" type="button">+ Add Server</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         Channel Config Panel
+         ============================================================ -->
+    <div id="channel-overlay" class="panel-overlay" hidden>
+        <div class="panel-card">
+            <div class="panel-header">
+                <h2>Channel configuration</h2>
+                <button id="channel-close-btn" class="btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="panel-body">
+                <div class="panel-tabs">
+                    <button class="panel-tab ch-tab active" data-channel="feishu" type="button">Feishu</button>
+                    <button class="panel-tab ch-tab" data-channel="dingtalk" type="button">DingTalk</button>
+                    <button class="panel-tab ch-tab" data-channel="wecom" type="button">WeCom</button>
+                </div>
+                <div id="ch-form-error" class="panel-error" hidden></div>
+                <!-- Feishu Form -->
+                <div id="ch-feishu-form" class="panel-tab-content">
+                    <label class="form-field"><span>App ID</span><input type="text" id="feishu-appid" class="input" placeholder="cli_..."></label>
+                    <label class="form-field"><span>App Secret</span><input type="password" id="feishu-appsecret" class="input" placeholder="(valid for the current session)" autocomplete="off"></label>
+                    <label class="form-field"><span>App Secret reference</span><input type="text" id="feishu-appsecret-ref" class="input" placeholder="env:FEISHU_SECRET"></label>
+                </div>
+                <!-- DingTalk Form -->
+                <div id="ch-dingtalk-form" class="panel-tab-content" hidden>
+                    <label class="form-field"><span>App ID</span><input type="text" id="dingtalk-appid" class="input" placeholder="dingxxxx"></label>
+                    <label class="form-field"><span>App Key</span><input type="text" id="dingtalk-appkey" class="input"></label>
+                    <label class="form-field"><span>App Secret</span><input type="password" id="dingtalk-appsecret" class="input" autocomplete="off"></label>
+                </div>
+                <!-- WeCom Form -->
+                <div id="ch-wecom-form" class="panel-tab-content" hidden>
+                    <label class="form-field"><span>Bot ID</span><input type="text" id="wecom-botid" class="input"></label>
+                    <label class="form-field"><span>Bot Secret</span><input type="password" id="wecom-botsecret" class="input" autocomplete="off"></label>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <div id="ch-panel-status" class="panel-status" hidden></div>
+                <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                    <button id="channel-load-btn" class="btn btn-secondary btn-sm" type="button">Load</button>
+                    <button id="channel-revert-btn" class="btn btn-secondary btn-sm" type="button">Restore defaults</button>
+                    <button id="channel-save-btn" class="btn btn-primary btn-sm" type="button">Save</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div id="input-wrapper">
-        <div id="composer-shell">
-            <div id="live-toolbar">
-                <span id="live-status-badge" class="live-status-badge">Live offline</span>
-                <select id="live-provider-select" title="Live provider">
-                    <option value="gemini">Gemini Live</option>
-                </select>
-                <select id="speech-provider-select" title="Speech output">
-                    <option value="live-native">Live native audio</option>
-                    <option value="gemini">Gemini TTS</option>
-                    <option value="elevenlabs">ElevenLabs TTS</option>
-                </select>
-                <input id="voice-id-input" placeholder="Voice ID (optional)" title="Provider voice id override">
-                <button id="live-connect-button" type="button" title="Connect live session">Start Live</button>
-                <button id="live-mic-button" type="button" title="Toggle microphone streaming" disabled>Mic</button>
-                <button id="live-interrupt-button" type="button" title="Interrupt live generation" disabled>Interrupt</button>
-            </div>
-            <div id="input-container">
-                <button id="attach-button" type="button" title="Attach image" aria-label="Attach image">+</button>
-                <input id="image-input" type="file" accept="image/*" multiple>
-                <textarea id="message-input" rows="1" placeholder="Message OpenClaw.NET..." disabled></textarea>
-                <button id="send-button" disabled title="Send Message">
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
+    <!-- ============================================================
+         Digital Employee Panel
+         ============================================================ -->
+    <div id="de-overlay" class="panel-overlay" hidden>
+        <div class="panel-card">
+            <div class="panel-header">
+                <h2>Digital employee management</h2>
+                <button id="de-close-btn" class="btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
                 </button>
+            </div>
+            <div class="panel-body">
+                <div class="panel-tabs">
+                    <button class="panel-tab active" id="de-tab-list" type="button">Skills</button>
+                    <button class="panel-tab" id="de-tab-skill-pkg" type="button">Upload skill ZIP</button>
+                    <button class="panel-tab" id="de-tab-pkg" type="button">Digital employee package</button>
+                </div>
+                <!-- Skills List Tab -->
+                <div id="de-panel-list" class="panel-tab-content">
+                    <div id="de-skill-list"><div class="panel-hint">Loading…</div></div>
+                    <div class="panel-tab-actions">
+                        <button id="de-refresh-btn" class="btn btn-secondary btn-sm" type="button">Refresh</button>
+                    </div>
+                </div>
+                <!-- Skill ZIP Upload Tab -->
+                <div id="de-panel-skill-pkg" class="panel-tab-content" hidden>
+                    <div id="de-skill-dropzone" class="upload-zone">
+                        <p>Drop a skill ZIP file here, or <button class="link-btn" id="de-skill-pkg-browse-btn" type="button">choose a file</button></p>
+                        <input type="file" id="de-skill-pkg-file-input" accept=".zip" style="display:none;">
+                        <div id="de-skill-pkg-filename" class="upload-zone__filename" hidden></div>
+                    </div>
+                    <div id="de-skill-pkg-result" class="panel-result" hidden></div>
+                    <div class="panel-tab-actions">
+                        <button id="de-skill-pkg-upload-btn" class="btn btn-primary btn-sm" type="button" disabled>Upload and install</button>
+                    </div>
+                </div>
+                <!-- Package Upload Tab -->
+                <div id="de-panel-pkg" class="panel-tab-content" hidden>
+                    <div id="de-pkg-dropzone" class="upload-zone">
+                        <p>Drop a digital employee package here, or <button class="link-btn" id="de-pkg-browse-btn" type="button">choose a file</button></p>
+                        <input type="file" id="de-pkg-file-input" style="display:none;">
+                        <div id="de-pkg-filename" class="upload-zone__filename" hidden></div>
+                    </div>
+                    <div id="de-pkg-result" class="panel-result" hidden></div>
+                    <div class="panel-tab-actions">
+                        <button id="de-pkg-upload-btn" class="btn btn-primary btn-sm" type="button" disabled>Upload and install</button>
+                    </div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <div id="de-panel-status" class="panel-status" hidden></div>
             </div>
         </div>
     </div>
 
-    <!-- Scripts for Markdown parsing and Syntax Highlighting -->
+    <!-- ============================================================
+         Workspace Files Panel
+         ============================================================ -->
+    <div id="wf-overlay" class="panel-overlay" hidden>
+        <div class="panel-card">
+            <div class="panel-header">
+                <h2>Workspace files</h2>
+                <button id="wf-close-btn" class="btn-icon" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div class="panel-body">
+                <div class="panel-tabs">
+                    <button class="panel-tab active" id="wf-tab-browse" type="button">Browse</button>
+                    <button class="panel-tab" id="wf-tab-upload" type="button">Upload</button>
+                    <button class="panel-tab" id="wf-tab-download" type="button">Download</button>
+                </div>
+                <!-- Browse Tab -->
+                <div id="wf-panel-browse" class="panel-tab-content">
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.5rem">Browse the workspace directory tree. Leave the path empty for the root. A depth of 0 is unlimited (use with care).</div>
+                    <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
+                        <input type="text" id="wf-browse-path" class="input" placeholder="Directory path (empty = root)" style="flex:1;">
+                        <input type="number" id="wf-browse-depth" class="input" min="0" max="20" value="6" title="Maximum depth (0 = unlimited)" style="width:4rem;">
+                        <button id="wf-browse-btn" class="btn btn-secondary btn-sm" type="button">Browse</button>
+                    </div>
+                    <div id="wf-browse-result" hidden style="overflow:auto;max-height:360px;background:var(--surface-2,#f5f5f5);border:1px solid var(--border);border-radius:6px;padding:0.6rem;font-size:0.75rem;font-family:var(--font-mono,monospace);line-height:1.6"></div>
+                </div>
+                <!-- Download Tab -->
+                <div id="wf-panel-download" class="panel-tab-content" hidden>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.5rem">Download a file or an entire directory (directories are packaged as .zip files). Paths are relative to the workspace root; leave empty to download the root.</div>
+                    <label class="form-field">
+                        <span>Path <span style="font-size:0.72rem;color:var(--text-muted)">(file or directory, relative to the workspace root)</span></span>
+                        <input type="text" id="wf-download-path" class="input" placeholder="For example: outputs/result.json or outputs/" autocomplete="off">
+                    </label>
+                    <div style="margin-top:0.5rem;">
+                        <button id="wf-download-btn" class="btn btn-primary btn-sm" type="button">Download</button>
+                    </div>
+                    <div id="wf-download-result" class="panel-result" hidden></div>
+                </div>
+
+                <!-- Upload Tab -->
+                <div id="wf-panel-upload" class="panel-tab-content" hidden>
+                    <div id="wf-upload-dropzone" class="upload-zone">
+                        <p>Drop files here, or <button class="link-btn" id="wf-upload-browse-btn" type="button">choose files</button></p>
+                        <input type="file" id="wf-upload-file-input" multiple style="display:none;">
+                        <div id="wf-upload-filename" class="upload-zone__filename" hidden></div>
+                    </div>
+                    <label class="form-field" style="margin-top:0.75rem;">
+                        <span>Destination path (optional)</span>
+                        <input type="text" id="wf-upload-path" class="input" placeholder="folder/subfolder">
+                    </label>
+                    <div class="panel-tab-actions">
+                        <button id="wf-upload-btn" class="btn btn-primary btn-sm" type="button" disabled>Upload</button>
+                    </div>
+                    <div id="wf-upload-result" class="panel-result" hidden></div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <div id="wf-panel-status" class="panel-status" hidden></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================
+         Cron / Automation Panel
+         ============================================================ -->
+    <div id="cron-overlay" class="panel-overlay" hidden>
+        <div class="panel-card">
+            <div class="panel-header">
+                <h2>Scheduled tasks</h2>
+                <div style="display:flex;gap:0.4rem;">
+                    <button id="cron-refresh-btn" class="btn-icon" type="button" title="Refresh">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+                    </button>
+                    <button id="cron-close-btn" class="btn-icon" type="button" aria-label="Close">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                    </button>
+                </div>
+            </div>
+            <div class="panel-body">
+                <!-- Job List -->
+                <div id="cron-job-list" class="panel-list"></div>
+                <!-- Add/Edit Form -->
+                <div id="cron-form-section" class="panel-form" hidden>
+                    <h3 id="cron-form-title">New scheduled task</h3>
+                    <div id="cron-form-error" class="panel-error" hidden></div>
+                    <label class="form-field"><span>Task name</span><input type="text" id="cron-f-name" class="input" placeholder="Daily report"></label>
+                    <label class="form-field"><span>Prompt</span><textarea id="cron-f-prompt" class="input" rows="3" placeholder="Generate today's work report..."></textarea></label>
+                    <!-- Schedule tabs -->
+                    <div class="form-field">
+                        <span>Schedule</span>
+                        <div class="panel-tabs" style="margin-top:0.4rem;">
+                            <button class="panel-tab cron-freq-tab active" data-preset="daily" type="button">Daily</button>
+                            <button class="panel-tab cron-freq-tab" data-preset="interval" type="button">Interval</button>
+                            <button class="panel-tab cron-freq-tab" data-preset="custom" type="button">Custom</button>
+                        </div>
+                        <div id="cron-preset-daily" style="margin-top:0.5rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
+                            <label class="form-field" style="flex:1;min-width:120px;"><span>Time</span><input type="time" id="cron-daily-time" class="input" value="09:00"></label>
+                            <label class="toggle" style="align-self:flex-end;padding-bottom:0.1rem;"><input type="checkbox" id="cron-daily-weekday"><span>Weekdays only</span></label>
+                        </div>
+                        <div id="cron-preset-interval" style="margin-top:0.5rem;display:none;gap:0.75rem;flex-wrap:wrap;">
+                            <label class="form-field" style="flex:1;"><span>Interval</span><input type="number" id="cron-interval-val" class="input" value="1" min="1"></label>
+                            <label class="form-field" style="flex:1;"><span>Unit</span><select id="cron-interval-unit" class="input"><option value="hour">Hours</option><option value="min">Minutes</option></select></label>
+                        </div>
+                        <div id="cron-preset-custom" style="margin-top:0.5rem;display:none;">
+                            <label class="form-field"><span>Cron expression</span><input type="text" id="cron-f-schedule-raw" class="input" placeholder="0 9 * * *"></label>
+                        </div>
+                    </div>
+                    <label class="form-field"><span>Time zone</span><input type="text" id="cron-f-timezone" class="input" placeholder="UTC"></label>
+                    <label class="form-field"><span>Model ID (optional)</span><input type="text" id="cron-f-model" class="input" placeholder="Leave empty to use the default"></label>
+                    <label class="form-field"><span>Channel ID (optional)</span><input type="text" id="cron-f-channel" class="input" placeholder="feishu / dingtalk / ..."></label>
+                    <label class="form-field"><span>Recipient ID (optional)</span><input type="text" id="cron-f-recipient" class="input"></label>
+                    <label class="toggle"><input type="checkbox" id="cron-f-enabled" checked><span>Enabled</span></label>
+                    <div class="panel-form-actions">
+                        <button id="cron-form-cancel-btn" class="btn btn-secondary" type="button">Cancel</button>
+                        <button id="cron-form-save-btn" class="btn btn-primary" type="button">Save</button>
+                    </div>
+                </div>
+                <!-- History Section -->
+                <div id="cron-history-section" class="panel-form" hidden>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <h3 id="cron-history-title">Execution history</h3>
+                        <div style="display:flex;gap:0.4rem;">
+                            <button id="cron-session-view-btn" class="btn btn-secondary btn-sm" type="button" hidden>View full session</button>
+                            <button id="cron-history-close-btn" class="btn-icon btn-sm" type="button" aria-label="Close">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="cron-history-list" class="panel-list"></div>
+                </div>
+                <!-- Session View Section -->
+                <div id="cron-session-section" class="panel-form" hidden>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                        <h3 id="cron-session-title">Full session</h3>
+                        <button id="cron-session-close-btn" class="btn-icon btn-sm" type="button" aria-label="Close">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                    <div id="cron-session-list" class="panel-list" style="max-height:360px;overflow-y:auto;"></div>
+                </div>
+            </div>
+            <div class="panel-footer">
+                <div id="cron-panel-status" class="panel-status" hidden></div>
+                <button id="cron-add-btn" class="btn btn-primary btn-sm" type="button">+ New task</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
 
-    <script>
-        // Set up marked to use highlight.js
-        marked.setOptions({
-            highlight: function (code, lang) {
-                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-                return hljs.highlight(code, { language }).value;
-            },
-            langPrefix: 'hljs language-'
-        });
-
-        const chatWrapper = document.getElementById('chat-wrapper');
-        const chatContainer = document.getElementById('chat-container');
-        const messageInput = document.getElementById('message-input');
-        const sendButton = document.getElementById('send-button');
-        const attachButton = document.getElementById('attach-button');
-        const imageInput = document.getElementById('image-input');
-        const tokenInput = document.getElementById('token-input');
-        const rememberToken = document.getElementById('remember-token');
-        const doctorButton = document.getElementById('doctor-button');
-        const modeSelect = document.getElementById('mode-select');
-        const liveProviderSelect = document.getElementById('live-provider-select');
-        const speechProviderSelect = document.getElementById('speech-provider-select');
-        const voiceIdInput = document.getElementById('voice-id-input');
-        const liveConnectButton = document.getElementById('live-connect-button');
-        const liveMicButton = document.getElementById('live-mic-button');
-        const liveInterruptButton = document.getElementById('live-interrupt-button');
-        const liveStatusBadge = document.getElementById('live-status-badge');
-        const chatStateBar = document.getElementById('chat-state-bar');
-        const typingRow = document.getElementById('typing-row');
-        const canvasPanel = document.getElementById('canvas-panel');
-        const canvasStatus = document.getElementById('canvas-status');
-        const canvasHtmlFrame = document.getElementById('canvas-html-frame');
-        const a2uiRoot = document.getElementById('a2ui-root');
-        const TOKEN_KEY_PERSIST = 'openclaw_token';
-        const TOKEN_KEY_SESSION = 'openclaw_token_session';
-
-        let ws = null;
-        let liveWs = null;
-        let activeResponseDiv = null;
-        let activeRawContent = "";
-        let reconnectAttempts = 0;
-        let reconnectTimer = null;
-        let streamRenderTimer = null;
-        let liveResponseHasAudio = false;
-        let liveAudioQueue = [];
-        let liveAudioPlaying = false;
-        let liveMediaStream = null;
-        let liveAudioContext = null;
-        let liveAudioSource = null;
-        let liveAudioProcessor = null;
-        let canvasSessionId = null;
-        let canvasEventSequence = 0;
-        let canvasFrames = [];
-        let canvasValues = {};
-        let canvasDiagnostics = [];
-
-        const WEBCHAT_CONFIG = {
-            streamRenderDebounceMs: Math.max(20, Number(window.OPENCLAW_WEBCHAT_CONFIG?.streamRenderDebounceMs ?? 120)),
-            initialReconnectDelayMs: Math.max(250, Number(window.OPENCLAW_WEBCHAT_CONFIG?.initialReconnectDelayMs ?? 1000)),
-            maxReconnectDelayMs: Math.max(1000, Number(window.OPENCLAW_WEBCHAT_CONFIG?.maxReconnectDelayMs ?? 30000)),
-            reconnectBackoffFactor: Math.max(1.1, Number(window.OPENCLAW_WEBCHAT_CONFIG?.reconnectBackoffFactor ?? 2)),
-            maxReconnectAttempts: Math.max(0, Number(window.OPENCLAW_WEBCHAT_CONFIG?.maxReconnectAttempts ?? 0)),
-            retryOnAuthCloseCodes: Boolean(window.OPENCLAW_WEBCHAT_CONFIG?.retryOnAuthCloseCodes ?? false)
-        };
-
-        function getStoredToken() {
-            return sessionStorage.getItem(TOKEN_KEY_SESSION) || localStorage.getItem(TOKEN_KEY_PERSIST) || '';
-        }
-
-        function getCurrentToken() {
-            return tokenInput.value.trim() || getStoredToken();
-        }
-
-        function persistToken(token) {
-            if (!token) return;
-            sessionStorage.setItem(TOKEN_KEY_SESSION, token);
-            if (rememberToken.checked) {
-                localStorage.setItem(TOKEN_KEY_PERSIST, token);
-            } else {
-                localStorage.removeItem(TOKEN_KEY_PERSIST);
-            }
-        }
-
-        function escapeHtml(value) {
-            return String(value ?? '')
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .replaceAll('"', '&quot;')
-                .replaceAll("'", '&#39;');
-        }
-
-        async function refreshChatState() {
-            try {
-                const token = getCurrentToken();
-                const headers = {};
-                if (token && token !== 'bypass') {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
-
-                const resp = await fetch('/auth/session', { method: 'GET', headers });
-                if (!resp.ok) {
-                    renderChatState({
-                        authMode: resp.status === 401 ? 'unauthorized' : 'unknown',
-                        publicBind: true,
-                        effectiveToolSurface: 'web',
-                        effectiveToolPresetId: 'web',
-                        capabilitySummary: ['Provide a valid bootstrap or operator token to use protected chat surfaces.']
-                    });
-                    return;
-                }
-
-                renderChatState(await resp.json());
-            } catch (_) {
-                renderChatState({
-                    authMode: 'unknown',
-                    effectiveToolSurface: 'web',
-                    effectiveToolPresetId: 'web',
-                    capabilitySummary: ['Unable to load chat status right now.']
-                });
-            }
-        }
-
-        function renderChatState(data) {
-            const pills = [];
-            const authMode = data?.authMode || 'unknown';
-            const presetId = data?.effectiveToolPresetId || 'web';
-            const surface = data?.effectiveToolSurface || 'web';
-            const remembered = rememberToken.checked || Boolean(localStorage.getItem(TOKEN_KEY_PERSIST));
-            const capabilities = Array.isArray(data?.capabilitySummary) ? data.capabilitySummary : [];
-
-            pills.push(`<span class="state-pill"><strong>Auth</strong>${escapeHtml(formatAuthMode(authMode, data))}</span>`);
-            pills.push(`<span class="state-pill"><strong>Preset</strong>${escapeHtml(`${surface}/${presetId}`)}</span>`);
-            pills.push(`<span class="state-pill"><strong>Remember</strong>${remembered ? 'on' : 'off'}</span>`);
-
-            for (const item of capabilities.slice(0, 2)) {
-                pills.push(`<span class="state-pill">${escapeHtml(item)}</span>`);
-            }
-
-            chatStateBar.innerHTML = pills.join('');
-        }
-
-        function formatAuthMode(authMode, data) {
-            switch ((authMode || '').toLowerCase()) {
-                case 'loopback-open':
-                    return 'loopback local';
-                case 'browser-session':
-                    return 'browser session';
-                case 'account_token':
-                    return 'operator token';
-                case 'bearer':
-                    return data?.isBootstrapAdmin ? 'bootstrap token' : 'bearer';
-                case 'unauthorized':
-                    return data?.publicBind ? 'token required' : 'not signed in';
-                default:
-                    return authMode || 'unknown';
-            }
-        }
-
-        function sanitizeRenderedHtml(html) {
-            return DOMPurify.sanitize(html, {
-                ADD_TAGS: ['audio', 'source'],
-                ADD_ATTR: ['controls', 'src', 'type', 'preload']
-            });
-        }
-
-        function preprocessMediaMarkers(raw) {
-            const lines = (raw || "").split('\n');
-            const out = [];
-            for (const line of lines) {
-                const trimmed = line.trim();
-                const mImgUrl = trimmed.match(/^\[IMAGE_URL:(.+)\]$/);
-                if (mImgUrl) {
-                    const url = mImgUrl[1].trim();
-                    out.push(`![](${url})`);
-                    continue;
-                }
-                const mFileUrl = trimmed.match(/^\[FILE_URL:(.+)\]$/);
-                if (mFileUrl) {
-                    const url = mFileUrl[1].trim();
-                    out.push(`[file](${url})`);
-                    continue;
-                }
-                const mAudioUrl = trimmed.match(/^\[AUDIO_URL:(.+)\]$/);
-                if (mAudioUrl) {
-                    const url = mAudioUrl[1].trim();
-                    out.push(`<audio controls preload="metadata" src="${url}"></audio>`);
-                    continue;
-                }
-                out.push(line);
-            }
-            return out.join('\n');
-        }
-
-        function appendAssistantMarkdown(md) {
-            const row = createRow('assistant');
-            const div = document.createElement('div');
-            div.className = 'message assistant';
-            div.innerHTML = sanitizeRenderedHtml(marked.parse(preprocessMediaMarkers(md)));
-            row.appendChild(div);
-            chatContainer.insertBefore(row, typingRow);
-            scrollToBottom();
-        }
-
-        function scrollToBottom(smooth = true) {
-            chatWrapper.scrollTo({
-                top: chatWrapper.scrollHeight,
-                behavior: smooth ? 'smooth' : 'auto'
-            });
-        }
-
-        function renderActiveResponse(finalRender = false) {
-            if (!activeResponseDiv || !activeRawContent) {
-                return;
-            }
-
-            activeResponseDiv.innerHTML = sanitizeRenderedHtml(marked.parse(preprocessMediaMarkers(activeRawContent)));
-
-            if (finalRender) {
-                activeResponseDiv.querySelectorAll('pre code').forEach((block) => {
-                    hljs.highlightElement(block);
-                });
-                scrollToBottom();
-                return;
-            }
-
-            scrollToBottom(false);
-        }
-
-        function scheduleActiveResponseRender(finalRender = false) {
-            if (finalRender) {
-                if (streamRenderTimer) {
-                    clearTimeout(streamRenderTimer);
-                    streamRenderTimer = null;
-                }
-                renderActiveResponse(true);
-                return;
-            }
-
-            if (streamRenderTimer) {
-                return;
-            }
-
-            streamRenderTimer = setTimeout(() => {
-                streamRenderTimer = null;
-                renderActiveResponse(false);
-            }, WEBCHAT_CONFIG.streamRenderDebounceMs);
-        }
-
-        function createRow(type) {
-            const row = document.createElement('div');
-            row.className = `message-row ${type}-row`;
-            
-            if (type === 'assistant') {
-                const avatar = document.createElement('div');
-                avatar.className = 'agent-avatar';
-                avatar.innerHTML = '<img src="image.png" alt="Agent" />';
-                row.appendChild(avatar);
-            } else if (type === 'user') {
-                const avatar = document.createElement('div');
-                avatar.className = 'user-avatar';
-                avatar.innerHTML = 'U';
-                row.appendChild(avatar);
-            }
-
-            return row;
-        }
-
-        function appendSystem(text, isError = false) {
-            const row = createRow('system');
-            const div = document.createElement('div');
-
-            if (isError) {
-                div.className = 'message system error';
-                const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-                icon.setAttribute('width', '16');
-                icon.setAttribute('height', '16');
-                icon.setAttribute('viewBox', '0 0 24 24');
-                icon.setAttribute('fill', 'none');
-                icon.setAttribute('stroke', 'currentColor');
-                icon.setAttribute('stroke-width', '2');
-
-                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                circle.setAttribute('cx', '12');
-                circle.setAttribute('cy', '12');
-                circle.setAttribute('r', '10');
-
-                const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                line1.setAttribute('x1', '12');
-                line1.setAttribute('y1', '8');
-                line1.setAttribute('x2', '12');
-                line1.setAttribute('y2', '12');
-
-                const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                line2.setAttribute('x1', '12');
-                line2.setAttribute('y1', '16');
-                line2.setAttribute('x2', '12.01');
-                line2.setAttribute('y2', '16');
-
-                icon.appendChild(circle);
-                icon.appendChild(line1);
-                icon.appendChild(line2);
-
-                const textNode = document.createTextNode(` ${text}`);
-                div.appendChild(icon);
-                div.appendChild(textNode);
-            } else {
-                div.className = 'message system';
-                div.textContent = text;
-            }
-
-            row.appendChild(div);
-
-            chatContainer.insertBefore(row, typingRow);
-            scrollToBottom();
-        }
-
-        function appendToolPill(toolName) {
-            const row = document.createElement('div');
-            row.className = 'message-row system-row';
-            const pill = document.createElement('div');
-            pill.className = 'tool-pill';
-            pill.textContent = `Agent invoked tool: ${toolName}`;
-
-            row.appendChild(pill);
-            chatContainer.insertBefore(row, typingRow);
-            scrollToBottom();
-        }
-
-        function isToolFailureEnvelope(env) {
-            const resultStatus = (env?.resultStatus || '').trim().toLowerCase();
-            if (resultStatus && resultStatus !== 'completed') {
-                return true;
-            }
-
-            const normalized = ((env?.failureMessage || env?.text || env?.content) || '').trim().toLowerCase();
-            if (!normalized) {
-                return false;
-            }
-
-            return normalized.startsWith('error:')
-                || normalized.startsWith('browser action failed:')
-                || normalized.includes('requires approval')
-                || normalized.includes('denied')
-                || normalized.includes('timed out')
-                || normalized.includes('failed');
-        }
-
-        function explainToolFailure(env) {
-            const code = (env?.failureCode || '').trim().toLowerCase();
-            const nextStep = (env?.nextStep || '').trim();
-            const toolName = (env?.toolName || 'tool').trim();
-            const raw = ((env?.failureMessage || env?.text || env?.content) || '').trim();
-
-            if (code === 'preset_blocked') {
-                return `${toolName} is blocked by the active preset on this surface.${nextStep ? ` ${nextStep}` : ''}`.trim();
-            }
-
-            if (code === 'approval_required') {
-                return `This tool requires operator approval before it can run.${nextStep ? ` ${nextStep}` : ''}`.trim();
-            }
-
-            if (code === 'operator_auth_required') {
-                return `This tool requires operator authentication on the current surface.${nextStep ? ` ${nextStep}` : ''}`.trim();
-            }
-
-            if (code === 'browser_backend_missing' || code === 'runtime_capability_unavailable') {
-                return `This tool is unavailable in the current runtime.${nextStep ? ` ${nextStep}` : ''}`.trim();
-            }
-
-            if (code === 'timeout') {
-                return `This tool timed out before it completed.${nextStep ? ` ${nextStep}` : ''}`.trim();
-            }
-
-            const presetMatch = raw.match(/Tool '([^']+)' is not allowed for preset '([^']+)'/i);
-            if (presetMatch) {
-                return `Tool '${presetMatch[1]}' is blocked by preset '${presetMatch[2]}' on this chat surface. Use a broader preset on an HTTP surface, or change the web surface binding if that access is intentional.`;
-            }
-
-            const normalized = raw.toLowerCase();
-            if (normalized.includes('requires approval')) {
-                return 'This tool requires operator approval before it can run.';
-            }
-
-            if (normalized.includes('operator auth') || normalized.includes('forbidden') || normalized.includes('unauthorized')) {
-                return 'This tool requires operator authentication on the current surface.';
-            }
-
-            if (normalized.includes('browser') && (normalized.includes('unavailable') || normalized.includes('backend'))) {
-                return 'Browser is unavailable in this runtime. Configure a browser backend or sandbox, or disable the browser tool.';
-            }
-
-            return raw || 'Tool execution failed.';
-        }
-
-        function isLiveMode() {
-            return modeSelect.value === 'live';
-        }
-
-        function isLiveConnected() {
-            return liveWs && liveWs.readyState === WebSocket.OPEN;
-        }
-
-        function updateComposerAvailability() {
-            const chatReady = ws && ws.readyState === WebSocket.OPEN;
-            const liveReady = isLiveConnected();
-            const canSend = isLiveMode() ? liveReady : chatReady;
-            messageInput.disabled = !canSend;
-            sendButton.disabled = !canSend;
-            liveMicButton.disabled = !liveReady;
-            liveInterruptButton.disabled = !liveReady;
-            liveConnectButton.textContent = liveReady ? 'Stop Live' : 'Start Live';
-            liveStatusBadge.textContent = liveReady ? `Live online (${liveProviderSelect.value})` : 'Live offline';
-            liveStatusBadge.classList.toggle('online', liveReady);
-        }
-
-        function buildLiveWsUrl() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const token = getCurrentToken();
-            const query = token ? `?token=${encodeURIComponent(token)}` : '';
-            return `${protocol}//${window.location.host}/ws/live${query}`;
-        }
-
-        function createAudioBlobFromBase64(base64Data, mimeType) {
-            const binary = atob(base64Data);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-                bytes[i] = binary.charCodeAt(i);
-            }
-
-            if ((mimeType || '').includes('audio/pcm')) {
-                const rateMatch = /rate=(\d+)/i.exec(mimeType || '');
-                const sampleRate = rateMatch ? Number(rateMatch[1]) : 24000;
-                return createWavBlob(bytes, sampleRate);
-            }
-
-            return new Blob([bytes], { type: mimeType || 'audio/mpeg' });
-        }
-
-        function createWavBlob(pcmBytes, sampleRate) {
-            const header = new ArrayBuffer(44);
-            const view = new DataView(header);
-            const byteRate = sampleRate * 2;
-            const blockAlign = 2;
-            writeAscii(view, 0, 'RIFF');
-            view.setUint32(4, 36 + pcmBytes.length, true);
-            writeAscii(view, 8, 'WAVE');
-            writeAscii(view, 12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, byteRate, true);
-            view.setUint16(32, blockAlign, true);
-            view.setUint16(34, 16, true);
-            writeAscii(view, 36, 'data');
-            view.setUint32(40, pcmBytes.length, true);
-            return new Blob([header, pcmBytes], { type: 'audio/wav' });
-        }
-
-        function writeAscii(view, offset, text) {
-            for (let i = 0; i < text.length; i++) {
-                view.setUint8(offset + i, text.charCodeAt(i));
-            }
-        }
-
-        function enqueueLiveAudio(base64Data, mimeType) {
-            const blob = createAudioBlobFromBase64(base64Data, mimeType);
-            const url = URL.createObjectURL(blob);
-            liveAudioQueue.push(url);
-            if (!liveAudioPlaying) {
-                playNextLiveAudio();
-            }
-        }
-
-        function playNextLiveAudio() {
-            if (liveAudioQueue.length === 0) {
-                liveAudioPlaying = false;
-                return;
-            }
-
-            liveAudioPlaying = true;
-            const nextUrl = liveAudioQueue.shift();
-            const audio = new Audio(nextUrl);
-            audio.onended = () => {
-                URL.revokeObjectURL(nextUrl);
-                playNextLiveAudio();
-            };
-            audio.onerror = () => {
-                URL.revokeObjectURL(nextUrl);
-                playNextLiveAudio();
-            };
-            audio.play().catch(() => {
-                URL.revokeObjectURL(nextUrl);
-                playNextLiveAudio();
-            });
-        }
-
-        async function speakText(text) {
-            const provider = speechProviderSelect.value;
-            if (provider === 'live-native' || !text.trim()) {
-                return;
-            }
-
-            const token = getCurrentToken();
-            const headers = { 'Content-Type': 'application/json' };
-            if (token && token !== 'bypass') {
-                headers['Authorization'] = `Bearer ${token}`;
-            }
-
-            const resp = await fetch('/api/integration/text-to-speech', {
-                method: 'POST',
-                headers,
-                body: JSON.stringify({
-                    text,
-                    provider,
-                    voiceId: voiceIdInput.value.trim() || null
-                })
-            });
-
-            if (!resp.ok) {
-                const payload = await resp.json().catch(() => null);
-                throw new Error(payload?.error || `Speech synthesis failed (${resp.status}).`);
-            }
-
-            const result = await resp.json();
-            enqueueLiveAudio((result.dataUrl || '').split(',')[1] || '', result.mediaType || 'audio/mpeg');
-        }
-
-        async function connectLive() {
-            if (isLiveConnected()) {
-                disconnectLive();
-                return;
-            }
-
-            persistToken(tokenInput.value.trim());
-            const responseModalities = speechProviderSelect.value === 'live-native' ? ['TEXT', 'AUDIO'] : ['TEXT'];
-            liveWs = new WebSocket(buildLiveWsUrl());
-
-            liveWs.onopen = () => {
-                liveWs.send(JSON.stringify({
-                    provider: liveProviderSelect.value,
-                    responseModalities,
-                    voiceName: voiceIdInput.value.trim() || null
-                }));
-                appendSystem(`Live session connecting via ${liveProviderSelect.value}...`);
-                updateComposerAvailability();
-                messageInput.focus();
-            };
-
-            liveWs.onmessage = async (event) => {
-                const env = JSON.parse(event.data);
-                switch (env.type) {
-                    case 'opened':
-                        appendSystem(`Live session opened: ${env.text || liveProviderSelect.value}`);
-                        break;
-                    case 'text':
-                        typingRow.style.display = 'flex';
-                        if (!activeResponseDiv) {
-                            const row = createRow('assistant');
-                            activeResponseDiv = document.createElement('div');
-                            activeResponseDiv.className = 'message assistant';
-                            row.appendChild(activeResponseDiv);
-                            chatContainer.insertBefore(row, typingRow);
-                        }
-                        activeRawContent += env.text || '';
-                        scheduleActiveResponseRender(false);
-                        break;
-                    case 'audio':
-                        liveResponseHasAudio = true;
-                        if (speechProviderSelect.value === 'live-native' && env.base64Data) {
-                            enqueueLiveAudio(env.base64Data, env.mimeType || 'audio/wav');
-                        }
-                        break;
-                    case 'input_transcription':
-                        appendSystem(`You said: ${env.text || ''}`);
-                        break;
-                    case 'output_transcription':
-                        appendSystem(`Live transcript: ${env.text || ''}`);
-                        break;
-                    case 'turn_complete': {
-                        typingRow.style.display = 'none';
-                        scheduleActiveResponseRender(true);
-                        const completedText = activeRawContent;
-                        activeResponseDiv = null;
-                        activeRawContent = '';
-                        if (!liveResponseHasAudio && speechProviderSelect.value !== 'live-native') {
-                            try {
-                                await speakText(completedText);
-                            } catch (error) {
-                                appendSystem(error.message || 'Speech synthesis failed.', true);
-                            }
-                        }
-                        liveResponseHasAudio = false;
-                        break;
-                    }
-                    case 'interrupted':
-                        appendSystem('Live generation interrupted.');
-                        break;
-                    case 'error':
-                        appendSystem(env.error || env.text || 'Live session error.', true);
-                        break;
-                }
-                scrollToBottom();
-            };
-
-            liveWs.onclose = () => {
-                stopLiveMicCapture(false);
-                liveWs = null;
-                updateComposerAvailability();
-            };
-
-            liveWs.onerror = () => appendSystem('Live websocket encountered an error.', true);
-        }
-
-        function disconnectLive() {
-            stopLiveMicCapture(false);
-            if (liveWs) {
-                try {
-                    liveWs.send(JSON.stringify({ type: 'close' }));
-                } catch (_) { }
-                liveWs.close();
-                liveWs = null;
-            }
-            updateComposerAvailability();
-        }
-
-        async function startLiveMicCapture() {
-            if (!isLiveConnected()) {
-                appendSystem('Connect a live session before enabling the microphone.', true);
-                return;
-            }
-
-            liveMediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            liveAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            liveAudioSource = liveAudioContext.createMediaStreamSource(liveMediaStream);
-            liveAudioProcessor = liveAudioContext.createScriptProcessor(4096, 1, 1);
-            liveAudioProcessor.onaudioprocess = (event) => {
-                if (!isLiveConnected()) return;
-                const samples = event.inputBuffer.getChannelData(0);
-                const pcm = new Int16Array(samples.length);
-                for (let i = 0; i < samples.length; i++) {
-                    const value = Math.max(-1, Math.min(1, samples[i]));
-                    pcm[i] = value < 0 ? value * 0x8000 : value * 0x7fff;
-                }
-                const bytes = new Uint8Array(pcm.buffer);
-                let binary = '';
-                for (let i = 0; i < bytes.length; i++) {
-                    binary += String.fromCharCode(bytes[i]);
-                }
-                liveWs.send(JSON.stringify({
-                    type: 'audio',
-                    base64Data: btoa(binary),
-                    mimeType: 'audio/pcm;rate=16000',
-                    turnComplete: false
-                }));
-            };
-            liveAudioSource.connect(liveAudioProcessor);
-            liveAudioProcessor.connect(liveAudioContext.destination);
-            liveMicButton.classList.add('active');
-            liveMicButton.textContent = 'Stop Mic';
-            appendSystem('Live microphone streaming started.');
-        }
-
-        function stopLiveMicCapture(sendAudioEnd = true) {
-            if (sendAudioEnd && isLiveConnected()) {
-                try {
-                    liveWs.send(JSON.stringify({ type: 'audio_end' }));
-                } catch (_) { }
-            }
-
-            if (liveAudioProcessor) {
-                liveAudioProcessor.disconnect();
-                liveAudioProcessor.onaudioprocess = null;
-                liveAudioProcessor = null;
-            }
-            if (liveAudioSource) {
-                liveAudioSource.disconnect();
-                liveAudioSource = null;
-            }
-            if (liveAudioContext) {
-                liveAudioContext.close().catch(() => { });
-                liveAudioContext = null;
-            }
-            if (liveMediaStream) {
-                liveMediaStream.getTracks().forEach(track => track.stop());
-                liveMediaStream = null;
-            }
-
-            liveMicButton.classList.remove('active');
-            liveMicButton.textContent = 'Mic';
-        }
-
-        function sendCanvasReady() {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({
-                type: 'canvas_ready',
-                capabilities: ['a2ui.v0_8', 'canvas.present', 'canvas.hide', 'canvas.local_html', 'snapshot.state']
-            }));
-        }
-
-        function isCanvasEnvelopeType(type) {
-            return ['canvas_present', 'canvas_hide', 'canvas_navigate', 'canvas_snapshot', 'a2ui_push', 'a2ui_reset', 'a2ui_eval'].includes(type);
-        }
-
-        function sendCanvasAck(env, success = true, error = null) {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({
-                type: 'canvas_ack',
-                requestId: env.requestId,
-                sessionId: canvasSessionId,
-                surfaceId: env.surfaceId || 'main',
-                success,
-                error
-            }));
-        }
-
-        function showCanvas() {
-            canvasPanel.hidden = false;
-            canvasStatus.textContent = 'Visible';
-        }
-
-        function hideCanvas() {
-            canvasPanel.hidden = true;
-            canvasStatus.textContent = 'Hidden';
-        }
-
-        function resetA2ui() {
-            canvasFrames = [];
-            canvasValues = {};
-            canvasDiagnostics = [];
-            a2uiRoot.innerHTML = '';
-            a2uiRoot.hidden = false;
-            canvasHtmlFrame.hidden = true;
-            canvasHtmlFrame.removeAttribute('srcdoc');
-            canvasStatus.textContent = 'Reset';
-        }
-
-        function handleCanvasEnvelope(env) {
-            canvasSessionId = env.sessionId || canvasSessionId;
-            try {
-                switch (env.type) {
-                    case 'canvas_present':
-                        showCanvas();
-                        sendCanvasAck(env);
-                        break;
-                    case 'canvas_hide':
-                        hideCanvas();
-                        sendCanvasAck(env);
-                        break;
-                    case 'canvas_navigate':
-                        handleCanvasNavigate(env);
-                        break;
-                    case 'a2ui_reset':
-                        resetA2ui();
-                        sendCanvasAck(env);
-                        break;
-                    case 'a2ui_push':
-                        handleA2uiPush(env);
-                        break;
-                    case 'canvas_snapshot':
-                        sendCanvasSnapshot(env);
-                        break;
-                    case 'a2ui_eval':
-                        handleA2uiEval(env);
-                        break;
-                }
-            } catch (error) {
-                const message = String(error?.message || error);
-                canvasDiagnostics.push(message);
-                sendCanvasAck(env, false, message);
-            }
-        }
-
-        function handleCanvasNavigate(env) {
-            showCanvas();
-            if (env.html) {
-                canvasHtmlFrame.hidden = false;
-                a2uiRoot.hidden = true;
-                canvasHtmlFrame.srcdoc = env.html;
-                canvasStatus.textContent = 'Local HTML';
-                sendCanvasAck(env);
-                return;
-            }
-            if (!env.url || env.url === 'about:blank') {
-                resetA2ui();
-                showCanvas();
-                sendCanvasAck(env);
-                return;
-            }
-            if (String(env.url).startsWith('openclaw-canvas://')) {
-                sendCanvasAck(env, false, 'openclaw-canvas:// artifact loading is not implemented in webchat v1.');
-                return;
-            }
-            sendCanvasAck(env, false, 'Canvas v1 rejects remote webpage navigation; use the browser tool.');
-        }
-
-        function handleA2uiPush(env) {
-            showCanvas();
-            canvasHtmlFrame.hidden = true;
-            a2uiRoot.hidden = false;
-            const lines = String(env.frames || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-            for (const line of lines) {
-                const frame = JSON.parse(line);
-                canvasFrames.push(frame);
-                renderA2uiFrame(frame, env.surfaceId || 'main');
-            }
-            canvasStatus.textContent = `${lines.length} frame${lines.length === 1 ? '' : 's'}`;
-            sendCanvasAck(env);
-        }
-
-        function renderA2uiFrame(frame, surfaceId) {
-            const wrap = document.createElement('div');
-            wrap.className = frame.type === 'card' ? 'a2ui-card' : 'a2ui-frame';
-            wrap.dataset.frameId = frame.id || '';
-            wrap.dataset.type = frame.type || '';
-            const title = frame.title || frame.label;
-            if (title && frame.type !== 'button') {
-                const titleEl = document.createElement('div');
-                titleEl.className = 'a2ui-title';
-                titleEl.textContent = title;
-                wrap.appendChild(titleEl);
-            }
-            switch (frame.type) {
-                case 'text':
-                case 'markdown':
-                    appendMarkdownOrText(wrap, frame.text || '', frame.type === 'markdown');
-                    break;
-                case 'card':
-                    appendMarkdownOrText(wrap, frame.body || frame.text || '', true);
-                    break;
-                case 'button':
-                    renderA2uiButton(wrap, frame, surfaceId);
-                    break;
-                case 'input':
-                    renderA2uiInput(wrap, frame, surfaceId);
-                    break;
-                case 'select':
-                    renderA2uiSelect(wrap, frame, surfaceId);
-                    break;
-                case 'checklist':
-                    renderA2uiChecklist(wrap, frame, surfaceId);
-                    break;
-                case 'table':
-                    renderA2uiTable(wrap, frame);
-                    break;
-                case 'image':
-                    renderA2uiImage(wrap, frame);
-                    break;
-                case 'progress':
-                    renderA2uiProgress(wrap, frame);
-                    break;
-                case 'chart':
-                    renderA2uiChart(wrap, frame);
-                    break;
-                default:
-                    wrap.textContent = `Unsupported A2UI frame: ${frame.type}`;
-                    canvasDiagnostics.push(`Unsupported A2UI frame: ${frame.type}`);
-                    break;
-            }
-            a2uiRoot.appendChild(wrap);
-        }
-
-        function appendMarkdownOrText(parent, value, markdown) {
-            const div = document.createElement('div');
-            if (markdown) {
-                div.innerHTML = sanitizeRenderedHtml(marked.parse(String(value || '')));
-            } else {
-                div.textContent = String(value || '');
-            }
-            parent.appendChild(div);
-        }
-
-        function renderA2uiButton(parent, frame, surfaceId) {
-            const button = document.createElement('button');
-            button.className = 'a2ui-button';
-            button.type = 'button';
-            button.textContent = frame.label || frame.text || 'Button';
-            button.addEventListener('click', () => sendA2uiEvent(surfaceId, frame.id, 'click', true));
-            parent.appendChild(button);
-        }
-
-        function renderA2uiInput(parent, frame, surfaceId) {
-            const input = document.createElement('input');
-            input.className = 'a2ui-control';
-            input.placeholder = frame.placeholder || frame.label || '';
-            input.value = frame.value || '';
-            canvasValues[frame.id] = input.value;
-            input.addEventListener('change', () => {
-                canvasValues[frame.id] = input.value;
-                sendA2uiEvent(surfaceId, frame.id, 'change', input.value);
-            });
-            parent.appendChild(input);
-        }
-
-        function normalizeOptions(frame) {
-            return Array.isArray(frame.options) ? frame.options.map(option => {
-                if (typeof option === 'string') return { label: option, value: option };
-                return {
-                    label: option.label ?? option.text ?? option.value ?? 'option',
-                    value: option.value ?? option.label ?? option.text ?? 'option',
-                    selected: Boolean(option.selected)
-                };
-            }) : [];
-        }
-
-        function renderA2uiSelect(parent, frame, surfaceId) {
-            const select = document.createElement('select');
-            select.className = 'a2ui-control';
-            for (const option of normalizeOptions(frame)) {
-                const el = document.createElement('option');
-                el.value = option.value;
-                el.textContent = option.label;
-                el.selected = option.selected;
-                select.appendChild(el);
-            }
-            canvasValues[frame.id] = select.value;
-            select.addEventListener('change', () => {
-                canvasValues[frame.id] = select.value;
-                sendA2uiEvent(surfaceId, frame.id, 'change', select.value);
-            });
-            parent.appendChild(select);
-        }
-
-        function renderA2uiChecklist(parent, frame, surfaceId) {
-            const group = document.createElement('div');
-            for (const option of normalizeOptions(frame)) {
-                const label = document.createElement('label');
-                label.className = 'a2ui-muted';
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.checked = Boolean(option.selected);
-                checkbox.addEventListener('change', () => {
-                    canvasValues[`${frame.id}:${option.value}`] = checkbox.checked;
-                    sendA2uiEvent(surfaceId, frame.id, 'change', { value: option.value, selected: checkbox.checked });
-                });
-                label.appendChild(checkbox);
-                label.append(` ${option.label}`);
-                group.appendChild(label);
-                group.appendChild(document.createElement('br'));
-            }
-            parent.appendChild(group);
-        }
-
-        function renderA2uiTable(parent, frame) {
-            const table = document.createElement('table');
-            table.className = 'a2ui-table';
-            if (Array.isArray(frame.columns)) {
-                const thead = document.createElement('thead');
-                const tr = document.createElement('tr');
-                for (const column of frame.columns) {
-                    const th = document.createElement('th');
-                    th.textContent = String(column);
-                    tr.appendChild(th);
-                }
-                thead.appendChild(tr);
-                table.appendChild(thead);
-            }
-            const tbody = document.createElement('tbody');
-            for (const row of Array.isArray(frame.rows) ? frame.rows : []) {
-                const tr = document.createElement('tr');
-                const cells = Array.isArray(row) ? row : Object.values(row || {});
-                for (const cell of cells) {
-                    const td = document.createElement('td');
-                    td.textContent = String(cell ?? '');
-                    tr.appendChild(td);
-                }
-                tbody.appendChild(tr);
-            }
-            table.appendChild(tbody);
-            parent.appendChild(table);
-        }
-
-        function renderA2uiImage(parent, frame) {
-            const note = document.createElement('div');
-            note.className = 'a2ui-muted';
-            note.textContent = frame.alt || frame.label || 'Image URL omitted by Canvas security policy.';
-            parent.appendChild(note);
-        }
-
-        function renderA2uiProgress(parent, frame) {
-            const progress = document.createElement('progress');
-            progress.className = 'a2ui-progress';
-            progress.max = Number(frame.max ?? 100);
-            const raw = Number(frame.value ?? 0);
-            progress.value = raw <= 1 && progress.max === 100 ? raw * 100 : raw;
-            parent.appendChild(progress);
-        }
-
-        function renderA2uiChart(parent, frame) {
-            const data = Array.isArray(frame.data) ? frame.data : [];
-            if (!data.length) {
-                appendMarkdownOrText(parent, JSON.stringify(frame.data ?? {}, null, 2), false);
-                return;
-            }
-            const max = Math.max(...data.map(item => Number(item.value ?? item.y ?? 0)), 1);
-            for (const item of data) {
-                const label = document.createElement('div');
-                label.className = 'a2ui-muted';
-                label.textContent = String(item.label ?? item.x ?? '');
-                const bar = document.createElement('div');
-                bar.className = 'a2ui-chart-bar';
-                bar.style.width = `${Math.max(2, (Number(item.value ?? item.y ?? 0) / max) * 100)}%`;
-                parent.appendChild(label);
-                parent.appendChild(bar);
-            }
-        }
-
-        function sendA2uiEvent(surfaceId, componentId, eventName, value) {
-            if (!ws || ws.readyState !== WebSocket.OPEN) return;
-            ws.send(JSON.stringify({
-                type: 'a2ui_event',
-                sessionId: canvasSessionId,
-                surfaceId: surfaceId || 'main',
-                componentId,
-                event: eventName,
-                valueJson: JSON.stringify(value ?? null),
-                sequence: ++canvasEventSequence
-            }));
-        }
-
-        function sendCanvasSnapshot(env) {
-            const snapshot = {
-                type: 'canvas_snapshot',
-                surfaceId: env.surfaceId || 'main',
-                visible: !canvasPanel.hidden,
-                frameCount: canvasFrames.length,
-                frames: canvasFrames.map(frame => ({
-                    id: frame.id,
-                    type: frame.type,
-                    title: frame.title,
-                    label: frame.label,
-                    text: frame.text
-                })),
-                values: canvasValues,
-                diagnostics: canvasDiagnostics,
-                localHtmlText: canvasHtmlFrame.hidden ? null : canvasHtmlFrame.srcdoc
-            };
-            ws.send(JSON.stringify({
-                type: 'canvas_snapshot_result',
-                requestId: env.requestId,
-                sessionId: canvasSessionId,
-                surfaceId: env.surfaceId || 'main',
-                snapshotMode: env.snapshotMode || 'state',
-                success: true,
-                snapshotJson: JSON.stringify(snapshot)
-            }));
-        }
-
-        function handleA2uiEval(env) {
-            ws.send(JSON.stringify({
-                type: 'canvas_eval_result',
-                requestId: env.requestId,
-                sessionId: canvasSessionId,
-                surfaceId: env.surfaceId || 'main',
-                success: false,
-                error: 'Webchat Canvas does not support a2ui_eval because browser-side script execution is disabled.'
-            }));
-        }
-
-        function connect() {
-            appendSystem('Connecting to OpenClaw.NET Gateway...');
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const baseWsUrl = `${protocol}//${window.location.host}/ws`;
-            const token = getCurrentToken();
-            const wsUrl = token
-                ? `${baseWsUrl}?token=${encodeURIComponent(token)}`
-                : baseWsUrl;
-
-            persistToken(tokenInput.value.trim());
-
-            ws = new WebSocket(wsUrl);
-
-            ws.onopen = () => {
-                reconnectAttempts = 0;
-                if (reconnectTimer) {
-                    clearTimeout(reconnectTimer);
-                    reconnectTimer = null;
-                }
-                refreshChatState();
-                appendSystem('Connected successfully.');
-                sendCanvasReady();
-                updateComposerAvailability();
-                messageInput.focus();
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const env = JSON.parse(event.data);
-
-                    if (isCanvasEnvelopeType(env.type)) {
-                        handleCanvasEnvelope(env);
-                        return;
-                    }
-
-                    switch (env.type) {
-                        case 'typing_start':
-                            typingRow.style.display = 'flex';
-                            scrollToBottom();
-                            break;
-
-                        case 'typing_stop':
-                            typingRow.style.display = 'none';
-                            scheduleActiveResponseRender(true);
-                            activeResponseDiv = null;
-                            activeRawContent = "";
-                            scrollToBottom();
-                            break;
-
-                        case 'assistant_message':
-                        case 'assistant_chunk':
-                        case 'text_delta':
-                            if (!activeResponseDiv) {
-                                const row = createRow('assistant');
-                                activeResponseDiv = document.createElement('div');
-                                activeResponseDiv.className = 'message assistant';
-                                row.appendChild(activeResponseDiv);
-                                chatContainer.insertBefore(row, typingRow);
-                            }
-
-                            activeRawContent += (env.text ?? env.content ?? "");
-                            scheduleActiveResponseRender(false);
-                            break;
-
-                        case 'assistant_done':
-                            typingRow.style.display = 'none';
-                            scheduleActiveResponseRender(true);
-                            activeResponseDiv = null;
-                            activeRawContent = "";
-                            scrollToBottom();
-                            break;
-
-                        case 'error':
-                            appendSystem(env.text ?? env.content ?? 'An unknown error occurred.', true);
-                            break;
-
-                        case 'tool_start':
-                            appendToolPill(env.text ?? env.content ?? 'tool');
-                            break;
-
-                        case 'tool_result':
-                            if (isToolFailureEnvelope(env)) {
-                                appendSystem(explainToolFailure(env), true);
-                            }
-                            break;
-
-                        case 'tool_approval_required': {
-                            const toolName = env.toolName || 'unknown';
-                            const approvalId = env.approvalId || '';
-                            const argsPreview = env.argumentsPreview || '';
-                            const prompt = `Tool approval required:\n\nTool: ${toolName}\nApprovalId: ${approvalId}\n\nArgs:\n${argsPreview}\n\nApprove?`;
-                            const approved = window.confirm(prompt);
-                            appendSystem(`Tool approval ${approved ? 'approved' : 'denied'}: ${toolName}`);
-                            ws.send(JSON.stringify({
-                                type: "tool_approval_decision",
-                                approvalId: approvalId,
-                                approved: approved
-                            }));
-                            break;
-                        }
-                    }
-                } catch (e) {
-                    if (!activeResponseDiv) {
-                        const row = createRow('assistant');
-                        activeResponseDiv = document.createElement('div');
-                        activeResponseDiv.className = 'message assistant';
-                        row.appendChild(activeResponseDiv);
-                        chatContainer.insertBefore(row, typingRow);
-                    }
-                    activeRawContent += event.data;
-                    scheduleActiveResponseRender(false);
-                }
-            };
-
-            ws.onclose = (event) => {
-                updateComposerAvailability();
-                typingRow.style.display = 'none';
-
-                if (streamRenderTimer) {
-                    clearTimeout(streamRenderTimer);
-                    streamRenderTimer = null;
-                }
-
-                const isAuthClose = event.code === 1008 || (event.code >= 4000 && event.code < 5000);
-                if (isAuthClose && !WEBCHAT_CONFIG.retryOnAuthCloseCodes) {
-                    refreshChatState();
-                    appendSystem('Connection closed due to authentication/authorization. Update token and reconnect.', true);
-                    return;
-                }
-
-                reconnectAttempts += 1;
-                if (WEBCHAT_CONFIG.maxReconnectAttempts > 0 && reconnectAttempts > WEBCHAT_CONFIG.maxReconnectAttempts) {
-                    appendSystem('Connection dropped and reconnect limit reached. Refresh to retry.', true);
-                    return;
-                }
-
-                const delay = Math.min(
-                    WEBCHAT_CONFIG.maxReconnectDelayMs,
-                    Math.round(
-                        WEBCHAT_CONFIG.initialReconnectDelayMs *
-                        Math.pow(WEBCHAT_CONFIG.reconnectBackoffFactor, Math.max(0, reconnectAttempts - 1))
-                    )
-                );
-                appendSystem(`Connection dropped. Retrying in ${Math.max(1, Math.ceil(delay / 1000))}s...`, true);
-                reconnectTimer = setTimeout(connect, delay);
-            };
-
-            ws.onerror = () => {
-                console.error('WebSocket encountered an error.');
-            };
-        }
-
-        function readImageAsDataUrl(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = () => resolve(String(reader.result || ''));
-                reader.onerror = () => reject(reader.error || new Error('Unable to read image.'));
-                reader.readAsDataURL(file);
-            });
-        }
-
-        function clearImageSelection() {
-            imageInput.value = '';
-            attachButton.classList.remove('has-files');
-        }
-
-        async function sendMessage() {
-            const text = messageInput.value.trim();
-            const imageFiles = Array.from(imageInput.files || []);
-            if (!text && imageFiles.length === 0) return;
-            if (isLiveMode()) {
-                if (!isLiveConnected()) {
-                    appendSystem('Start a live session before sending live messages.', true);
-                    return;
-                }
-                if (imageFiles.length > 0) {
-                    appendSystem('Image attachments are available in Chat mode.', true);
-                    clearImageSelection();
-                    return;
-                }
-            } else if (!ws || ws.readyState !== WebSocket.OPEN) {
-                return;
-            }
-
-            let outboundText = text;
-            if (!isLiveMode()) {
-                outboundText = text || 'Describe this image.';
-                try {
-                    for (const file of imageFiles) {
-                        outboundText += `\n[IMAGE_URL:${await readImageAsDataUrl(file)}]`;
-                    }
-                } catch (error) {
-                    appendSystem(error.message || 'Unable to read image attachment.', true);
-                    clearImageSelection();
-                    return;
-                }
-            }
-
-            const row = createRow('user');
-            const div = document.createElement('div');
-            div.className = 'message user';
-            div.textContent = text;
-            row.appendChild(div);
-
-            chatContainer.insertBefore(row, typingRow);
-
-            if (isLiveMode()) {
-                liveWs.send(JSON.stringify({
-                    type: "text",
-                    text: text,
-                    turnComplete: true
-                }));
-                typingRow.style.display = 'flex';
-            } else {
-                ws.send(JSON.stringify({
-                    type: "user_message",
-                    text: outboundText
-                }));
-            }
-
-            messageInput.value = '';
-            clearImageSelection();
-            messageInput.style.height = 'auto';
-            sendButton.style.opacity = '0.7';
-            activeResponseDiv = null;
-            activeRawContent = "";
-            scrollToBottom();
-            
-            // Re-focus input after send (optional but good UX for desktop)
-            messageInput.focus();
-        }
-
-        messageInput.addEventListener('input', function () {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 200) + 'px';
-            if (this.value === '') this.style.height = 'auto';
-
-            if (this.value.trim().length > 0) {
-                sendButton.style.opacity = '1';
-                sendButton.style.transform = 'scale(1)';
-            } else {
-                sendButton.style.opacity = '0.7';
-                sendButton.style.transform = 'scale(0.95)';
-            }
-        });
-
-        messageInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void sendMessage();
-            }
-        });
-
-        sendButton.addEventListener('click', () => void sendMessage());
-        attachButton.addEventListener('click', () => imageInput.click());
-        imageInput.addEventListener('change', () => {
-            attachButton.classList.toggle('has-files', (imageInput.files || []).length > 0);
-        });
-        modeSelect.addEventListener('change', updateComposerAvailability);
-        liveConnectButton.addEventListener('click', connectLive);
-        liveInterruptButton.addEventListener('click', () => {
-            if (isLiveConnected()) {
-                liveWs.send(JSON.stringify({ type: 'interrupt' }));
-            }
-        });
-        liveMicButton.addEventListener('click', async () => {
-            if (liveMediaStream) {
-                stopLiveMicCapture(true);
-            } else {
-                try {
-                    await startLiveMicCapture();
-                } catch (error) {
-                    appendSystem(error.message || 'Unable to access the microphone.', true);
-                    stopLiveMicCapture(false);
-                }
-            }
-        });
-
-        const sessionToken = sessionStorage.getItem(TOKEN_KEY_SESSION);
-        const persistedToken = localStorage.getItem(TOKEN_KEY_PERSIST);
-        if (sessionToken) {
-            tokenInput.value = sessionToken;
-        } else if (persistedToken) {
-            tokenInput.value = persistedToken;
-            rememberToken.checked = true;
-        }
-
-        rememberToken.addEventListener('change', () => {
-            const token = tokenInput.value.trim();
-            if (rememberToken.checked && token) {
-                localStorage.setItem(TOKEN_KEY_PERSIST, token);
-            } else if (!rememberToken.checked) {
-                localStorage.removeItem(TOKEN_KEY_PERSIST);
-            }
-            refreshChatState();
-        });
-        tokenInput.addEventListener('change', refreshChatState);
-        tokenInput.addEventListener('blur', refreshChatState);
-
-        doctorButton.addEventListener('click', async () => {
-            try {
-                const token = getCurrentToken();
-                const headers = {};
-                if (token && token !== 'bypass') {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
-                const resp = await fetch('/doctor/text', { method: 'GET', headers: headers });
-                if (!resp.ok) {
-                    appendSystem(`Doctor request failed (${resp.status}).`, true);
-                    return;
-                }
-                const text = await resp.text();
-                appendAssistantMarkdown("```\n" + text + "\n```");
-            } catch (e) {
-                appendSystem('Doctor request failed.', true);
-            }
-        });
-
-        refreshChatState();
-        connect();
-        updateComposerAvailability();
-    </script>
+    <script src="webchat.js"></script>
 </body>
 
 </html>

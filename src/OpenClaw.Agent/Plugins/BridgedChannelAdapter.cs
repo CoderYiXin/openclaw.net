@@ -3,6 +3,7 @@ using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using Microsoft.Extensions.Logging;
+using System.Text;
 
 namespace OpenClaw.Agent.Plugins;
 
@@ -86,19 +87,31 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
     {
         var (markers, remainingText) = MediaMarkerProtocol.Extract(message.Text);
 
-        BridgeMediaAttachment[]? attachments = null;
-        if (markers.Count > 0)
+        List<BridgeMediaAttachment>? attachments = null;
+        List<string>? passthroughMarkerLines = null;
+        foreach (var marker in markers)
         {
-            attachments = new BridgeMediaAttachment[markers.Count];
-            for (var i = 0; i < markers.Count; i++)
+            if (IsBridgeAttachmentMarker(marker.Kind))
             {
-                var m = markers[i];
-                attachments[i] = new BridgeMediaAttachment
+                attachments ??= [];
+                attachments.Add(new BridgeMediaAttachment
                 {
-                    Type = MarkerKindToMediaType(m.Kind),
-                    Url = m.Value
-                };
+                    Type = MarkerKindToMediaType(marker.Kind),
+                    Url = marker.Value
+                });
             }
+            else
+            {
+                passthroughMarkerLines ??= [];
+                passthroughMarkerLines.Add(ToMarkerLine(marker));
+            }
+        }
+
+        var text = remainingText;
+        if (passthroughMarkerLines is { Count: > 0 })
+        {
+            var markerText = string.Join('\n', passthroughMarkerLines);
+            text = string.IsNullOrWhiteSpace(text) ? markerText : markerText + "\n" + text;
         }
 
         await _bridge.SendRequestAsync(
@@ -107,12 +120,12 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
             {
                 ChannelId = ChannelId,
                 RecipientId = message.RecipientId,
-                Text = remainingText,
+                Text = text,
                 AccountId = message.AccountId,
                 SessionId = message.SessionId,
                 ReplyToMessageId = message.ReplyToMessageId,
                 Subject = message.Subject,
-                Attachments = attachments,
+                Attachments = attachments?.ToArray(),
             },
             CoreJsonContext.Default.BridgeChannelSendRequest,
             ct);
@@ -230,6 +243,7 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
         string? mediaUrl = null;
         string? mediaMimeType = null;
         string? mediaFileName = null;
+        List<MediaAttachment>? attachments = null;
 
         if (parameters.TryGetProperty("mediaType", out var mt))
         {
@@ -254,6 +268,48 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
             }
         }
 
+        // Multiple attachments — each gets its own marker line prepended to text
+        if (parameters.TryGetProperty("attachments", out var attArr) && attArr.ValueKind == JsonValueKind.Array)
+        {
+            attachments = new List<MediaAttachment>();
+            var markerLines = new StringBuilder();
+
+            foreach (var att in attArr.EnumerateArray())
+            {
+                var attType = att.TryGetProperty("mediaType", out var at) ? at.GetString() : null;
+                var attUrl = att.TryGetProperty("url", out var au) ? au.GetString() : null;
+                var attMime = att.TryGetProperty("mimeType", out var am) ? am.GetString() : null;
+                var attFile = att.TryGetProperty("fileName", out var af) ? af.GetString() : null;
+
+                if (string.IsNullOrWhiteSpace(attUrl) || string.IsNullOrWhiteSpace(attType))
+                    continue;
+
+                attachments.Add(new MediaAttachment
+                {
+                    MediaType = attType,
+                    Url = attUrl,
+                    MimeType = attMime,
+                    FileName = attFile,
+                });
+
+                var marker = attType switch
+                {
+                    "image" => $"[IMAGE_URL:{attUrl}]",
+                    "video" => $"[VIDEO_URL:{attUrl}]",
+                    "audio" => $"[AUDIO_URL:{attUrl}]",
+                    "document" => $"[DOCUMENT_URL:{attUrl}]",
+                    _ => $"[FILE_URL:{attUrl}]",
+                };
+                markerLines.AppendLine(marker);
+            }
+
+            if (markerLines.Length > 0)
+            {
+                var allMarkers = markerLines.ToString().TrimEnd();
+                text = string.IsNullOrWhiteSpace(text) ? allMarkers : $"{allMarkers}\n{text}";
+            }
+        }
+
         var msg = new InboundMessage
         {
             ChannelId = ChannelId,
@@ -272,6 +328,7 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
             MediaUrl = mediaUrl,
             MediaMimeType = mediaMimeType,
             MediaFileName = mediaFileName,
+            Attachments = attachments is { Count: > 0 } ? attachments : null,
         };
 
         if (OnMessageReceived is not null)
@@ -336,11 +393,32 @@ public sealed class BridgedChannelAdapter : IBridgedChannelControl, IRestartable
 
     private static string MarkerKindToMediaType(MediaMarkerKind kind) => kind switch
     {
-        MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath or MediaMarkerKind.TelegramImageFileId => "image",
+        MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath => "image",
         MediaMarkerKind.VideoUrl => "video",
         MediaMarkerKind.AudioUrl => "audio",
         MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath => "document",
         MediaMarkerKind.StickerUrl => "sticker",
         _ => "document",
     };
+
+    private static bool IsBridgeAttachmentMarker(MediaMarkerKind kind)
+        => kind is MediaMarkerKind.ImageUrl
+            or MediaMarkerKind.ImagePath
+            or MediaMarkerKind.VideoUrl
+            or MediaMarkerKind.AudioUrl
+            or MediaMarkerKind.DocumentUrl
+            or MediaMarkerKind.FileUrl
+            or MediaMarkerKind.FilePath
+            or MediaMarkerKind.StickerUrl;
+
+    private static string ToMarkerLine(MediaMarker marker)
+        => marker.Kind switch
+        {
+            MediaMarkerKind.TelegramImageFileId => $"[IMAGE:telegram:file_id={marker.Value}]",
+            MediaMarkerKind.TelegramVideoFileId => $"[VIDEO:telegram:file_id={marker.Value}]",
+            MediaMarkerKind.TelegramAudioFileId => $"[AUDIO:telegram:file_id={marker.Value}]",
+            MediaMarkerKind.TelegramDocumentFileId => $"[DOCUMENT:telegram:file_id={marker.Value}]",
+            MediaMarkerKind.TelegramStickerFileId => $"[STICKER:telegram:file_id={marker.Value}]",
+            _ => marker.Value
+        };
 }

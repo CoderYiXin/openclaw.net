@@ -4,6 +4,7 @@ using System.Text;
 using OpenClaw.Core.Http;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Security;
+using OpenClaw.Core.Setup;
 
 namespace OpenClaw.Core.Validation;
 
@@ -47,7 +48,7 @@ public static class ProviderSmokeProbe
         }
 
         var apiKey = SecretResolver.Resolve(config.ApiKey);
-        if (!HasRequiredCredentials(provider, apiKey))
+        if (!HasRequiredCredentials(provider, apiKey, config.AuthMode))
         {
             return new ProviderSmokeProbeResult
             {
@@ -141,15 +142,19 @@ public static class ProviderSmokeProbe
             return registration.TreatAsConfigured;
 
         var apiKey = SecretResolver.Resolve(config.ApiKey);
-        return HasRequiredCredentials(provider, apiKey);
+        return HasRequiredCredentials(provider, apiKey, config.AuthMode);
     }
 
     private static HttpRequestMessage BuildRequest(string provider, LlmProviderConfig config, string? apiKey)
     {
         return provider switch
         {
-            "openai" or "openai-compatible" or "groq" or "together" or "lmstudio" or "azure-openai"
-                => BuildOpenAiStyleRequest(provider, config, apiKey),
+            "openai" or "openai-compatible" or "aperture" or "groq" or "together" or "lmstudio" or "deepseek" or "azure-openai"
+                => BuildOpenAiStyleRequest(
+                    provider,
+                    config,
+                    apiKey,
+                    suppressAuthorization: IsTailnetIdentityAuth(config.AuthMode) && SupportsTailnetIdentity(provider)),
             "ollama" => BuildOllamaRequest(config),
             "anthropic" or "claude" or "anthropic-vertex" or "amazon-bedrock"
                 => BuildAnthropicStyleRequest(provider, config, apiKey),
@@ -159,7 +164,11 @@ public static class ProviderSmokeProbe
         };
     }
 
-    private static HttpRequestMessage BuildOpenAiStyleRequest(string provider, LlmProviderConfig config, string? apiKey)
+    private static HttpRequestMessage BuildOpenAiStyleRequest(
+        string provider,
+        LlmProviderConfig config,
+        string? apiKey,
+        bool suppressAuthorization)
     {
         var endpoint = provider switch
         {
@@ -167,7 +176,9 @@ public static class ProviderSmokeProbe
             "groq" => AppendPath(config.Endpoint, "https://api.groq.com/openai/v1", "chat/completions"),
             "together" => AppendPath(config.Endpoint, "https://api.together.xyz/v1", "chat/completions"),
             "lmstudio" => AppendPath(config.Endpoint, "http://127.0.0.1:1234/v1", "chat/completions"),
+            "deepseek" => AppendPath(config.Endpoint, DeepSeekProviderDefaults.OpenAiBaseUrl, "chat/completions"),
             "azure-openai" => AppendPath(config.Endpoint, null, "chat/completions"),
+            "aperture" => AppendPath(config.Endpoint, null, "chat/completions"),
             _ => AppendPath(config.Endpoint, null, "chat/completions")
         };
 
@@ -175,7 +186,7 @@ public static class ProviderSmokeProbe
             throw new InvalidOperationException($"Provider '{provider}' requires OpenClaw:Llm:Endpoint to run a smoke probe.");
 
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
-        if (!string.IsNullOrWhiteSpace(apiKey))
+        if (!suppressAuthorization && !string.IsNullOrWhiteSpace(apiKey))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = BuildJsonContent(
             $$"""
@@ -264,15 +275,22 @@ public static class ProviderSmokeProbe
         return $"{uri}{separator}{Uri.EscapeDataString(key)}={Uri.EscapeDataString(value)}";
     }
 
-    private static bool HasRequiredCredentials(string provider, string? apiKey)
+    private static bool HasRequiredCredentials(string provider, string? apiKey, string? authMode)
         => provider switch
         {
-            "ollama" or "lmstudio" => true,
+            "ollama" or "lmstudio" or "embedded" => true,
+            "aperture" or "openai-compatible" when IsTailnetIdentityAuth(authMode) => true,
             _ => !string.IsNullOrWhiteSpace(apiKey)
         };
 
     private static string NormalizeProvider(string? provider)
         => string.IsNullOrWhiteSpace(provider) ? string.Empty : provider.Trim().ToLowerInvariant();
+
+    private static bool IsTailnetIdentityAuth(string? authMode)
+        => string.Equals(authMode?.Trim(), "tailnet-identity", StringComparison.OrdinalIgnoreCase);
+
+    private static bool SupportsTailnetIdentity(string provider)
+        => provider is "aperture" or "openai-compatible";
 
     private static TimeSpan GetProbeTimeout(int configuredTimeoutSeconds)
     {

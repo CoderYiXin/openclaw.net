@@ -40,9 +40,30 @@ internal static class GatewayWorkers
         LearningService? learningService = null,
         GatewayAutomationService? automationService = null,
         ContractGovernanceService? contractGovernance = null,
-        AudioTranscriptionService? audioTranscriptionService = null)
+        GovernanceLedgerService? governanceLedger = null,
+        AudioTranscriptionService? audioTranscriptionService = null,
+        Background.BackgroundExecutionLimiter? backgroundLimiter = null,
+        MediaCacheStore? mediaCache = null,
+        SessionAbortRegistry? abortRegistry = null)
     {
         new GatewaySessionCleanupWorker().Start(lifetime, logger, sessionManager);
+
+        // Start background session recovery if enabled
+        if (config.BackgroundExecution.Enabled && config.BackgroundExecution.AutoResumeOnStartup)
+        {
+            var backgroundStore = sessionManager.Store as IBackgroundSessionStore
+                ?? throw new InvalidOperationException(
+                    "Background execution requires an IBackgroundSessionStore implementation. " +
+                    "The configured IMemoryStore does not support background session queries.");
+            var recoveryWorker = new Background.BackgroundSessionRecoveryWorker(
+                backgroundStore, pipeline, config,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<Background.BackgroundSessionRecoveryWorker>.Instance);
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), lifetime.ApplicationStopping);
+                await recoveryWorker.RecoverOnceAsync(lifetime.ApplicationStopping);
+            });
+        }
 
         new GatewayInboundMessageWorker().Start(
             lifetime,
@@ -69,7 +90,11 @@ internal static class GatewayWorkers
             learningService,
             automationService,
             contractGovernance,
-            audioTranscriptionService);
+            governanceLedger,
+            audioTranscriptionService,
+            backgroundLimiter,
+            mediaCache,
+            abortRegistry);
 
         new GatewayOutboundDeliveryWorker().Start(
             lifetime,

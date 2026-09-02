@@ -1,205 +1,640 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>OpenClaw.NET Admin</title>
+    <!--
+        Apply the stored theme before any stylesheet/body parse so users
+        with a saved dark theme don't see a flash of light on load.
+        localStorage failures (private mode, storage disabled, cross-
+        origin sandboxing) are swallowed — the document already
+        defaults to data-theme="light".
+    -->
+    <script>
+        (function () {
+            try {
+                var stored = window.localStorage && localStorage.getItem('openclaw_theme');
+                if (stored === 'light' || stored === 'dark') {
+                    document.documentElement.setAttribute('data-theme', stored);
+                }
+            } catch (_) { /* ignore */ }
+        })();
+    </script>
     <style>
-        :root {
-            color-scheme: dark;
-            --bg: #0b1020;
-            --panel: rgba(15, 23, 42, 0.88);
-            --panel-2: rgba(30, 41, 59, 0.82);
-            --border: rgba(148, 163, 184, 0.18);
-            --text: #e5e7eb;
-            --muted: #94a3b8;
-            --accent: #8b5cf6;
-            --ok: #22c55e;
-            --warn: #f59e0b;
+        /* ============================================================
+           1. THEME TOKENS — light is default; dark via [data-theme]
+           Shared with webchat.html so the two pages match.
+           ============================================================ */
+        :root,
+        :root[data-theme="light"] {
+            color-scheme: light;
+
+            --page-bg: #F7F9FC;
+            --surface: #FFFFFF;
+            --surface-elevated: #FFFFFF;
+            --surface-secondary: #F8FAFC;
+            --surface-muted: #F1F5F9;
+            --border: #E2E8F0;
+            --border-soft: #EEF2F7;
+            --text: #0F172A;
+            --text-secondary: #475569;
+            --text-muted: #94A3B8;
+            --primary: #2563EB;
+            --primary-hover: #1D4ED8;
+            --primary-soft: #EFF6FF;
+            --primary-soft-strong: #DBEAFE;
+            --on-primary: #FFFFFF;
+            --success: #16A34A;
+            --success-soft: rgba(22, 163, 74, 0.10);
+            --warning: #D97706;
+            --warning-soft: rgba(217, 119, 6, 0.10);
+            --error: #DC2626;
+            --error-soft: rgba(220, 38, 38, 0.08);
+            --info: #0284C7;
+            --info-soft: rgba(2, 132, 199, 0.10);
+
+            --code-bg: #0F172A;
+            --code-text: #E2E8F0;
+
+            --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+            --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 16px;
+            --radius-pill: 9999px;
+
+            --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+            --ease: cubic-bezier(0.4, 0.0, 0.2, 1);
+
+            /* Legacy aliases for older inline class names. */
+            --bg: var(--page-bg);
+            --panel: var(--surface);
+            --panel-2: var(--surface-secondary);
+            --muted: var(--text-secondary);
+            --accent: var(--primary);
+            --ok: var(--success);
+            --warn: var(--warning);
         }
 
-        * { box-sizing: border-box; }
+        :root[data-theme="dark"] {
+            color-scheme: dark;
+
+            --page-bg: #0B1020;
+            --surface: #111827;
+            --surface-elevated: #172033;
+            --surface-secondary: #1E293B;
+            --surface-muted: #263244;
+            --border: rgba(148, 163, 184, 0.22);
+            --border-soft: rgba(148, 163, 184, 0.14);
+            --text: #F8FAFC;
+            --text-secondary: #CBD5E1;
+            --text-muted: #94A3B8;
+            --primary: #60A5FA;
+            --primary-hover: #3B82F6;
+            --primary-soft: rgba(96, 165, 250, 0.14);
+            --primary-soft-strong: rgba(96, 165, 250, 0.24);
+            --on-primary: #0B1020;
+            --success: #22C55E;
+            --success-soft: rgba(34, 197, 94, 0.14);
+            --warning: #F59E0B;
+            --warning-soft: rgba(245, 158, 11, 0.14);
+            --error: #F87171;
+            --error-soft: rgba(248, 113, 113, 0.14);
+            --info: #38BDF8;
+            --info-soft: rgba(56, 189, 248, 0.14);
+
+            --code-bg: #020617;
+            --code-text: #E2E8F0;
+
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+        }
+
+        /* ============================================================
+           2. BASE / RESET
+           ============================================================ */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
         body {
             margin: 0;
-            font-family: Inter, system-ui, sans-serif;
-            background: radial-gradient(circle at top, rgba(139, 92, 246, 0.12), transparent 40%), var(--bg);
+            font-family: var(--font-sans);
+            font-size: 14px;
+            color: var(--text);
+            background: var(--page-bg);
+            min-height: 100vh;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            transition: background-color 200ms var(--ease), color 200ms var(--ease);
+        }
+
+        a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        button,
+        input,
+        select,
+        textarea {
+            font: inherit;
+            color: inherit;
+        }
+
+        :focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+            border-radius: var(--radius-sm);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: var(--radius-pill);
+            border: 2px solid var(--page-bg);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* ============================================================
+           3. HEADER
+           ============================================================ */
+        header {
+            width: min(1200px, calc(100vw - 2rem));
+            margin: 1.25rem auto 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .brand {
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+        }
+
+        .brand strong {
+            font-size: 1.05rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .brand a {
             color: var(--text);
         }
 
-        header, section {
-            width: min(1200px, calc(100vw - 2rem));
-            margin: 0 auto;
+        .brand .muted {
+            font-size: 0.8125rem;
         }
 
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 1rem;
-            padding: 1.25rem 0;
-        }
-
-        .brand a, .toolbar a { color: var(--text); text-decoration: none; }
-        .brand strong { font-size: 1.2rem; }
         .toolbar {
             display: flex;
-            align-items: center;
-            gap: 0.75rem;
             flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
         }
 
-        input, button, select, textarea {
-            background: var(--panel-2);
-            border: 1px solid var(--border);
-            color: var(--text);
-            border-radius: 10px;
-            padding: 0.7rem 0.9rem;
-            font: inherit;
-        }
-
-        input[type="password"] { min-width: 260px; }
-        button, .toolbar a {
-            cursor: pointer;
-            padding: 0.7rem 1rem;
-            border-radius: 10px;
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.85), rgba(59, 130, 246, 0.85));
+        .toolbar label {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
         }
 
         .toolbar a {
-            display: inline-flex;
-            align-items: center;
+            color: var(--primary);
+            font-size: 0.875rem;
+            padding: 0.4rem 0.65rem;
+            border-radius: var(--radius-md);
         }
 
+        .toolbar a:hover {
+            background: var(--primary-soft);
+            text-decoration: none;
+        }
+
+        /* ============================================================
+           4. FORMS / BUTTONS — solid, no gradients
+           ============================================================ */
+        input[type="text"],
+        input[type="password"],
+        input[type="email"],
+        input[type="search"],
+        input[type="number"],
+        input[type="datetime-local"],
+        input[type="date"],
+        input[type="url"],
+        input:not([type]),
+        select,
+        textarea {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 0.5rem 0.7rem;
+            font-size: 0.875rem;
+            min-height: 36px;
+            transition: border-color 120ms var(--ease), box-shadow 120ms var(--ease);
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-soft);
+        }
+
+        input::placeholder,
+        textarea::placeholder {
+            color: var(--text-muted);
+        }
+
+        textarea {
+            font-family: var(--font-mono);
+            font-size: 0.82rem;
+            min-height: 88px;
+            line-height: 1.5;
+            resize: vertical;
+        }
+
+        button {
+            background: var(--primary);
+            color: var(--on-primary);
+            border: 1px solid var(--primary);
+            border-radius: var(--radius-md);
+            padding: 0.5rem 0.9rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            min-height: 36px;
+            cursor: pointer;
+            transition: background-color 140ms var(--ease), border-color 140ms var(--ease),
+                color 140ms var(--ease), transform 80ms var(--ease);
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        button.secondary,
+        .actions button.secondary {
+            background: var(--surface);
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        button.secondary:hover:not(:disabled),
+        .actions button.secondary:hover:not(:disabled) {
+            background: var(--surface-muted);
+        }
+
+        input[type="checkbox"],
+        input[type="radio"] {
+            accent-color: var(--primary);
+        }
+
+        /* Icon-only theme toggle button. */
+        .icon-btn {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            width: 36px;
+            min-width: 36px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-btn:hover:not(:disabled) {
+            background: var(--surface-muted);
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .icon-btn svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        /* ============================================================
+           5. SECTION NAV (sticky pills)
+           ============================================================ */
         .section-nav {
             width: min(1200px, calc(100vw - 2rem));
             margin: 0 auto 1rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 0.5rem;
             display: flex;
-            gap: 0.6rem;
+            gap: 0.25rem;
             flex-wrap: wrap;
+            box-shadow: var(--shadow-sm);
+            position: sticky;
+            top: 0.5rem;
+            z-index: 5;
         }
 
         .section-nav a {
-            color: var(--muted);
-            text-decoration: none;
-            border: 1px solid var(--border);
-            border-radius: 999px;
-            padding: 0.45rem 0.8rem;
-            background: rgba(15, 23, 42, 0.55);
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            padding: 0.4rem 0.7rem;
+            border-radius: var(--radius-md);
+            font-weight: 500;
+            transition: background-color 120ms var(--ease), color 120ms var(--ease);
         }
 
+        .section-nav a:hover {
+            background: var(--surface-muted);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        .section-nav a[aria-current="true"] {
+            background: var(--primary-soft);
+            color: var(--primary);
+        }
+
+        /* ============================================================
+           6. FLASH / TOAST
+           ============================================================ */
         .flash {
             width: min(1200px, calc(100vw - 2rem));
             margin: 0 auto 1rem;
-            padding: 0.85rem 1rem;
-            border-radius: 14px;
+            padding: 0.75rem 1rem;
+            border-radius: var(--radius-md);
             border: 1px solid var(--border);
-            background: rgba(15, 23, 42, 0.8);
+            background: var(--surface);
+            color: var(--text);
+            font-size: 0.875rem;
             display: none;
+            box-shadow: var(--shadow-sm);
         }
 
-        .flash.ok { display: block; border-color: rgba(34, 197, 94, 0.45); }
-        .flash.warn { display: block; border-color: rgba(245, 158, 11, 0.45); }
-        .flash.error { display: block; border-color: rgba(248, 113, 113, 0.45); }
+        .flash.ok {
+            display: block;
+            border-color: var(--success);
+            background: var(--success-soft);
+            color: var(--text);
+        }
 
+        .flash.warn {
+            display: block;
+            border-color: var(--warning);
+            background: var(--warning-soft);
+            color: var(--text);
+        }
+
+        .flash.error {
+            display: block;
+            border-color: var(--error);
+            background: var(--error-soft);
+            color: var(--text);
+        }
+
+        /* ============================================================
+           7. MAIN LAYOUT / GRID
+           ============================================================ */
         main {
+            width: min(1200px, calc(100vw - 2rem));
+            margin: 0 auto;
             display: grid;
-            gap: 1rem;
+            gap: 1.25rem;
             padding-bottom: 2rem;
         }
 
         .grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 1rem;
         }
 
+        /* ============================================================
+           8. CARDS
+           ============================================================ */
         .card {
-            background: var(--panel);
+            background: var(--surface);
             border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 1rem;
-            backdrop-filter: blur(14px);
+            border-radius: var(--radius-lg);
+            padding: 1.1rem 1.15rem;
+            box-shadow: var(--shadow-sm);
+            display: flex;
+            flex-direction: column;
+            gap: 0.7rem;
         }
 
-        .card h2, .card h3 {
-            margin: 0 0 0.75rem;
+        .card h2,
+        .card h3 {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+            color: var(--text);
+        }
+
+        .card h2 {
             font-size: 1rem;
         }
 
-        .muted { color: var(--muted); }
-        .status.ok { color: var(--ok); }
-        .status.warn { color: var(--warn); }
+        .muted {
+            color: var(--text-secondary);
+        }
+
+        .status.ok {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .status.warn {
+            color: var(--warning);
+            font-weight: 600;
+        }
 
         pre {
             white-space: pre-wrap;
             word-break: break-word;
-            background: rgba(15, 23, 42, 0.7);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 0.9rem;
+            background: var(--code-bg);
+            color: var(--code-text);
+            border: 1px solid transparent;
+            border-radius: var(--radius-md);
+            padding: 0.8rem 0.9rem;
             max-height: 320px;
             overflow: auto;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            line-height: 1.55;
         }
 
+        code {
+            font-family: var(--font-mono);
+            font-size: 0.85em;
+            background: var(--surface-muted);
+            color: var(--text);
+            padding: 0.1em 0.35em;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-soft);
+        }
+
+        /* ============================================================
+           9. TABLES
+           ============================================================ */
         table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.92rem;
+            font-size: 0.88rem;
         }
 
-        th, td {
+        thead th {
+            background: var(--surface-muted);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        th,
+        td {
             text-align: left;
-            padding: 0.55rem 0.35rem;
-            border-bottom: 1px solid var(--border);
+            padding: 0.55rem 0.55rem;
+            border-bottom: 1px solid var(--border-soft);
             vertical-align: top;
         }
 
+        tbody tr:hover {
+            background: var(--surface-muted);
+        }
+
+        /* ============================================================
+           10. ACTIONS / FILTERS
+           ============================================================ */
         .actions {
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
         }
 
-        .actions button.secondary {
-            background: var(--panel-2);
-        }
-
         .filters {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
             gap: 0.6rem;
-            margin-bottom: 0.9rem;
+            margin-bottom: 0.5rem;
         }
 
+        /* ============================================================
+           11. PILLS / BADGES
+           ============================================================ */
         .pill-row {
             display: flex;
-            gap: 0.5rem;
+            gap: 0.4rem;
             flex-wrap: wrap;
-            margin-top: 0.75rem;
         }
 
         .pill {
             border: 1px solid var(--border);
-            border-radius: 999px;
-            padding: 0.45rem 0.7rem;
-            background: rgba(15, 23, 42, 0.7);
-            color: var(--muted);
-            font-size: 0.85rem;
+            border-radius: var(--radius-pill);
+            padding: 0.32rem 0.7rem;
+            background: var(--surface-muted);
+            color: var(--text-secondary);
+            font-size: 0.78rem;
+            font-weight: 500;
         }
 
+        .pill:hover {
+            background: var(--surface);
+            color: var(--text);
+        }
+
+        .apply-badge {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: var(--radius-pill);
+            border: 1px solid var(--border);
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            background: var(--surface-muted);
+        }
+
+        .apply-badge.live {
+            border-color: var(--success);
+            background: var(--success-soft);
+            color: var(--success);
+        }
+
+        .apply-badge.restart {
+            border-color: var(--warning);
+            background: var(--warning-soft);
+            color: var(--warning);
+        }
+
+        /* ============================================================
+           12. SECTION TITLE / FORM FIELDS
+           ============================================================ */
         .section-title {
             display: flex;
             justify-content: space-between;
             align-items: baseline;
             gap: 1rem;
-            margin-bottom: 0.8rem;
+            margin-bottom: 0.4rem;
         }
 
         .settings-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 0.8rem;
-            margin-top: 0.8rem;
+            gap: 0.85rem;
         }
 
         .field {
@@ -208,111 +643,103 @@
         }
 
         .field label {
-            color: var(--muted);
-            font-size: 0.9rem;
-        }
-
-        .apply-badge {
-            display: inline-flex;
-            align-items: center;
-            margin-left: 0.45rem;
-            padding: 0.1rem 0.45rem;
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            font-size: 0.72rem;
-            color: var(--muted);
-            background: rgba(15, 23, 42, 0.7);
-        }
-
-        .apply-badge.live {
-            border-color: rgba(34, 197, 94, 0.35);
-            color: #86efac;
-        }
-
-        .apply-badge.restart {
-            border-color: rgba(245, 158, 11, 0.35);
-            color: #fcd34d;
+            color: var(--text-secondary);
+            font-size: 0.8125rem;
+            font-weight: 500;
         }
 
         .field.checkbox {
             display: flex;
             align-items: center;
             gap: 0.55rem;
-            padding-top: 1.8rem;
+            padding-top: 1.6rem;
         }
 
         .field.checkbox label {
             color: var(--text);
-            font-size: 0.95rem;
+            font-size: 0.875rem;
         }
 
         .settings-meta {
             display: grid;
             gap: 0.35rem;
-            margin-top: 0.8rem;
+            color: var(--text-secondary);
+            font-size: 0.82rem;
         }
 
         .list {
             margin: 0;
             padding-left: 1.1rem;
-            color: var(--muted);
+            color: var(--text-secondary);
         }
 
+        .list li {
+            margin: 0.18rem 0;
+        }
+
+        /* ============================================================
+           13. READINESS GRID
+           ============================================================ */
         .readiness-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 0.8rem;
-            margin-top: 0.8rem;
+            gap: 0.75rem;
         }
 
         .readiness-card {
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.8rem;
-            background: rgba(15, 23, 42, 0.65);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 0.85rem;
+            background: var(--surface-secondary);
         }
 
-        .readiness-card.ready { border-color: rgba(34, 197, 94, 0.35); }
-        .readiness-card.degraded { border-color: rgba(245, 158, 11, 0.35); }
-        .readiness-card.misconfigured { border-color: rgba(248, 113, 113, 0.35); }
+        .readiness-card.ready {
+            border-color: var(--success);
+            background: var(--success-soft);
+        }
 
-        .reference-list {
+        .readiness-card.degraded {
+            border-color: var(--warning);
+            background: var(--warning-soft);
+        }
+
+        .readiness-card.misconfigured {
+            border-color: var(--error);
+            background: var(--error-soft);
+        }
+
+        /* ============================================================
+           14. REFERENCES / TASKS
+           ============================================================ */
+        .reference-list,
+        .task-list {
             display: grid;
-            gap: 0.55rem;
-            margin-top: 0.8rem;
+            gap: 0.65rem;
         }
 
-        .reference-item {
+        .reference-item,
+        .task-card,
+        .task-condition {
             border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 0.7rem 0.8rem;
-            background: rgba(15, 23, 42, 0.55);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 0.85rem;
+            background: var(--surface-secondary);
         }
 
         .reference-item code {
             display: block;
-            margin-top: 0.2rem;
+            margin-top: 0.25rem;
+            background: transparent;
+            border: none;
+            padding: 0;
             color: var(--text);
             word-break: break-word;
-        }
-
-        .task-list {
-            display: grid;
-            gap: 0.8rem;
-            margin-top: 0.8rem;
-        }
-
-        .task-card, .task-condition {
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.8rem;
-            background: rgba(15, 23, 42, 0.55);
         }
 
         .task-condition {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 0.6rem;
+            gap: 0.55rem;
             align-items: end;
         }
 
@@ -320,59 +747,114 @@
             display: flex;
             gap: 0.5rem;
             flex-wrap: wrap;
-            margin-bottom: 0.6rem;
+            margin-bottom: 0.5rem;
         }
 
+        /* ============================================================
+           15. WHATSAPP / QR
+           ============================================================ */
         .whatsapp-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 0.8rem;
+            gap: 0.85rem;
         }
 
         .whatsapp-auth-grid {
             display: grid;
             grid-template-columns: minmax(280px, 1.5fr) minmax(220px, 1fr);
-            gap: 0.8rem;
-            margin-top: 0.8rem;
+            gap: 0.85rem;
+            margin-top: 0.6rem;
         }
 
         .qr-preview {
             display: grid;
             justify-items: center;
-            gap: 0.75rem;
+            gap: 0.6rem;
         }
 
         .qr-preview img {
             width: min(280px, 100%);
-            background: white;
-            border-radius: 14px;
-            padding: 0.75rem;
+            background: #FFFFFF;
+            border-radius: var(--radius-md);
+            padding: 0.6rem;
             border: 1px solid var(--border);
+            box-shadow: var(--shadow-sm);
         }
 
+        /* ============================================================
+           16. METRICS
+           ============================================================ */
         .metric-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 0.75rem;
-            margin-bottom: 0.9rem;
+            gap: 0.65rem;
         }
 
         .metric-card {
             border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0.8rem;
-            background: rgba(15, 23, 42, 0.6);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 0.85rem;
+            background: var(--surface-secondary);
         }
 
         .metric-card strong {
             display: block;
-            font-size: 1.35rem;
+            font-size: 1.4rem;
+            font-weight: 600;
             margin-bottom: 0.15rem;
+            color: var(--text);
+            letter-spacing: -0.01em;
         }
 
+        .metric-card .muted {
+            font-size: 0.78rem;
+        }
+
+        /* ============================================================
+           17. STACK UTILITY
+           ============================================================ */
         .stack {
             display: grid;
             gap: 0.8rem;
+        }
+
+        /* ============================================================
+           18. RESPONSIVE
+           ============================================================ */
+        @media (max-width: 720px) {
+            header {
+                margin: 0.85rem auto 0.85rem;
+                padding: 0.85rem 1rem;
+            }
+
+            .toolbar {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .toolbar input,
+            .toolbar select {
+                flex: 1 1 140px;
+                min-width: 0;
+            }
+
+            .section-nav {
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                position: static;
+            }
+
+            .section-nav a {
+                white-space: nowrap;
+            }
+
+            .card {
+                padding: 0.95rem 1rem;
+            }
+
+            .whatsapp-auth-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -394,9 +876,18 @@
             <input id="token-input" type="password" placeholder="Account token or bootstrap token">
             <label><input id="remember-token" type="checkbox"> Remember</label>
             <button id="login-button">Login</button>
-            <button id="logout-button">Logout</button>
-            <button id="refresh-button">Refresh</button>
+            <button id="logout-button" class="secondary">Logout</button>
+            <button id="refresh-button" class="secondary">Refresh</button>
             <a href="/chat">Open Chat</a>
+            <button id="theme-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">
+                <svg id="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="4"></circle>
+                    <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path>
+                </svg>
+                <svg id="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+                    <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"></path>
+                </svg>
+            </button>
         </div>
     </header>
 
@@ -408,6 +899,7 @@
         <a href="#heartbeat-section">Heartbeat</a>
         <a href="#automation-section">Automations</a>
         <a href="#learning-section">Learning</a>
+        <a href="#harness-section">Harness</a>
         <a href="#memory-section">Memory</a>
         <a href="#integration-section">Integration</a>
         <a href="#ops-section">Ops</a>
@@ -452,6 +944,20 @@
                 <pre id="setup-status-output">Loading…</pre>
                 <div id="setup-recommended-output" class="muted" style="margin-top:0.75rem;">Loading…</div>
                 <div id="setup-verify-output" class="muted" style="margin-top:0.75rem;">Verification has not been run yet.</div>
+                <div id="tailscale-serve-card" class="card" style="margin-top:0.9rem; display:none;">
+                    <div class="section-title">
+                        <div>
+                            <h3>Tailscale Serve</h3>
+                            <div class="muted">Private tailnet access while the gateway remains loopback-bound.</div>
+                        </div>
+                        <div class="actions">
+                            <button id="tailscale-copy-command-button" class="secondary">Copy Command</button>
+                            <button id="tailscale-run-doctor-button" class="secondary">Run Doctor</button>
+                            <a href="https://github.com/clawdotnet/openclaw.net/blob/main/docs/deployment/TAILSCALE.md" target="_blank" rel="noopener noreferrer">Docs</a>
+                        </div>
+                    </div>
+                    <pre id="tailscale-serve-output">Not configured.</pre>
+                </div>
                 <div class="card" style="margin-top:0.9rem;" data-min-role="admin">
                     <h3>First Operator Wizard</h3>
                     <div class="muted">Create the first admin account, mint an operator token, start a browser session, and optionally retire the bootstrap token.</div>
@@ -563,6 +1069,9 @@
                         <button id="audit-export-button">Download Bundle</button>
                     </div>
                 </div>
+                <div class="filters">
+                    <label><input id="audit-include-governance-input" type="checkbox"> Include governance ledger</label>
+                </div>
                 <pre id="audit-export-output">Ready.</pre>
             </div>
             <div class="card">
@@ -578,6 +1087,8 @@
                 <div class="filters">
                     <input id="trajectory-session-input" type="text" placeholder="Session ID (optional)">
                     <label><input id="trajectory-anonymize-input" type="checkbox"> Anonymize</label>
+                    <label><input id="trajectory-include-evidence-input" type="checkbox"> Include evidence</label>
+                    <label><input id="trajectory-include-governance-input" type="checkbox"> Include governance</label>
                 </div>
                 <pre id="trajectory-export-output">Ready.</pre>
             </div>
@@ -626,6 +1137,30 @@
         </section>
 
         <section id="heartbeat-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Runtime Pulse</h2>
+                        <div class="muted">Scheduled heartbeat turns for surfacing what needs attention without creating background task records.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="pulse-run-button" class="secondary">Run now</button>
+                        <button id="pulse-events-button" class="secondary">View Events</button>
+                        <button id="pulse-reload-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="settings-grid">
+                    <div class="field">
+                        <label for="pulse-manual-input">Manual wake text</label>
+                        <input id="pulse-manual-input" type="text" placeholder="Check for urgent follow-ups">
+                    </div>
+                    <div class="field">
+                        <label>Warnings</label>
+                        <div class="muted">Frequent intervals increase token cost. target=last may send messages externally. includeReasoning can expose more detail. Do not put secrets in HEARTBEAT.md.</div>
+                    </div>
+                </div>
+                <pre id="pulse-status-output">Loading…</pre>
+            </div>
             <div class="card">
                 <div class="section-title">
                     <div>
@@ -752,6 +1287,7 @@
                         <div class="muted">Review profile, automation, and skill proposals generated from repeated successful sessions.</div>
                     </div>
                     <div class="actions">
+                        <button id="learning-detect-harness-button" class="secondary">Detect Harness Changes</button>
                         <button id="learning-refresh-button" class="secondary">Reload</button>
                     </div>
                 </div>
@@ -768,6 +1304,32 @@
                         <option value="profile_update">Profile updates</option>
                         <option value="automation_suggestion">Automation suggestions</option>
                         <option value="skill_draft">Skill drafts</option>
+                        <option value="harness_change">Harness changes</option>
+                    </select>
+                    <select id="learning-component-input">
+                        <option value="">All components</option>
+                        <option value="memory">Memory</option>
+                        <option value="retrieval">Retrieval</option>
+                        <option value="tools">Tools</option>
+                        <option value="approvals">Approvals</option>
+                        <option value="verification">Verification</option>
+                        <option value="routing">Routing</option>
+                        <option value="prompt">Prompt</option>
+                        <option value="model_profile">Model profile</option>
+                        <option value="pulse">Pulse</option>
+                        <option value="security">Security</option>
+                        <option value="governance">Governance</option>
+                        <option value="context_budget">Context budget</option>
+                        <option value="channel">Channel</option>
+                        <option value="sandbox">Sandbox</option>
+                        <option value="unknown">Unknown</option>
+                    </select>
+                    <select id="learning-risk-input">
+                        <option value="">All risks</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
                     </select>
                 </div>
                 <div id="learning-list-output" class="muted">Loading…</div>
@@ -786,6 +1348,140 @@
                 </div>
                 <textarea id="learning-reason-input" rows="4" placeholder="Optional review note or rollback reason"></textarea>
                 <div id="learning-detail-output" class="muted" style="margin-top:0.75rem;">Select a proposal.</div>
+            </div>
+        </section>
+
+        <section id="harness-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Harness Contracts</h2>
+                        <div class="muted">Inspect passive plan records for higher-risk or multi-step agent work.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="harness-refresh-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select id="harness-status-input">
+                        <option value="">All statuses</option>
+                        <option value="draft">Draft</option>
+                        <option value="proposed">Proposed</option>
+                        <option value="approved">Approved</option>
+                        <option value="executing">Executing</option>
+                        <option value="verified">Verified</option>
+                        <option value="failed">Failed</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="rolled_back">Rolled back</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                    <select id="harness-risk-input">
+                        <option value="">All risk levels</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <input id="harness-tag-input" type="text" placeholder="Tag filter">
+                </div>
+                <div id="harness-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <h2>Contract Detail</h2>
+                <div id="harness-detail-output" class="muted">Select a harness contract.</div>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Evidence Bundles</h2>
+                        <div class="muted">Inspect manual evidence records linked to sessions, contracts, proposals, and tool calls.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="evidence-refresh-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <input id="evidence-session-input" type="text" placeholder="Session ID">
+                    <input id="evidence-contract-input" type="text" placeholder="Contract ID">
+                    <select id="evidence-confidence-input">
+                        <option value="">All confidence</option>
+                        <option value="unknown">Unknown</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                    <input id="evidence-tag-input" type="text" placeholder="Tag filter">
+                </div>
+                <div id="evidence-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <h2>Evidence Detail</h2>
+                <div id="evidence-detail-output" class="muted">Select an evidence bundle.</div>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Governance Ledger</h2>
+                        <div class="muted">Inspect durable approval and oversight decisions without changing approval behavior.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="governance-refresh-button" class="secondary">Reload</button>
+                    </div>
+                </div>
+                <div class="filters">
+                    <select id="governance-decision-input">
+                        <option value="">All decisions</option>
+                        <option value="approved">Approved</option>
+                        <option value="rejected">Rejected</option>
+                        <option value="escalated">Escalated</option>
+                        <option value="expired">Expired</option>
+                        <option value="unknown">Unknown</option>
+                    </select>
+                    <select id="governance-status-input">
+                        <option value="">All statuses</option>
+                        <option value="active">Active</option>
+                        <option value="expired">Expired</option>
+                        <option value="revoked">Revoked</option>
+                        <option value="superseded">Superseded</option>
+                    </select>
+                    <input id="governance-tool-input" type="text" placeholder="Tool">
+                    <select id="governance-risk-input">
+                        <option value="">All risk</option>
+                        <option value="unknown">Unknown</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <select id="governance-scope-input">
+                        <option value="">All scopes</option>
+                        <option value="once">Once</option>
+                        <option value="session">Session</option>
+                        <option value="actor">Actor</option>
+                        <option value="channel">Channel</option>
+                        <option value="project">Project</option>
+                        <option value="tool">Tool</option>
+                        <option value="global">Global</option>
+                        <option value="unknown">Unknown</option>
+                    </select>
+                    <input id="governance-session-input" type="text" placeholder="Session ID">
+                    <input id="governance-actor-input" type="text" placeholder="Actor ID">
+                    <input id="governance-tag-input" type="text" placeholder="Tag filter">
+                </div>
+                <div id="governance-list-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Governance Detail</h2>
+                        <div class="muted">Policy hints are informational only and do not auto-approve future actions.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="governance-revoke-button" class="secondary">Revoke</button>
+                    </div>
+                </div>
+                <textarea id="governance-revoke-reason-input" rows="3" placeholder="Optional revocation reason"></textarea>
+                <div id="governance-detail-output" class="muted" style="margin-top:0.75rem;">Select a governance ledger entry.</div>
             </div>
         </section>
 
@@ -850,6 +1546,21 @@
                     <button id="memory-import-button">Import Bundle</button>
                 </div>
                 <pre id="memory-export-output">No bundle exported yet.</pre>
+            </div>
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Fractal Memory</h2>
+                        <div class="muted">Optional structured project memory over MCP.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="fractal-memory-refresh-button" class="secondary">Reload</button>
+                        <button id="fractal-memory-validate-button" class="secondary">Validate</button>
+                    </div>
+                </div>
+                <div id="fractal-memory-status-output" class="muted">Loading…</div>
+                <h3 style="margin-top:1rem;">Recent Nodes</h3>
+                <pre id="fractal-memory-recent-output">No recent Fractal Memory data loaded.</pre>
             </div>
         </section>
 
@@ -1385,6 +2096,111 @@
     </main>
 
     <script>
+        /* ---------- Theme ----------
+           The localStorage key 'openclaw_theme' is also used by the new
+           webchat redesign (PR #124). Once both ship, toggling theme on
+           either page will carry to the other on next load. Until then,
+           admin is the only page using it.
+
+           Storage access is guarded — localStorage can throw in private
+           mode, sandboxed iframes, or storage-disabled browsers, and we
+           must never let that break the rest of the page. */
+        const THEME_KEY = 'openclaw_theme';
+        const themeToggleButton = document.getElementById('theme-toggle');
+        const themeIconLight = document.getElementById('theme-icon-light');
+        const themeIconDark = document.getElementById('theme-icon-dark');
+
+        function safeStorageGet(key) {
+            try { return window.localStorage ? localStorage.getItem(key) : null; }
+            catch (_) { return null; }
+        }
+
+        function safeStorageSet(key, value) {
+            try { if (window.localStorage) localStorage.setItem(key, value); }
+            catch (_) { /* ignore */ }
+        }
+
+        function getPreferredTheme() {
+            const stored = safeStorageGet(THEME_KEY);
+            if (stored === 'light' || stored === 'dark') return stored;
+            return 'light';
+        }
+
+        function applyTheme(theme) {
+            const value = theme === 'dark' ? 'dark' : 'light';
+            document.documentElement.setAttribute('data-theme', value);
+            if (themeIconLight && themeIconDark) {
+                themeIconLight.hidden = value === 'dark';
+                themeIconDark.hidden = value === 'light';
+            }
+            themeToggleButton?.setAttribute('aria-pressed', value === 'dark' ? 'true' : 'false');
+        }
+
+        function toggleTheme() {
+            const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            safeStorageSet(THEME_KEY, next);
+            applyTheme(next);
+        }
+
+        applyTheme(getPreferredTheme());
+        themeToggleButton?.addEventListener('click', toggleTheme);
+
+        /* ---------- Section-nav active-state highlighting ----------
+           IntersectionObserver can fire with multiple entries in a single
+           callback (e.g., a section enters while another exits). We track
+           the most-visible ratio for every observed section, then pick a
+           single winner per callback — the section with the highest
+           current ratio — and update aria-current exactly once. That
+           keeps the active pill from jittering when several sections are
+           briefly co-visible. */
+        (function initSectionNavHighlight() {
+            const nav = document.querySelector('.section-nav');
+            if (!nav) return;
+            const links = Array.from(nav.querySelectorAll('a[href^="#"]'));
+            if (!links.length) return;
+            const sectionMap = new Map();
+            const orderedSections = [];
+            for (const link of links) {
+                const id = link.getAttribute('href').slice(1);
+                const target = document.getElementById(id);
+                if (target) {
+                    sectionMap.set(target, link);
+                    orderedSections.push(target);
+                }
+            }
+            if (!sectionMap.size || !('IntersectionObserver' in window)) return;
+
+            // Persisted across callbacks so we know each section's last reported visibility.
+            const visibility = new Map();
+            let currentActive = null;
+
+            function setActive(section) {
+                if (section === currentActive) return;
+                currentActive = section;
+                for (const link of links) link.removeAttribute('aria-current');
+                sectionMap.get(section)?.setAttribute('aria-current', 'true');
+            }
+
+            const observer = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    visibility.set(entry.target, entry.isIntersecting ? entry.intersectionRatio : 0);
+                }
+                // Pick the single best section across all currently-visible entries.
+                let best = null;
+                let bestRatio = 0;
+                for (const section of orderedSections) {
+                    const ratio = visibility.get(section) || 0;
+                    if (ratio >= 0.15 && ratio > bestRatio) {
+                        best = section;
+                        bestRatio = ratio;
+                    }
+                }
+                if (best) setActive(best);
+            }, { rootMargin: '-30% 0px -55% 0px', threshold: [0.15, 0.3, 0.6] });
+
+            for (const section of orderedSections) observer.observe(section);
+        })();
+
         const tokenInput = document.getElementById('token-input');
         const loginModeInput = document.getElementById('login-mode-input');
         const usernameInput = document.getElementById('username-input');
@@ -1403,6 +2219,9 @@
         const setupStatusOutput = document.getElementById('setup-status-output');
         const setupRecommendedOutput = document.getElementById('setup-recommended-output');
         const setupVerifyOutput = document.getElementById('setup-verify-output');
+        const tailscaleServeCard = document.getElementById('tailscale-serve-card');
+        const tailscaleServeOutput = document.getElementById('tailscale-serve-output');
+        const tailscaleCopyCommandButton = document.getElementById('tailscale-copy-command-button');
         const setupWizardOutput = document.getElementById('setup-wizard-output');
         const setupWizardInputs = {
             username: document.getElementById('setup-wizard-username-input'),
@@ -1429,8 +2248,11 @@
         const observabilitySummaryOutput = document.getElementById('observability-summary-output');
         const observabilitySeriesOutput = document.getElementById('observability-series-output');
         const auditExportOutput = document.getElementById('audit-export-output');
+        const auditIncludeGovernanceInput = document.getElementById('audit-include-governance-input');
         const trajectorySessionInput = document.getElementById('trajectory-session-input');
         const trajectoryAnonymizeInput = document.getElementById('trajectory-anonymize-input');
+        const trajectoryIncludeEvidenceInput = document.getElementById('trajectory-include-evidence-input');
+        const trajectoryIncludeGovernanceInput = document.getElementById('trajectory-include-governance-input');
         const trajectoryExportOutput = document.getElementById('trajectory-export-output');
         const migrationReportInput = document.getElementById('migration-report-input');
         const migrationReportOutput = document.getElementById('migration-report-output');
@@ -1478,6 +2300,8 @@
         const heartbeatTasks = document.getElementById('heartbeat-tasks');
         const heartbeatStatusOutput = document.getElementById('heartbeat-status-output');
         const heartbeatPreviewOutput = document.getElementById('heartbeat-preview-output');
+        const pulseManualInput = document.getElementById('pulse-manual-input');
+        const pulseStatusOutput = document.getElementById('pulse-status-output');
         const automationTemplatesOutput = document.getElementById('automation-templates-output');
         const automationListOutput = document.getElementById('automation-list-output');
         const automationPreviewOutput = document.getElementById('automation-preview-output');
@@ -1503,7 +2327,33 @@
         const learningDetailOutput = document.getElementById('learning-detail-output');
         const learningStatusInput = document.getElementById('learning-status-input');
         const learningKindInput = document.getElementById('learning-kind-input');
+        const learningComponentInput = document.getElementById('learning-component-input');
+        const learningRiskInput = document.getElementById('learning-risk-input');
         const learningReasonInput = document.getElementById('learning-reason-input');
+        const harnessListOutput = document.getElementById('harness-list-output');
+        const harnessDetailOutput = document.getElementById('harness-detail-output');
+        const harnessStatusInput = document.getElementById('harness-status-input');
+        const harnessRiskInput = document.getElementById('harness-risk-input');
+        const harnessTagInput = document.getElementById('harness-tag-input');
+        const evidenceListOutput = document.getElementById('evidence-list-output');
+        const evidenceDetailOutput = document.getElementById('evidence-detail-output');
+        const evidenceSessionInput = document.getElementById('evidence-session-input');
+        const evidenceContractInput = document.getElementById('evidence-contract-input');
+        const evidenceConfidenceInput = document.getElementById('evidence-confidence-input');
+        const evidenceTagInput = document.getElementById('evidence-tag-input');
+        const governanceListOutput = document.getElementById('governance-list-output');
+        const governanceDetailOutput = document.getElementById('governance-detail-output');
+        const governanceRefreshButton = document.getElementById('governance-refresh-button');
+        const governanceRevokeButton = document.getElementById('governance-revoke-button');
+        const governanceDecisionInput = document.getElementById('governance-decision-input');
+        const governanceStatusInput = document.getElementById('governance-status-input');
+        const governanceToolInput = document.getElementById('governance-tool-input');
+        const governanceRiskInput = document.getElementById('governance-risk-input');
+        const governanceScopeInput = document.getElementById('governance-scope-input');
+        const governanceSessionInput = document.getElementById('governance-session-input');
+        const governanceActorInput = document.getElementById('governance-actor-input');
+        const governanceTagInput = document.getElementById('governance-tag-input');
+        const governanceRevokeReasonInput = document.getElementById('governance-revoke-reason-input');
         const memorySearchInput = document.getElementById('memory-search-input');
         const memoryPrefixInput = document.getElementById('memory-prefix-input');
         const memoryClassFilterInput = document.getElementById('memory-class-filter-input');
@@ -1516,6 +2366,8 @@
         const memoryNoteDetailOutput = document.getElementById('memory-note-detail-output');
         const memoryImportInput = document.getElementById('memory-import-input');
         const memoryExportOutput = document.getElementById('memory-export-output');
+        const fractalMemoryStatusOutput = document.getElementById('fractal-memory-status-output');
+        const fractalMemoryRecentOutput = document.getElementById('fractal-memory-recent-output');
         const heartbeatInputs = {
             enabled: document.getElementById('heartbeat-enabled-input'),
             cronExpression: document.getElementById('heartbeat-cron-input'),
@@ -1627,6 +2479,18 @@
             selectedId: null,
             detail: null
         };
+        let harnessState = {
+            selectedId: null,
+            detail: null
+        };
+        let evidenceState = {
+            selectedId: null,
+            detail: null
+        };
+        let governanceState = {
+            selectedId: null,
+            detail: null
+        };
         let memoryState = {
             selectedKey: null
         };
@@ -1634,6 +2498,7 @@
         let whatsAppSetupState = null;
         let whatsAppAuthState = new Map();
         let whatsAppAuthStream = null;
+        let tailscaleSuggestedCommand = '';
 
         async function api(url, options = {}) {
             const resp = await fetch(url, {
@@ -1701,6 +2566,7 @@
                 'learning-approve-button',
                 'learning-reject-button',
                 'learning-rollback-button',
+                'learning-detect-harness-button',
                 'memory-save-button',
                 'memory-delete-button',
                 'memory-import-button',
@@ -1723,6 +2589,48 @@
                 const button = document.getElementById(id);
                 if (button) button.disabled = !hasRole('admin');
             });
+            applyGovernanceAccessState();
+        }
+
+        function canViewGovernanceLedger() {
+            return Boolean(currentAuth) && hasRole('viewer');
+        }
+
+        function canMutateGovernanceLedger() {
+            return Boolean(currentAuth) && hasRole('operator');
+        }
+
+        function resetGovernanceUi(message) {
+            governanceState = {
+                selectedId: null,
+                detail: null
+            };
+            governanceListOutput.textContent = message;
+            governanceDetailOutput.innerHTML = `<div class="muted">${escapeHtml(message)}</div>`;
+            governanceRevokeReasonInput.value = '';
+        }
+
+        function applyGovernanceAccessState() {
+            const canView = canViewGovernanceLedger();
+            const canMutate = canMutateGovernanceLedger();
+            [
+                governanceDecisionInput,
+                governanceStatusInput,
+                governanceToolInput,
+                governanceRiskInput,
+                governanceScopeInput,
+                governanceSessionInput,
+                governanceActorInput,
+                governanceTagInput
+            ].forEach(input => {
+                input.disabled = !canView;
+            });
+            governanceRevokeReasonInput.disabled = !canMutate;
+            governanceRefreshButton.disabled = !canView;
+            governanceRevokeButton.disabled = !canMutate || !governanceState.selectedId || governanceState.detail?.status === 'revoked';
+            if (!canView) {
+                resetGovernanceUi(currentAuth ? 'Access denied.' : 'Login required.');
+            }
         }
 
         function updateLoginModeUi() {
@@ -1802,6 +2710,7 @@
             csrfToken = null;
             currentAuth = null;
             sessionStatus.textContent = 'Logged out';
+            resetGovernanceUi('Login required.');
             applyRoleGates();
         }
 
@@ -2090,6 +2999,7 @@
             if (!resp.ok) {
                 setupStatusOutput.textContent = `Setup status failed (${resp.status})`;
                 setupRecommendedOutput.textContent = 'Unable to load recommended actions.';
+                renderTailscaleServeStatus(null);
                 return;
             }
 
@@ -2110,6 +3020,7 @@
                 `Last verification: ${data.lastVerificationAtUtc ? `${data.lastVerificationStatus} via ${data.lastVerificationSource || 'unknown'} at ${data.lastVerificationAtUtc}` : 'not_run'}`
             ];
             setupStatusOutput.textContent = lines.join('\n');
+            renderTailscaleServeStatus(data.tailscaleServe);
 
             const actions = data.recommendedNextActions || [];
             if (!actions.length) {
@@ -2120,6 +3031,29 @@
                     <ul class="list">${actions.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>
                 `;
             }
+        }
+
+        function renderTailscaleServeStatus(status) {
+            if (!status) {
+                tailscaleServeCard.style.display = 'none';
+                tailscaleServeOutput.textContent = 'Not configured.';
+                tailscaleSuggestedCommand = '';
+                return;
+            }
+
+            tailscaleServeCard.style.display = '';
+            tailscaleSuggestedCommand = status.suggestedServeCommand || '';
+            const warnings = status.warnings || [];
+            const lines = [
+                `Deployment mode: ${status.mode || 'unknown'}`,
+                `Local gateway URL: ${status.localGatewayUrl || 'unknown'}`,
+                `Serve detected: ${status.serveDetected || 'unknown'}`,
+                `Identity headers present: ${Boolean(status.identityHeadersPresent)}`,
+                `Public bind status: ${Boolean(status.publicBind)}`,
+                `Last doctor warning: ${warnings.length ? warnings[0] : 'none'}`,
+                `Suggested command: ${tailscaleSuggestedCommand || 'n/a'}`
+            ];
+            tailscaleServeOutput.textContent = lines.join('\n');
         }
 
         async function loadSetupVerification() {
@@ -2425,6 +3359,7 @@
 
         async function exportAuditBundle() {
             const params = buildDateRangeQuery();
+            if (auditIncludeGovernanceInput.checked) params.set('includeGovernance', 'true');
             const url = `/admin/audit/export${params.toString() ? `?${params.toString()}` : ''}`;
             const resp = await fetch(url, { credentials: 'same-origin' });
             if (!resp.ok) {
@@ -2451,6 +3386,8 @@
             const sessionId = trajectorySessionInput.value.trim();
             if (sessionId) params.set('sessionId', sessionId);
             if (trajectoryAnonymizeInput.checked) params.set('anonymize', 'true');
+            if (trajectoryIncludeEvidenceInput.checked) params.set('includeEvidence', 'true');
+            if (trajectoryIncludeGovernanceInput.checked) params.set('includeGovernance', 'true');
             const url = `/admin/trajectory/export${params.toString() ? `?${params.toString()}` : ''}`;
             const resp = await fetch(url, { credentials: 'same-origin' });
             if (!resp.ok) {
@@ -2983,6 +3920,57 @@
             applyHeartbeatPreview(previewResult.data, statusResult.resp.ok ? statusResult.data : null);
         }
 
+        async function loadPulse() {
+            const { resp, data } = await api('/admin/pulse/status');
+            if (!resp.ok) {
+                pulseStatusOutput.textContent = `Runtime Pulse request failed (${resp.status})`;
+                return;
+            }
+
+            const alerts = (data.recentAlerts || []).slice(0, 5)
+                .map(item => `- ${item.timestampUtc} [${item.severity}] ${item.text}`)
+                .join('\n') || '- none';
+            pulseStatusOutput.textContent = [
+                `enabled: ${data.enabled}`,
+                `interval: ${data.interval}`,
+                `heartbeat_path: ${data.heartbeatPath}`,
+                `heartbeat_exists: ${data.heartbeatExists}`,
+                `heartbeat_empty: ${data.heartbeatEmpty}`,
+                `last_result: ${data.lastResult}`,
+                `last_skip_reason: ${data.lastSkipReason || '(none)'}`,
+                `last_run: ${data.lastRunAtUtc || 'never'}`,
+                `next_run: ${data.nextRunAtUtc || '(not scheduled)'}`,
+                `target: ${data.config?.target || 'none'}`,
+                `active_hours: ${data.config?.activeHours ? `${data.config.activeHours.start}-${data.config.activeHours.end}` : '(none)'}`,
+                `light_context: ${Boolean(data.config?.lightContext)}`,
+                `isolated_session: ${Boolean(data.config?.isolatedSession)}`,
+                `recent_ok_count: ${data.recentOkCount}`,
+                '',
+                'recent_alerts:',
+                alerts
+            ].join('\n');
+        }
+
+        async function runPulseNow() {
+            if (!requireRole('operator', 'Running Runtime Pulse')) return;
+            const { resp, data } = await mutate('/admin/pulse/run', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: pulseManualInput.value.trim() || null, mode: 'now' })
+            });
+            if (!resp.ok) {
+                showFlash(data?.error || `Runtime Pulse run failed (${resp.status}).`, 'error');
+                return;
+            }
+            showFlash(`Runtime Pulse ${data.outcome}.`, data.success ? 'ok' : 'warn');
+            await loadPulse();
+        }
+
+        async function loadPulseEvents() {
+            const { resp, data } = await api('/admin/pulse/events?limit=40');
+            renderJson(eventsOutput, resp.ok ? data : `Runtime Pulse events failed (${resp.status})`);
+        }
+
         async function previewHeartbeat() {
             const payload = collectHeartbeatForm();
             const { resp, data } = await mutate('/admin/heartbeat/preview', {
@@ -3218,6 +4206,62 @@
                 await loadMemoryNotes();
                 await loadSummary();
             }
+        }
+
+        async function loadFractalMemoryStatus() {
+            const { resp, data } = await api('/admin/memory/fractal/status');
+            if (!resp.ok) {
+                fractalMemoryStatusOutput.textContent = `Fractal Memory status failed (${resp.status})`;
+                fractalMemoryRecentOutput.textContent = `Fractal Memory recent unavailable: status failed (${resp.status}).`;
+                return;
+            }
+
+            fractalMemoryStatusOutput.innerHTML = `
+                <div><strong>${escapeHtml(data.status || 'unknown')}</strong>${data.enabled ? '' : ' · disabled'}</div>
+                <div class="muted">mode=${escapeHtml(data.mode || 'mcp')} auto=${escapeHtml(data.autoContextMode || 'off')} writes=${data.writeToolsAvailable ? 'enabled' : 'disabled'}</div>
+                <div class="muted">repo=${escapeHtml(data.resolvedRepositoryRoot || data.repositoryRoot || '')}</div>
+                <div class="muted">mcp=${escapeHtml(data.mcpCommand || '')}</div>
+                ${(data.warnings || []).map(warning => `<div class="muted">warning: ${escapeHtml(warning)}</div>`).join('')}
+                ${data.error ? `<div class="muted">error: ${escapeHtml(data.error)}</div>` : ''}
+            `;
+
+            if (!data.enabled || data.error) {
+                fractalMemoryRecentOutput.textContent = !data.enabled
+                    ? 'Fractal Memory is disabled.'
+                    : `Fractal Memory unavailable: ${data.error}`;
+                return;
+            }
+
+            await loadFractalMemoryRecent();
+        }
+
+        async function loadFractalMemoryRecent() {
+            const { resp, data } = await api('/admin/memory/fractal/recent?days=30&limit=5');
+            if (!resp.ok) {
+                fractalMemoryRecentOutput.textContent = `Fractal Memory recent failed (${resp.status})`;
+                return;
+            }
+            if (!data.success) {
+                fractalMemoryRecentOutput.textContent = data.error || 'Fractal Memory recent data is unavailable.';
+                return;
+            }
+            if (!data.items?.length) {
+                fractalMemoryRecentOutput.textContent = 'No recent Fractal Memory nodes reported.';
+                return;
+            }
+            fractalMemoryRecentOutput.textContent = data.items
+                .map(item => `- ${item.path}${item.title ? ` · ${item.title}` : ''}`)
+                .join('\n');
+        }
+
+        async function validateFractalMemory() {
+            const { resp, data } = await mutate('/admin/memory/fractal/validate', { method: 'POST' });
+            if (!resp.ok) {
+                showFlash(`Fractal Memory validation failed (${resp.status}).`, 'error');
+                return;
+            }
+            renderJson(fractalMemoryRecentOutput, data);
+            showFlash(data.success && !data.hasErrors ? 'Fractal Memory validation passed.' : 'Fractal Memory validation reported issues.', data.success && !data.hasErrors ? 'ok' : 'warn');
         }
 
         function renderOperatorDashboard(operator) {
@@ -3528,6 +4572,8 @@
             const params = new URLSearchParams();
             if (learningStatusInput.value) params.set('status', learningStatusInput.value);
             if (learningKindInput.value) params.set('kind', learningKindInput.value);
+            if (learningComponentInput.value) params.set('component', learningComponentInput.value);
+            if (learningRiskInput.value) params.set('risk', learningRiskInput.value);
             const { resp, data } = await api(`/admin/learning/proposals?${params.toString()}`);
             if (!resp.ok) {
                 learningListOutput.textContent = `Learning request failed (${resp.status})`;
@@ -3543,14 +4589,51 @@
             learningListOutput.innerHTML = items.map(item => `
                 <div class="card" style="margin-bottom:0.75rem;">
                     <strong>${escapeHtml(item.title || item.id)}</strong>
-                    <div class="muted">${escapeHtml(item.kind)} · ${escapeHtml(item.status)} · confidence ${escapeHtml(item.confidence ?? 0)}</div>
+                    <div class="muted">${escapeHtml(item.kind)} · ${escapeHtml(item.status)} · risk ${escapeHtml(item.riskLevel || 'medium')} · confidence ${escapeHtml(item.confidence ?? 0)}</div>
+                    ${renderHarnessEvolutionListSummary(item)}
                     <div class="muted">${escapeHtml(item.summary || '')}</div>
-                    <div class="muted">${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="muted">Sources: ${escapeHtml((item.sourceSessionIds || []).slice(0, 3).join(', ') || 'none')} · Updated: ${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    ${renderLearningWarnings(item.validationWarnings)}
                     <div class="actions" style="margin-top:0.75rem;">
                         <button data-learning-inspect="${encodeURIComponent(item.id)}">Inspect</button>
                     </div>
                 </div>
             `).join('');
+        }
+
+        function renderLearningWarnings(warnings) {
+            if (!warnings || !warnings.length) return '';
+            return `<ul>${warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join('')}</ul>`;
+        }
+
+        function renderLearningList(label, values) {
+            const items = values || [];
+            if (!items.length) return '';
+            return `<div class="muted"><strong>${escapeHtml(label)}:</strong> ${escapeHtml(items.join(', '))}</div>`;
+        }
+
+        function renderHarnessEvolutionListSummary(proposal) {
+            const harness = proposal?.harnessEvolution;
+            if (!harness) return '';
+            return `<div class="muted">Component: ${escapeHtml(harness.component || 'unknown')} · Apply: ${escapeHtml(harness.applyMode || 'manual_only')} · Regression: ${escapeHtml((harness.regressionCategories || []).join(', ') || 'none')}</div>`;
+        }
+
+        function renderHarnessEvolutionDetail(proposal) {
+            const harness = proposal?.harnessEvolution;
+            if (!harness) return '';
+            return `<h3>Harness Evolution</h3>
+                <div class="muted">Component: ${escapeHtml(harness.component || 'unknown')} · Apply mode: ${escapeHtml(harness.applyMode || 'manual_only')} · Auto-applicable: ${escapeHtml(String(Boolean(harness.isAutoApplicable)))}</div>
+                <div class="muted">Failure mode: ${escapeHtml(harness.failureMode || 'not recorded')}</div>
+                <div class="muted">Proposed change: ${escapeHtml(harness.proposedChange || 'not recorded')}</div>
+                <div class="muted">Predicted improvement: ${escapeHtml(harness.predictedImprovement || 'not recorded')}</div>
+                <div class="muted">Rollback plan: ${escapeHtml(harness.rollbackPlan || 'not recorded')}</div>
+                ${renderLearningList('Invariants', harness.invariantsToPreserve)}
+                ${renderLearningList('Falsification tests', harness.falsificationTests)}
+                ${renderLearningList('Regression categories', harness.regressionCategories)}
+                ${renderLearningList('Evidence bundles', harness.relatedEvidenceBundleIds)}
+                ${renderLearningList('Harness contracts', harness.relatedHarnessContractIds)}
+                ${renderLearningList('Governance ledger', harness.relatedGovernanceLedgerIds)}
+                ${renderLearningList('Runtime events', harness.sourceRuntimeEventIds)}`;
         }
 
         function renderLearningDetail(detail) {
@@ -3570,14 +4653,47 @@
             const profile = detail.currentProfile
                 ? `<h3>Current Profile</h3><pre>${escapeHtml(JSON.stringify(detail.currentProfile, null, 2))}</pre>`
                 : '';
+            const provenance = detail.provenance
+                ? `<h3>Provenance</h3>
+                   <div class="muted">Reason: ${escapeHtml(detail.provenance.createdReason || proposal.createdReason || 'not recorded')}</div>
+                   <div class="muted">Repeated count: ${escapeHtml(detail.provenance.repeatedCount || proposal.repeatedCount || 0)}</div>
+                   ${renderLearningList('Source sessions', detail.provenance.sourceSessionIds)}
+                   ${renderLearningList('Source turns', detail.provenance.sourceTurnIds)}
+                   ${renderLearningList('Tool sequence', detail.provenance.toolSequence)}
+                   <pre>${escapeHtml(JSON.stringify(detail.provenance.toolObservations || [], null, 2))}</pre>`
+                : '';
+            const skillDraft = proposal.kind === 'skill_draft'
+                ? `<h3>Skill Draft</h3>
+                   <div class="muted">Skill: ${escapeHtml(proposal.skillName || 'unknown')}</div>
+                   <div class="muted">Draft hash: ${escapeHtml(proposal.draftContentHash || 'not recorded')}</div>
+                   <div class="muted">Managed path: ${escapeHtml(proposal.managedSkillPath || 'not approved yet')}</div>
+                   <pre>${escapeHtml(proposal.draftContent || proposal.draftPreview || '')}</pre>`
+                : '';
+            const automationSummary = proposal.kind === 'automation_suggestion' && proposal.automationDraft
+                ? `<h3>Automation Review</h3>
+                   <div class="muted">Schedule: ${escapeHtml(proposal.automationDraft.schedule || 'not set')}</div>
+	                   <div class="muted">Delivery: ${escapeHtml(proposal.automationDraft.deliveryChannelId || 'none')} ${escapeHtml(proposal.automationDraft.deliveryRecipientId || '')}</div>
+	                   <div class="muted">Enabled: ${escapeHtml(String(proposal.automationDraft.enabled))} · Draft: ${escapeHtml(String(proposal.automationDraft.isDraft))}</div>
+	                   <div class="muted">Tags: ${escapeHtml((proposal.automationDraft.tags || []).join(', ') || 'none')}</div>`
+                : '';
+            const harnessEvolution = renderHarnessEvolutionDetail(proposal);
 
             learningDetailOutput.innerHTML = `
                 <div class="stack">
                     <div>
                         <strong>${escapeHtml(proposal.title || proposal.id)}</strong>
-                        <div class="muted">${escapeHtml(proposal.kind)} · ${escapeHtml(proposal.status)} · confidence ${escapeHtml(proposal.confidence ?? 0)}</div>
-                        <div class="muted">Actor: ${escapeHtml(proposal.actorId || 'unknown')} · Updated: ${escapeHtml(formatDateTime(proposal.updatedAtUtc || proposal.createdAtUtc))}</div>
+                        <div class="muted">${escapeHtml(proposal.kind)} · ${escapeHtml(proposal.status)} · risk ${escapeHtml(proposal.riskLevel || 'medium')} · confidence ${escapeHtml(proposal.confidence ?? 0)}</div>
+                        <div class="muted">Validation: ${escapeHtml(proposal.validationStatus || 'not_run')} · Rollback: ${escapeHtml(detail.canRollback ? 'available' : 'not available')}</div>
+                        <div class="muted">Actor: ${escapeHtml(proposal.actorId || 'unknown')} · Created: ${escapeHtml(formatDateTime(proposal.createdAtUtc))} · Updated: ${escapeHtml(formatDateTime(proposal.updatedAtUtc || proposal.createdAtUtc))} · Reviewed: ${escapeHtml(formatDateTime(proposal.reviewedAtUtc))}</div>
+                        <div class="muted">Review notes: ${escapeHtml(proposal.reviewNotes || 'none')}</div>
+                        <div class="muted">Rollback reason: ${escapeHtml(proposal.rollbackReason || 'none')}</div>
                     </div>
+                    ${renderLearningWarnings(proposal.validationWarnings)}
+                    ${proposal.validationErrors?.length ? `<h3>Validation Errors</h3>${renderLearningWarnings(proposal.validationErrors)}` : ''}
+                    ${provenance}
+                    ${harnessEvolution}
+                    ${skillDraft}
+                    ${automationSummary}
                     <pre>${escapeHtml(JSON.stringify(proposal, null, 2))}</pre>
                     ${diff}
                     ${automationDraft}
@@ -3622,6 +4738,302 @@
             if (action === 'approve' || action === 'rollback') {
                 await loadAutomations();
             }
+        }
+
+        async function detectHarnessEvolutionProposals() {
+            if (!requireRole('operator', 'Harness proposal detection')) return;
+            const { resp, data } = await mutate('/admin/learning/proposals/harness-change/detect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            showFlash(resp.ok ? `Detected ${data.proposals?.length || 0} harness proposal(s).` : `Harness detection failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (!resp.ok) {
+                renderJson(learningDetailOutput, data || `Harness detection failed (${resp.status})`);
+                return;
+            }
+            learningKindInput.value = 'harness_change';
+            await loadLearningProposals();
+        }
+
+        async function loadHarnessContracts() {
+            const params = new URLSearchParams();
+            if (harnessStatusInput.value) params.set('status', harnessStatusInput.value);
+            if (harnessRiskInput.value) params.set('riskLevel', harnessRiskInput.value);
+            if (harnessTagInput.value.trim()) params.set('tag', harnessTagInput.value.trim());
+            const { resp, data } = await api(`/admin/harness/contracts?${params.toString()}`);
+            if (!resp.ok) {
+                harnessListOutput.textContent = `Harness contracts request failed (${resp.status})`;
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                harnessListOutput.textContent = 'No harness contracts matched the current filters.';
+                return;
+            }
+
+            harnessListOutput.innerHTML = items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${escapeHtml(item.goal || item.id)}</strong>
+                    <div class="muted">${escapeHtml(item.status || 'draft')} · risk ${escapeHtml(item.riskLevel || 'medium')} · approval ${escapeHtml(item.approvalRequired || 'none')}</div>
+                    <div class="muted">${escapeHtml(item.userRequestSummary || '')}</div>
+                    <div class="muted">Session: ${escapeHtml(item.sourceSessionId || 'none')} · Updated: ${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="actions" style="margin-top:0.75rem;">
+                        <button data-harness-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderHarnessBlock(label, values) {
+            const items = values || [];
+            if (!items.length) return '';
+            return `<h3>${escapeHtml(label)}</h3><pre>${escapeHtml(JSON.stringify(items, null, 2))}</pre>`;
+        }
+
+        function renderHarnessDetail(contract) {
+            harnessState.detail = contract;
+            if (!contract) {
+                harnessDetailOutput.innerHTML = '<div class="muted">Select a harness contract.</div>';
+                return;
+            }
+
+            harnessDetailOutput.innerHTML = `
+                <div class="stack">
+                    <div>
+                        <strong>${escapeHtml(contract.goal || contract.id)}</strong>
+                        <div class="muted">${escapeHtml(contract.status || 'draft')} · risk ${escapeHtml(contract.riskLevel || 'medium')} · approval ${escapeHtml(contract.approvalRequired || 'none')}</div>
+                        <div class="muted">Actor: ${escapeHtml(contract.actorId || 'unknown')} · Session: ${escapeHtml(contract.sourceSessionId || 'none')}</div>
+                        <div class="muted">Created: ${escapeHtml(formatDateTime(contract.createdAtUtc))} · Updated: ${escapeHtml(formatDateTime(contract.updatedAtUtc))}</div>
+                        <div class="muted">Approval reason: ${escapeHtml(contract.approvalReason || 'none')}</div>
+                    </div>
+                    ${renderHarnessBlock('Planned Actions', contract.plannedActions)}
+                    ${renderHarnessBlock('Read Set', contract.readSet)}
+                    ${renderHarnessBlock('Write Set', contract.writeSet)}
+                    ${renderHarnessBlock('Tools Required', contract.toolsRequired)}
+                    ${renderHarnessBlock('Verification Plan', contract.verificationPlan)}
+                    ${renderHarnessBlock('Rollback Plan', contract.rollbackPlan)}
+                    ${renderHarnessBlock('Assumptions', contract.assumptions)}
+                    ${renderHarnessBlock('Constraints', contract.constraints)}
+                    ${renderHarnessBlock('Success Criteria', contract.successCriteria)}
+                    <pre>${escapeHtml(JSON.stringify(contract, null, 2))}</pre>
+                </div>
+            `;
+        }
+
+        async function loadHarnessContractDetail(id) {
+            if (!id) return;
+            harnessState.selectedId = id;
+            const { resp, data } = await api(`/admin/harness/contracts/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                harnessDetailOutput.innerHTML = `<div class="muted">Harness contract detail failed (${resp.status})</div>`;
+                return;
+            }
+
+            renderHarnessDetail(data.contract);
+        }
+
+        async function loadEvidenceBundles() {
+            const params = new URLSearchParams();
+            if (evidenceSessionInput.value.trim()) params.set('sourceSessionId', evidenceSessionInput.value.trim());
+            if (evidenceContractInput.value.trim()) params.set('harnessContractId', evidenceContractInput.value.trim());
+            if (evidenceConfidenceInput.value) params.set('confidence', evidenceConfidenceInput.value);
+            if (evidenceTagInput.value.trim()) params.set('tag', evidenceTagInput.value.trim());
+            const query = params.toString();
+            const { resp, data } = await api(`/admin/harness/evidence${query ? `?${query}` : ''}`);
+            if (!resp.ok) {
+                evidenceListOutput.textContent = `Evidence bundles request failed (${resp.status})`;
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                evidenceListOutput.textContent = 'No evidence bundles matched the current filters.';
+                return;
+            }
+
+            evidenceListOutput.innerHTML = items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${escapeHtml(item.title || item.id)}</strong>
+                    <div class="muted">Confidence ${escapeHtml(item.confidence || 'unknown')} · Items ${(item.items || []).length} · Checks ${(item.checks || []).length}</div>
+                    <div class="muted">${escapeHtml(item.summary || '')}</div>
+                    <div class="muted">Session: ${escapeHtml(item.sourceSessionId || 'none')} · Contract: ${escapeHtml(item.harnessContractId || 'none')}</div>
+                    <div class="muted">Updated: ${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="actions" style="margin-top:0.75rem;">
+                        <button data-evidence-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderEvidenceBlock(label, values) {
+            const items = values || [];
+            if (!items.length) return '';
+            return `<h3>${escapeHtml(label)}</h3><pre>${escapeHtml(JSON.stringify(items, null, 2))}</pre>`;
+        }
+
+        function renderEvidenceDetail(bundle) {
+            evidenceState.detail = bundle;
+            if (!bundle) {
+                evidenceDetailOutput.innerHTML = '<div class="muted">Select an evidence bundle.</div>';
+                return;
+            }
+
+            evidenceDetailOutput.innerHTML = `
+                <div class="stack">
+                    <div>
+                        <strong>${escapeHtml(bundle.title || bundle.id)}</strong>
+                        <div class="muted">Confidence ${escapeHtml(bundle.confidence || 'unknown')} · Session ${escapeHtml(bundle.sourceSessionId || 'none')}</div>
+                        <div class="muted">Contract: ${escapeHtml(bundle.harnessContractId || 'none')} · Proposal: ${escapeHtml(bundle.learningProposalId || 'none')}</div>
+                        <div class="muted">Tool call: ${escapeHtml(bundle.toolCallId || 'none')} · Automation: ${escapeHtml(bundle.automationRunId || 'none')}</div>
+                        <div class="muted">Created: ${escapeHtml(formatDateTime(bundle.createdAtUtc))} · Updated: ${escapeHtml(formatDateTime(bundle.updatedAtUtc))}</div>
+                        <div class="muted">${escapeHtml(bundle.summary || '')}</div>
+                    </div>
+                    ${renderEvidenceBlock('Items', bundle.items)}
+                    ${renderEvidenceBlock('Checks', bundle.checks)}
+                    ${renderEvidenceBlock('Risks', bundle.risks)}
+                    ${renderEvidenceBlock('Assumptions', bundle.assumptions)}
+                    ${renderEvidenceBlock('Untested Areas', bundle.untestedAreas)}
+                    ${renderEvidenceBlock('Human Reviews', bundle.humanReviews)}
+                    <pre>${escapeHtml(JSON.stringify(bundle, null, 2))}</pre>
+                </div>
+            `;
+        }
+
+        async function loadEvidenceBundleDetail(id) {
+            if (!id) return;
+            evidenceState.selectedId = id;
+            const { resp, data } = await api(`/admin/harness/evidence/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                evidenceDetailOutput.innerHTML = `<div class="muted">Evidence bundle detail failed (${resp.status})</div>`;
+                return;
+            }
+
+            renderEvidenceDetail(data.bundle);
+        }
+
+        async function loadGovernanceLedger() {
+            if (!canViewGovernanceLedger()) {
+                resetGovernanceUi(currentAuth ? 'Access denied.' : 'Login required.');
+                return;
+            }
+
+            const params = new URLSearchParams();
+            if (governanceDecisionInput.value) params.set('decision', governanceDecisionInput.value);
+            if (governanceStatusInput.value) params.set('status', governanceStatusInput.value);
+            if (governanceToolInput.value.trim()) params.set('toolName', governanceToolInput.value.trim());
+            if (governanceRiskInput.value) params.set('riskLevel', governanceRiskInput.value);
+            if (governanceScopeInput.value) params.set('scope', governanceScopeInput.value);
+            if (governanceSessionInput.value.trim()) params.set('sessionId', governanceSessionInput.value.trim());
+            if (governanceActorInput.value.trim()) params.set('actorId', governanceActorInput.value.trim());
+            if (governanceTagInput.value.trim()) params.set('tag', governanceTagInput.value.trim());
+            const query = params.toString();
+            const { resp, data } = await api(`/admin/governance/ledger${query ? `?${query}` : ''}`);
+            if (!resp.ok) {
+                governanceListOutput.textContent = `Governance ledger request failed (${resp.status})`;
+                return;
+            }
+
+            const items = data.items || [];
+            if (!items.length) {
+                governanceState.selectedId = null;
+                governanceState.detail = null;
+                governanceRevokeReasonInput.value = '';
+                governanceDetailOutput.innerHTML = '<div class="muted">Select a governance ledger entry.</div>';
+                applyGovernanceAccessState();
+                governanceListOutput.textContent = 'No governance ledger entries matched the current filters.';
+                return;
+            }
+
+            governanceListOutput.innerHTML = items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${escapeHtml(item.actionSummary || item.id)}</strong>
+                    <div class="muted">${escapeHtml(item.decision || 'unknown')} · ${escapeHtml(item.status || 'active')} · risk ${escapeHtml(item.riskLevel || 'unknown')} · scope ${escapeHtml(item.scope || 'unknown')}</div>
+                    <div class="muted">Tool: ${escapeHtml(item.toolName || 'none')} · Action: ${escapeHtml(item.actionType || 'none')}</div>
+                    <div class="muted">Session: ${escapeHtml(item.sessionId || 'none')} · Decided by: ${escapeHtml(item.decidedBy || 'unknown')}</div>
+                    <div class="muted">Updated: ${escapeHtml(formatDateTime(item.updatedAtUtc || item.createdAtUtc))}</div>
+                    <div class="actions" style="margin-top:0.75rem;">
+                        <button data-governance-inspect="${encodeURIComponent(item.id)}">Inspect</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function renderGovernanceBlock(label, value) {
+            if (!value) return '';
+            if (Array.isArray(value) && !value.length) return '';
+            return `<h3>${escapeHtml(label)}</h3><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre>`;
+        }
+
+        function renderGovernanceDetail(entry) {
+            governanceState.detail = entry;
+            if (!entry) {
+                governanceState.selectedId = null;
+                governanceDetailOutput.innerHTML = '<div class="muted">Select a governance ledger entry.</div>';
+                applyGovernanceAccessState();
+                return;
+            }
+
+            governanceDetailOutput.innerHTML = `
+                <div class="stack">
+                    <div>
+                        <strong>${escapeHtml(entry.actionSummary || entry.id)}</strong>
+                        <div class="muted">${escapeHtml(entry.decision || 'unknown')} · ${escapeHtml(entry.status || 'active')} · risk ${escapeHtml(entry.riskLevel || 'unknown')} · source ${escapeHtml(entry.source || 'unknown')}</div>
+                        <div class="muted">Tool: ${escapeHtml(entry.toolName || 'none')} · Action: ${escapeHtml(entry.actionType || 'none')}</div>
+                        <div class="muted">Scope: ${escapeHtml(entry.scope || 'unknown')} · Scope key: ${escapeHtml(entry.scopeKey || 'none')}</div>
+                        <div class="muted">Session: ${escapeHtml(entry.sessionId || 'none')} · Approval: ${escapeHtml(entry.approvalId || 'none')}</div>
+                        <div class="muted">Contract: ${escapeHtml(entry.harnessContractId || 'none')} · Evidence: ${escapeHtml(entry.evidenceBundleId || 'none')} · Proposal: ${escapeHtml(entry.learningProposalId || 'none')}</div>
+                        <div class="muted">Decided by: ${escapeHtml(entry.decidedBy || 'unknown')} · Reason: ${escapeHtml(entry.decisionReason || 'none')}</div>
+                        <div class="muted">Created: ${escapeHtml(formatDateTime(entry.createdAtUtc))} · Updated: ${escapeHtml(formatDateTime(entry.updatedAtUtc))}</div>
+                        <div class="muted">Revoked: ${escapeHtml(entry.revokedAtUtc ? formatDateTime(entry.revokedAtUtc) : 'no')} · ${escapeHtml(entry.revocationReason || '')}</div>
+                    </div>
+                    ${renderGovernanceBlock('Redacted Arguments', entry.redactedArguments)}
+                    ${renderGovernanceBlock('Policy Hint', entry.policyHint)}
+                    ${renderGovernanceBlock('Tags', entry.tags)}
+                    ${renderGovernanceBlock('Metadata', entry.metadata)}
+                    <pre>${escapeHtml(JSON.stringify(entry, null, 2))}</pre>
+                </div>
+            `;
+            applyGovernanceAccessState();
+        }
+
+        async function loadGovernanceLedgerDetail(id) {
+            if (!id || !canViewGovernanceLedger()) return;
+            governanceState.selectedId = id;
+            const { resp, data } = await api(`/admin/governance/ledger/${encodeURIComponent(id)}`);
+            if (!resp.ok) {
+                governanceDetailOutput.innerHTML = `<div class="muted">Governance ledger detail failed (${resp.status})</div>`;
+                return;
+            }
+
+            renderGovernanceDetail(data.entry);
+        }
+
+        async function revokeGovernanceLedgerEntry() {
+            if (!canMutateGovernanceLedger()) {
+                showFlash('Governance revoke requires operator access.', 'warn');
+                return;
+            }
+
+            if (!governanceState.selectedId) {
+                showFlash('Select a governance ledger entry first.', 'warn');
+                return;
+            }
+
+            const { resp, data } = await mutate(`/admin/governance/ledger/${encodeURIComponent(governanceState.selectedId)}/revoke`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ reason: governanceRevokeReasonInput.value.trim() || null })
+            });
+            showFlash(resp.ok ? 'Governance ledger entry revoked.' : `Governance revoke failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+            if (!resp.ok) {
+                renderJson(governanceDetailOutput, data || `Governance revoke failed (${resp.status})`);
+                return;
+            }
+
+            renderGovernanceDetail(data.entry);
+            await loadGovernanceLedger();
         }
 
         async function loadDoctor() {
@@ -4218,6 +5630,8 @@
                 memoryNotesOutput.textContent = 'Login required.';
                 memoryNoteDetailOutput.textContent = 'Login required.';
                 memoryExportOutput.textContent = 'Login required.';
+                fractalMemoryStatusOutput.textContent = 'Login required.';
+                fractalMemoryRecentOutput.textContent = 'Login required.';
                 approvalsOutput.textContent = 'Login required.';
                 approvalsHistoryOutput.textContent = 'Login required.';
                 sessionsOutput.textContent = 'Login required.';
@@ -4232,6 +5646,7 @@
                 heartbeatTemplates.textContent = 'Login required.';
                 heartbeatSuggestions.textContent = 'Login required.';
                 heartbeatTasks.innerHTML = '';
+                pulseStatusOutput.textContent = 'Login required.';
                 settingsStatus.textContent = 'Login required.';
                 settingsPersistence.textContent = '';
                 settingsRestartFields.innerHTML = '<li>Login required.</li>';
@@ -4254,6 +5669,7 @@
                 learningListOutput.textContent = 'Login required.';
                 learningDetailOutput.innerHTML = '<div class="muted">Login required.</div>';
                 setupStatusOutput.textContent = 'Login required.';
+                renderTailscaleServeStatus(null);
                 operatorAccountsOutput.textContent = 'Login required.';
                 organizationPolicyOutput.textContent = 'Login required.';
                 setupVerifyOutput.textContent = 'Login required.';
@@ -4263,6 +5679,7 @@
                 observabilitySeriesOutput.textContent = 'Login required.';
                 auditExportOutput.textContent = 'Login required.';
                 trajectoryExportOutput.textContent = 'Login required.';
+                resetGovernanceUi('Login required.');
                 migrationReportOutput.textContent = 'Load a local migration report after login.';
                 if (approvalsPollTimer) {
                     clearInterval(approvalsPollTimer);
@@ -4278,6 +5695,7 @@
                 loadDoctor(),
                 loadRetention(),
                 loadMemoryNotes(),
+                loadFractalMemoryStatus(),
                 loadApprovals(),
                 loadApprovalHistory(),
                 loadProviders(),
@@ -4290,16 +5708,25 @@
                 loadDeadLetter(),
                 loadRateLimits(),
                 loadSessions(),
+                loadPulse(),
                 loadHeartbeat(),
                 loadAutomationTemplates(),
                 loadAutomations(),
                 loadLearningProposals(),
+                loadHarnessContracts(),
+                loadEvidenceBundles(),
                 loadSettings(),
                 loadWhatsAppSetup(),
                 loadPairing(),
                 loadAllowlists(),
                 loadObservability()
             ];
+
+            if (canViewGovernanceLedger()) {
+                tasks.push(loadGovernanceLedger());
+            } else {
+                resetGovernanceUi('Access denied.');
+            }
 
             if (hasRole('admin')) {
                 tasks.push(loadOperatorAccounts(), loadOrganizationPolicy());
@@ -4340,6 +5767,19 @@
         refreshButton.addEventListener('click', refreshAll);
         document.getElementById('setup-status-refresh-button').addEventListener('click', loadSetupStatus);
         document.getElementById('setup-verify-button').addEventListener('click', loadSetupVerification);
+        document.getElementById('tailscale-run-doctor-button').addEventListener('click', loadDoctor);
+        tailscaleCopyCommandButton.addEventListener('click', async () => {
+            if (!tailscaleSuggestedCommand) {
+                showFlash('No Tailscale Serve command is available.', 'warn');
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(tailscaleSuggestedCommand);
+                showFlash('Tailscale Serve command copied.', 'ok');
+            } catch {
+                showFlash('Copy failed. Select the command from the Tailscale Serve card.', 'warn');
+            }
+        });
         document.getElementById('setup-wizard-run-button').addEventListener('click', runFirstOperatorWizard);
         document.getElementById('operator-accounts-refresh-button').addEventListener('click', loadOperatorAccounts);
         document.getElementById('operator-account-create-button').addEventListener('click', createOperatorAccount);
@@ -4374,11 +5814,41 @@
         document.getElementById('automation-dry-run-button').addEventListener('click', async () => runAutomation(true));
         document.getElementById('automation-delete-button').addEventListener('click', deleteAutomation);
         document.getElementById('learning-refresh-button').addEventListener('click', loadLearningProposals);
+        document.getElementById('learning-detect-harness-button').addEventListener('click', detectHarnessEvolutionProposals);
         document.getElementById('learning-approve-button').addEventListener('click', async () => reviewLearningProposal('approve'));
         document.getElementById('learning-reject-button').addEventListener('click', async () => reviewLearningProposal('reject'));
         document.getElementById('learning-rollback-button').addEventListener('click', async () => reviewLearningProposal('rollback'));
-        [learningStatusInput, learningKindInput].forEach(input => {
+        [learningStatusInput, learningKindInput, learningComponentInput, learningRiskInput].forEach(input => {
             input.addEventListener('change', loadLearningProposals);
+        });
+        document.getElementById('harness-refresh-button').addEventListener('click', loadHarnessContracts);
+        [harnessStatusInput, harnessRiskInput].forEach(input => {
+            input.addEventListener('change', loadHarnessContracts);
+        });
+        harnessTagInput.addEventListener('keydown', async (event) => {
+            if (event.key !== 'Enter') return;
+            await loadHarnessContracts();
+        });
+        document.getElementById('evidence-refresh-button').addEventListener('click', loadEvidenceBundles);
+        [evidenceConfidenceInput].forEach(input => {
+            input.addEventListener('change', loadEvidenceBundles);
+        });
+        [evidenceSessionInput, evidenceContractInput, evidenceTagInput].forEach(input => {
+            input.addEventListener('keydown', async (event) => {
+                if (event.key !== 'Enter') return;
+                await loadEvidenceBundles();
+            });
+        });
+        governanceRefreshButton.addEventListener('click', loadGovernanceLedger);
+        governanceRevokeButton.addEventListener('click', revokeGovernanceLedgerEntry);
+        [governanceDecisionInput, governanceStatusInput, governanceRiskInput, governanceScopeInput].forEach(input => {
+            input.addEventListener('change', loadGovernanceLedger);
+        });
+        [governanceToolInput, governanceSessionInput, governanceActorInput, governanceTagInput].forEach(input => {
+            input.addEventListener('keydown', async (event) => {
+                if (event.key !== 'Enter') return;
+                await loadGovernanceLedger();
+            });
         });
         document.getElementById('memory-refresh-button').addEventListener('click', loadMemoryNotes);
         document.getElementById('memory-search-button').addEventListener('click', loadMemoryNotes);
@@ -4394,6 +5864,8 @@
         document.getElementById('memory-delete-button').addEventListener('click', deleteMemoryNote);
         document.getElementById('memory-export-button').addEventListener('click', exportMemoryBundle);
         document.getElementById('memory-import-button').addEventListener('click', importMemoryBundle);
+        document.getElementById('fractal-memory-refresh-button').addEventListener('click', loadFractalMemoryStatus);
+        document.getElementById('fractal-memory-validate-button').addEventListener('click', validateFractalMemory);
         document.getElementById('whatsapp-reload-button').addEventListener('click', async () => {
             await loadWhatsAppSetup();
             showFlash('WhatsApp setup reloaded.', 'ok');
@@ -4472,6 +5944,36 @@
             await loadApprovals();
             await loadApprovalHistory();
             showFlash(resp.ok ? `Approval ${approved ? 'granted' : 'denied'} for ${approvalId}.` : `Approval update failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        });
+
+        harnessListOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-harness-inspect]');
+            if (!button) return;
+
+            const encodedId = button.getAttribute('data-harness-inspect');
+            if (!encodedId) return;
+
+            await loadHarnessContractDetail(decodeURIComponent(encodedId));
+        });
+
+        evidenceListOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-evidence-inspect]');
+            if (!button) return;
+
+            const encodedId = button.getAttribute('data-evidence-inspect');
+            if (!encodedId) return;
+
+            await loadEvidenceBundleDetail(decodeURIComponent(encodedId));
+        });
+
+        governanceListOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-governance-inspect]');
+            if (!button) return;
+
+            const encodedId = button.getAttribute('data-governance-inspect');
+            if (!encodedId) return;
+
+            await loadGovernanceLedgerDetail(decodeURIComponent(encodedId));
         });
 
         memoryNotesOutput.addEventListener('click', async (event) => {
@@ -4614,6 +6116,12 @@
             await loadHeartbeat();
             showFlash('Heartbeat reloaded from the server.', 'ok');
         });
+        document.getElementById('pulse-reload-button').addEventListener('click', async () => {
+            await loadPulse();
+            showFlash('Runtime Pulse reloaded from the server.', 'ok');
+        });
+        document.getElementById('pulse-run-button').addEventListener('click', runPulseNow);
+        document.getElementById('pulse-events-button').addEventListener('click', loadPulseEvents);
 
         document.getElementById('heartbeat-preview-button').addEventListener('click', previewHeartbeat);
         document.getElementById('heartbeat-save-button').addEventListener('click', saveHeartbeat);

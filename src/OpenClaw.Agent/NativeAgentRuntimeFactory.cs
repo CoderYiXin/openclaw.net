@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using OpenClaw.Agent.Routing;
 using OpenClaw.Agent.Tools;
 
 namespace OpenClaw.Agent;
@@ -43,11 +44,20 @@ public sealed class NativeAgentRuntimeFactory : IAgentRuntimeFactory
             toolUsageTracker: toolUsageTracker,
             executionRouter: context.Services.GetService(typeof(Execution.ToolExecutionRouter)) as Execution.ToolExecutionRouter,
             toolPresetResolver: context.Services.GetService(typeof(OpenClaw.Core.Abstractions.IToolPresetResolver)) as OpenClaw.Core.Abstractions.IToolPresetResolver,
+            redaction: context.Services.GetService(typeof(OpenClaw.Core.Security.IRedactionPipeline)) as OpenClaw.Core.Security.IRedactionPipeline,
+            sentinelSubstitution: context.Services.GetService(typeof(OpenClaw.Core.Security.ISentinelSubstitutionService)) as OpenClaw.Core.Security.ISentinelSubstitutionService,
+            toolGovernance: context.ToolGovernance,
+            planExecuteVerify: context.PlanExecuteVerify,
+            contextBudgetPlanner: context.Services.GetService(typeof(OpenClaw.Core.Memory.ContextBudgetPlanner)) as OpenClaw.Core.Memory.ContextBudgetPlanner,
+            turnRoutingPolicy: context.Services.GetService(typeof(ITurnRoutingPolicy)) as ITurnRoutingPolicy,
             isContractTokenBudgetExceeded: context.IsContractTokenBudgetExceeded,
             isContractRuntimeBudgetExceeded: context.IsContractRuntimeBudgetExceeded,
             recordContractTurnUsage: context.RecordContractTurnUsage,
             appendContractSnapshot: context.AppendContractSnapshot,
-            toolAuditLog: context.ToolAuditLog);
+            turnTokenUsageObserver: context.TurnTokenUsageObserver,
+            toolAuditLog: context.ToolAuditLog,
+            goalService: context.Services.GetService(typeof(OpenClaw.Core.Abstractions.IGoalService)) as OpenClaw.Core.Abstractions.IGoalService,
+            interceptors: context.Interceptors);
 
     public IAgentRuntime Create(AgentRuntimeFactoryContext context)
     {

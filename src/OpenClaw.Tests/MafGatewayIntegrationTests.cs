@@ -1,4 +1,3 @@
-#if OPENCLAW_ENABLE_MAF_EXPERIMENT
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -163,7 +162,7 @@ public sealed class MafGatewayIntegrationTests
             var secondOutbound = await channelAdapter.ReadAsync(TimeSpan.FromSeconds(5));
             Assert.Equal("Earlier tool result was echo:first turn.", secondOutbound.Text);
 
-            var session = await sessionManager.LoadAsync("telegram:user-maf", CancellationToken.None);
+            var session = await sessionManager.LoadAsync("telegram:user-maf", TestContext.Current.CancellationToken);
             Assert.NotNull(session);
             Assert.Contains(session!.History, turn => turn.Content == "[tool_use]");
             Assert.Contains(
@@ -231,7 +230,7 @@ public sealed class MafGatewayIntegrationTests
 
         try
         {
-            await foreach (var evt in runtime.RunStreamingAsync(session, "Stream a reply.", CancellationToken.None))
+            await foreach (var evt in runtime.RunStreamingAsync(session, "Stream a reply.", TestContext.Current.CancellationToken))
                 events.Add(evt);
 
             Assert.Contains(events, e => e.Type == AgentStreamEventType.TextDelta && e.Content == "Hello ");
@@ -300,7 +299,7 @@ public sealed class MafGatewayIntegrationTests
 
         try
         {
-            await foreach (var evt in runtime.RunStreamingAsync(session, "Stream a tool response.", CancellationToken.None))
+            await foreach (var evt in runtime.RunStreamingAsync(session, "Stream a tool response.", TestContext.Current.CancellationToken))
                 events.Add(evt);
 
             Assert.Contains(events, e => e.Type == AgentStreamEventType.ToolStart && e.ToolName == "stream_echo");
@@ -622,13 +621,12 @@ public sealed class MafGatewayIntegrationTests
     {
         private readonly CancellationTokenSource _stopping = new();
 
-        public CancellationToken ApplicationStarted => CancellationToken.None;
+        public CancellationToken ApplicationStarted => TestContext.Current.CancellationToken;
         public CancellationToken ApplicationStopping => _stopping.Token;
-        public CancellationToken ApplicationStopped => CancellationToken.None;
+        public CancellationToken ApplicationStopped => TestContext.Current.CancellationToken;
 
         public void StopApplication() => _stopping.Cancel();
 
         public void Dispose() => _stopping.Cancel();
     }
 }
-#endif

@@ -30,5 +30,16 @@ public sealed class MediaMarkerProtocolTests
         Assert.Equal(MediaMarkerKind.TelegramImageFileId, marker.Kind);
         Assert.Equal("abc123", marker.Value);
     }
-}
 
+    [Theory]
+    [InlineData("[VIDEO:telegram:file_id=vid123]", MediaMarkerKind.TelegramVideoFileId, "vid123")]
+    [InlineData("[AUDIO:telegram:file_id=aud123]", MediaMarkerKind.TelegramAudioFileId, "aud123")]
+    [InlineData("[DOCUMENT:telegram:file_id=doc123]", MediaMarkerKind.TelegramDocumentFileId, "doc123")]
+    [InlineData("[STICKER:telegram:file_id=stk123]", MediaMarkerKind.TelegramStickerFileId, "stk123")]
+    public void TryParseMarker_ParsesTelegramMediaFileIds(string input, MediaMarkerKind expectedKind, string expectedValue)
+    {
+        Assert.True(MediaMarkerProtocol.TryParseMarker(input, out var marker));
+        Assert.Equal(expectedKind, marker.Kind);
+        Assert.Equal(expectedValue, marker.Value);
+    }
+}

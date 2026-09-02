@@ -14,6 +14,26 @@ This is the canonical compatibility matrix for OpenClaw.NET. It covers runtime m
 - `OpenClaw:Runtime:Mode=aot` forces the strict trim-safe lane even on a JIT-capable build.
 - `OpenClaw:Runtime:Mode=jit` enables the expanded plugin and dynamic-native lane.
 
+## MCP v2 Compatibility (C# SDK 2.0.0)
+
+OpenClaw.NET now targets `ModelContextProtocol` / `ModelContextProtocol.AspNetCore` `2.0.0` and enables the Tasks extension on the gateway MCP server.
+
+| Surface | Status | Notes |
+| --- | --- | --- |
+| Gateway `/mcp` on MCP v2 SDK | Supported | Gateway MCP services run on `ModelContextProtocol.AspNetCore` `2.0.0` with stateless transport by default. |
+| MCP Tasks extension | Supported | Registered via `ModelContextProtocol.Extensions.Tasks` with in-memory task store for async task operations. |
+| Discover-first negotiation | Supported with caveats | Default path is discover-first; legacy clients can still initialize through compatibility handling. |
+| Required `inputSchema` handling | Supported with caveats | Tool schema validation is strict by default; missing/defaulted schema is skipped on MCP App enumeration. |
+
+Compatibility switches (Gateway config):
+
+- `OpenClaw:McpCompatibility:ForceLegacyInitialize=true`
+  - Forces legacy initialize-first behavior (disables stateless discover-first mode).
+- `OpenClaw:McpCompatibility:AllowRelaxedInputSchemaValidation=true`
+  - Reserved flag only. It is not currently wired into MCP App enumeration; with the current SDK, omitted `inputSchema` may still surface as synthesized `{"type":"object"}` on that path.
+- `OpenClaw:McpCompatibility:EnableDiscoveryFirst=true`
+  - Keeps discover-first path enabled (default).
+
 ## Upstream Skill Compatibility
 
 | Surface | Status | Notes |
@@ -31,44 +51,55 @@ OpenClaw.NET keeps plugin compatibility explicit by runtime mode. The goal is to
 | Surface | Status | Notes |
 | --- | --- | --- |
 | `api.registerTool()` | Supported | Available in both `aot` and `jit`. Covered by hermetic bridge tests. |
+| Tool `outputSchema` and structured `details` | Supported | Output schemas are exposed to the model tool contract and structured results remain JSON instead of being flattened to text. |
 | `api.registerService()` | Supported | Available in both `aot` and `jit`, including `start` / `stop` lifecycle coverage. |
 | `api.registerChannel()` | Supported with caveats | `jit` only. `aot` fails fast with `jit_mode_required`. |
 | `api.registerCommand()` | Supported with caveats | `jit` only. Registered as dynamic chat commands. |
 | `api.on(...)` | Supported with caveats | `jit` only. `tool:before` / `tool:after` hooks are bridged with timeout protections. |
 | `api.registerProvider()` | Supported with caveats | `jit` only. Plugin-provided LLMs are wired through the dynamic provider seam. |
-| Standalone `.js`, `.mjs`, `.ts` in `.openclaw/extensions` | Supported with caveats | `.ts` requires local `jiti`. |
-| Manifest/package discovery via `Plugins:Load:Paths` | Supported | Includes `openclaw.plugin.json` and `package.json` `openclaw.extensions`. |
-| `openclaw plugins install --dry-run` trust inspection | Supported | Prints trust level, declared surface, diagnostics, and blocks install when compatibility errors are present. |
+| `OpenClaw.Providers.MicrosoftExtensionsAI` | Supported with caveats | `jit` only through native dynamic plugins. Use this to bring an arbitrary `IChatClient`; AOT users should use built-in providers or OpenAI-compatible endpoints. |
+| Standalone `.js`, `.mjs`, `.cjs`, `.ts` in `.openclaw/extensions` | Supported with caveats | CLI installs add local `jiti` when a TypeScript entry needs it; manually configured TypeScript paths still require `jiti` in their dependency tree. |
+| Manifest/package discovery via `Plugins:Load:Paths` | Supported | Includes `openclaw.plugin.json`; prefers `package.json` `openclaw.runtimeExtensions` and retains `openclaw.extensions` compatibility. Built JavaScript entries are preferred over TypeScript source. |
+| Package compatibility metadata | Supported with caveats | `openclaw.compat.pluginApi`, `compat.minGatewayVersion`, and `install.minHostVersion` are enforced before load. `install.expectedIntegrity` is discovered but fails closed because an extracted directory cannot yet be verified against package-manager integrity metadata. |
+| `openclaw plugins install --dry-run` trust inspection | Supported | Prints manifest/package/static compatibility rather than claiming runtime verification. Known unsupported registration APIs block installation. |
+| Staged plugin installation | Supported | Dependencies and any required `jiti` runtime are installed in a sibling staging directory with npm lifecycle scripts disabled, the bridge initializes the staged plugin, and only then is the existing install replaced atomically. A failed update preserves the previous plugin. |
+| Codex compatible bundles | Supported with caveats | Detects `.codex-plugin/plugin.json`; maps `skills/` into plugin skills. Hook packs, MCP metadata, and app metadata are reported as detected-only because OpenClaw.NET does not yet execute those bundle surfaces. |
+| Claude compatible bundles | Supported with caveats | Detects `.claude-plugin/plugin.json` and manifestless Claude layouts. Maps `skills/` and Markdown `commands/`; agents, hook automation, MCP, LSP, settings, and output styles are reported as detected-only. |
+| Cursor compatible bundles | Supported with caveats | Detects `.cursor-plugin/plugin.json` and `.cursor/` layouts. Maps `skills/` and `.cursor/commands/`; agents, rules, hooks, and MCP metadata are reported as detected-only. |
+| Bundle trust boundary | Supported | Native plugin detection has precedence. Bundle JavaScript is never loaded as a native plugin, bundle installs do not run npm dependency/lifecycle scripts, and all mapped content paths remain constrained to the bundle root. |
 | Plugin config validation | Supported with caveats | Validated against the documented JSON Schema subset below before startup. |
+| `api.registerCli()` | Supported with caveats | Root commands are discovered lazily and executed in a one-shot Node bridge with inherited terminal streams. Built-in CLI roots win; names are validated and duplicate plugin roots fail closed. The bridge implements the common Commander registration subset used by upstream plugins. |
 | Plugin diagnostics in `/doctor` | Supported | Discovery, load, config, and compatibility failures are reported explicitly. |
 | Plugin bridge runtime budgets | Supported | `OpenClaw:Plugins:RuntimeBudget` can auto-quarantine bridge plugins by restart count, working set, and compatibility error thresholds. |
 | `Plugins:Transport:Mode=stdio` | Supported | JSON-RPC over child process stdin/stdout. |
 | `Plugins:Transport:Mode=socket` | Supported | Local IPC with authenticated handshake and private runtime socket directories. |
 | `Plugins:Transport:Mode=hybrid` | Supported | `init` over stdio, then runtime RPC/notifications over the local IPC socket transport. |
 | Native dynamic .NET plugins | Supported with caveats | `jit` only through `OpenClaw:Plugins:DynamicNative`. AOT fails fast before load. |
+| Upstream/TypeScript `payment` plugin live execution | Not supported | Native OpenClaw.NET payment runtime owns live payment secrets. Bridge plugins named/providing `payment` are diagnostic/test-only unless explicitly sandboxed; live execution routes through the native `payment` tool. |
 
 ## Unsupported Today
 
-These APIs are not bridged. If a plugin uses them, initialization fails fast with structured diagnostics instead of loading partially:
+This API is not bridged. Static install inspection and bridge initialization fail with structured diagnostics instead of loading the plugin partially:
 
 | Surface | Status | Failure code |
 | --- | --- | --- |
 | `api.registerGatewayMethod()` | Not supported | `unsupported_gateway_method` |
-| `api.registerCli()` | Not supported | `unsupported_cli_registration` |
 
 ## Canvas and A2UI Compatibility
 
-OpenClaw.NET ships a v1 Canvas/A2UI workspace for websocket clients. The supported target is local Canvas content plus A2UI v0.8 JSONL; remote webpage Canvas control and A2UI v0.9 surfaces remain intentionally unsupported. See [CANVAS_A2UI.md](CANVAS_A2UI.md).
+OpenClaw.NET ships a Canvas/A2UI workspace for websocket clients. The supported target is local Canvas content, A2UI v0.8 JSONL compatibility, and A2UI v0.9 structured surfaces with catalog negotiation; remote webpage Canvas control remains intentionally unsupported. See [CANVAS_A2UI.md](CANVAS_A2UI.md).
 
 | Surface | Status | Notes |
 | --- | --- | --- |
-| Canvas present/hide/snapshot commands | Supported | Typed websocket envelopes routed through the session-scoped broker. |
+| Canvas present/hide/snapshot commands | Supported | Typed websocket envelopes routed through the session-scoped broker. Snapshots can target a specific `surfaceId`. |
 | Local Canvas navigation | Supported with caveats | `about:blank` is supported. Inline local HTML is supported in webchat via sandboxed `srcdoc`; Companion reports an unsupported diagnostic without a native WebView. |
 | Remote webpage Canvas navigation/eval | Not supported | `http:` and `https:` URLs are rejected; use the browser tool for remote pages. |
-| A2UI v0.8 JSONL rendering | Supported | Webchat and Companion render text, markdown, card, button, input, select, checklist, table, image, progress, and simple chart frames. |
-| A2UI interaction event feedback | Supported | Client events return as structured `a2ui_event` session turns. |
-| A2UI eval | Supported with caveats | The gateway tool is capability-gated, but no first-party v1 client advertises `a2ui.eval`; webchat and Companion return unsupported diagnostics. |
-| A2UI v0.9 `createSurface` | Not supported | Validation rejects it with an explicit diagnostic. |
+| A2UI v0.8 JSONL rendering | Supported | Webchat and Companion render text, markdown, card, button, input, select, checklist, table, image, progress, and simple chart frames through `a2ui_push`. |
+| A2UI v0.9 structured surfaces | Supported | `a2ui_create_surface`, `a2ui_update_components`, `a2ui_update_data_model`, `a2ui_delete_surface`, and `a2ui_sync_ui_to_data` are capability-gated on `a2ui.v0_9`. |
+| A2UI catalog negotiation | Supported | Clients advertise `supportedCatalogIds`; the broker chooses or validates the requested catalog and locks it per `senderId + sessionId + surfaceId`. |
+| A2UI interaction feedback | Supported | v0.8 client events return as `a2ui_event`; v0.9 surface actions return as `a2ui_action` session turns. |
+| A2UI eval | Supported with caveats | The gateway tool is capability-gated, but no first-party client advertises `a2ui.eval`; webchat and Companion return unsupported diagnostics. |
+| Advanced AGenUI components | Supported with caveats | Webchat and Companion render native subsets and use conservative placeholders/diagnostics for media, carousel, web, or unsupported advanced components. |
 
 ## Channel Compatibility
 
@@ -88,9 +119,9 @@ The messaging channels below now share the same operator model for DM policy, re
 
 ## TypeScript Requirements
 
-TypeScript plugins are supported when `jiti` is available in the plugin dependency tree.
+TypeScript plugins are supported when `jiti` is available in the plugin dependency tree. `openclaw plugins install` installs it into the staged plugin automatically when necessary.
 
-Install it in the plugin directory or its parent workspace:
+For plugins loaded directly from manually configured paths, install it in the plugin directory or its parent workspace:
 
 ```bash
 npm install jiti
@@ -150,11 +181,13 @@ The catalog is scenario-based rather than marketing-based:
 - negative scenarios show pinned configs or packages expected to fail with explicit diagnostics
 - each entry includes install guidance, required config examples where relevant, and expected tools, skills, or diagnostics
 
+Pinned scenarios remain the release gate. The scheduled/manual `LatestCanary` lane separately installs the current npm release for each distinct catalog package and compares it with the pinned expectation. That moving probe is intentionally non-blocking: drift produces a workflow warning, test artifact, resolved package version, and diagnostics without making a known-good pinned release fail.
+
 ## Known Limitations
 
 - Public-bind setup defaults intentionally disable bridge plugins and shell until you opt into the relevant trust settings.
 - JIT-only capabilities remain JIT-only; `aot` does not attempt partial dynamic fallback.
-- TypeScript plugin loading depends on `jiti`; OpenClaw.NET does not bundle a TypeScript runtime automatically.
+- TypeScript plugin loading depends on `jiti`; CLI installs provision it when needed, while plugins loaded directly from configured paths must provide it locally.
 - Out-of-root plugin entry files, manifests, and native dynamic assemblies fail explicitly instead of being resolved elsewhere on disk.
 - Tool-name collisions are deterministic: the first tool wins, later duplicates are skipped and reported.
 
@@ -171,6 +204,18 @@ The compatibility claim is backed by automated validation in `src/OpenClaw.Tests
   - plugin-packaged skills
   - config validation, including `oneOf`
   - unsupported-surface failure modes
+  - bridge restart readiness across stdio, socket, and hybrid transports
+  - structured output-schema and result preservation
+- `PluginCommandsTests.cs`
+  - dry-run compatibility status and unsupported-surface rejection
+  - package API-floor rejection
+  - isolated runtime inspection diagnostics
+  - compatible bundle inspection and mapped/detected-only surface reporting
+- `PluginTests.cs` / `SkillTests.cs`
+  - Codex, Claude, and Cursor bundle detection
+  - native-plugin precedence over dual-format bundle markers
+  - bundle loading without bridge execution
+  - Claude/Cursor Markdown command mapping into user-invocable skills
 - `NativeDynamicPluginHostTests.cs`
   - JIT-mode in-process plugin loading
   - command and service lifecycle
@@ -183,4 +228,4 @@ The compatibility claim is backed by automated validation in `src/OpenClaw.Tests
   - pinned config-schema rejection case
   - pinned unsupported-surface plugin case
 
-The nightly/manual CI smoke lane runs those public packages with `OPENCLAW_PUBLIC_SMOKE=1`.
+The nightly/manual CI smoke lane runs pinned public packages with `OPENCLAW_PUBLIC_SMOKE=1`, then runs the non-blocking moving probe with `OPENCLAW_LATEST_CANARY=1`.

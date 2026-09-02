@@ -10,6 +10,8 @@ using OpenClaw.Agent.Execution;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.ExternalCli;
+using OpenClaw.Core.Features;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Pipeline;
@@ -38,14 +40,29 @@ internal static partial class AdminEndpoints
         var adminSettings = app.Services.GetRequiredService<AdminSettingsService>();
         var pluginAdminSettings = app.Services.GetRequiredService<PluginAdminSettingsService>();
         var heartbeat = app.Services.GetRequiredService<HeartbeatService>();
+        var pulse = app.Services.GetRequiredService<RuntimePulseService>();
         var memoryStore = app.Services.GetRequiredService<IMemoryStore>();
         var memorySearch = memoryStore as IMemoryNoteSearch;
         var memoryCatalog = memoryStore as IMemoryNoteCatalog;
+        var structuredMemoryProvider = app.Services.GetService<IStructuredMemoryProvider>();
         var fallbackFeatureStore = FeatureFallbackServices.CreateFallbackFeatureStore(startup);
         var profileStore = app.Services.GetService<IUserProfileStore>() ?? fallbackFeatureStore;
         var proposalStore = app.Services.GetService<ILearningProposalStore>() ?? fallbackFeatureStore;
         var automationService = FeatureFallbackServices.ResolveAutomationService(startup, app.Services, heartbeat, fallbackFeatureStore);
         var learningService = FeatureFallbackServices.ResolveLearningService(startup, app.Services, fallbackFeatureStore);
+        var harnessContracts = FeatureFallbackServices.ResolveHarnessContractService(startup, app.Services);
+        var evidenceBundles = FeatureFallbackServices.ResolveEvidenceBundleService(startup, app.Services);
+        var governanceLedger = FeatureFallbackServices.ResolveGovernanceLedgerService(startup, app.Services);
+        var sharedHarnessState = FeatureFallbackServices.ResolveSharedHarnessStateService(startup, app.Services);
+        var codebaseMap = app.Services.GetService<CodebaseHarnessMapService>() ?? new CodebaseHarnessMapService();
+        var planExecuteVerify = app.Services.GetService<PlanExecuteVerifyService>()
+            ?? new PlanExecuteVerifyService(
+                startup.Config,
+                harnessContracts,
+                evidenceBundles,
+                governanceLedger,
+                runtime.Operations.RuntimeEvents,
+                NullLogger<PlanExecuteVerifyService>.Instance);
         var facade = IntegrationApiFacade.Create(startup, runtime, app.Services);
         var sessionMetadataStore = app.Services.GetService<SessionMetadataStore>()
             ?? new SessionMetadataStore(startup.Config.Memory.StoragePath, NullLogger<SessionMetadataStore>.Instance);
@@ -57,7 +74,10 @@ internal static partial class AdminEndpoints
             automationService,
             organizationPolicy,
             app.Services.GetRequiredService<ToolUsageTracker>(),
-            sessionAdminStore);
+            sessionAdminStore,
+            app.Services.GetService<IRedactionPipeline>(),
+            evidenceBundles,
+            governanceLedger);
         var maintenance = app.Services.GetService<GatewayMaintenanceRuntimeService>()
             ?? new GatewayMaintenanceRuntimeService(startup, runtime, automationService);
         var providerSmokeRegistry = app.Services.GetService<ProviderSmokeRegistry>()
@@ -66,13 +86,23 @@ internal static partial class AdminEndpoints
             ?? new SetupVerificationSnapshotStore(startup.Config.Memory.StoragePath);
         var modelProfiles = app.Services.GetService<IModelProfileRegistry>()
             ?? runtime.Operations.ModelProfiles as IModelProfileRegistry
-            ?? new ConfiguredModelProfileRegistry(startup.Config, NullLogger<ConfiguredModelProfileRegistry>.Instance);
+            ?? ConfiguredModelProfileRegistry.CreateInitialized(startup.Config);
         var modelEvaluationRunner = app.Services.GetService<ModelEvaluationRunner>()
             ?? new ModelEvaluationRunner(
                 runtime.Operations.ModelProfiles as ConfiguredModelProfileRegistry
-                    ?? new ConfiguredModelProfileRegistry(startup.Config, NullLogger<ConfiguredModelProfileRegistry>.Instance),
+                    ?? modelProfiles as ConfiguredModelProfileRegistry
+                    ?? ConfiguredModelProfileRegistry.CreateInitialized(startup.Config),
                 startup.Config,
                 NullLogger<ModelEvaluationRunner>.Instance);
+        var redaction = app.Services.GetService<IRedactionPipeline>();
+        var externalCliRegistry = app.Services.GetService<IExternalCliConnectorRegistry>()
+            ?? new ExternalCliConnectorRegistry(startup.Config, redaction);
+        var externalCliRunner = app.Services.GetService<IExternalCliRunner>()
+            ?? new ExternalCliRunner(redaction);
+        var externalCliAudit = app.Services.GetService<IExternalCliAuditSink>()
+            ?? new NoopExternalCliAuditSink();
+        var externalCliEvents = app.Services.GetService<IExternalCliEventSink>()
+            ?? new NoopExternalCliEventSink();
 
         var services = new AdminEndpointServices
         {
@@ -84,13 +114,21 @@ internal static partial class AdminEndpoints
             AdminSettings = adminSettings,
             PluginAdminSettings = pluginAdminSettings,
             Heartbeat = heartbeat,
+            Pulse = pulse,
             MemoryStore = memoryStore,
             MemorySearch = memorySearch,
             MemoryCatalog = memoryCatalog,
+            StructuredMemoryProvider = structuredMemoryProvider,
             ProfileStore = profileStore,
             ProposalStore = proposalStore,
             AutomationService = automationService,
             LearningService = learningService,
+            HarnessContracts = harnessContracts,
+            EvidenceBundles = evidenceBundles,
+            GovernanceLedger = governanceLedger,
+            SharedHarnessState = sharedHarnessState,
+            CodebaseMap = codebaseMap,
+            PlanExecuteVerify = planExecuteVerify,
             Facade = facade,
             ToolPresetResolver = toolPresetResolver,
             Observability = observability,
@@ -100,7 +138,11 @@ internal static partial class AdminEndpoints
             ProviderSmokeRegistry = providerSmokeRegistry,
             SetupVerificationSnapshots = setupVerificationSnapshots,
             ModelProfiles = modelProfiles,
-            ModelEvaluationRunner = modelEvaluationRunner
+            ModelEvaluationRunner = modelEvaluationRunner,
+            ExternalCliRegistry = externalCliRegistry,
+            ExternalCliRunner = externalCliRunner,
+            ExternalCliAudit = externalCliAudit,
+            ExternalCliEvents = externalCliEvents
         };
 
         MapAuthEndpoints(app, services);
@@ -109,7 +151,14 @@ internal static partial class AdminEndpoints
         MapAutomationEndpoints(app, services);
         MapMemoryEndpoints(app, services);
         MapProfilesAndLearningEndpoints(app, services);
+        MapHarnessContractEndpoints(app, services);
+        MapSharedHarnessStateEndpoints(app, services);
+        MapCodebaseMapEndpoints(app, services);
+        MapPlanExecuteVerifyEndpoints(app, services);
+        MapEvidenceBundleEndpoints(app, services);
+        MapGovernanceLedgerEndpoints(app, services);
         MapRuntimeEndpoints(app, services);
+        MapExternalCliEndpoints(app, services);
         MapPluginAndChannelEndpoints(app, services);
     }
 }

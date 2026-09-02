@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text;
 using Microsoft.AspNetCore.Http.Features;
 using OpenClaw.Core.Models;
@@ -34,14 +35,49 @@ internal static class EndpointHelpers
 
     public static bool IsAuthorizedRequest(HttpContext ctx, GatewayConfig config, bool isNonLoopbackBind)
     {
-        if (!isNonLoopbackBind)
+        // Skip auth for loopback unless the operator explicitly requires it or OIDC is active.
+        if (!isNonLoopbackBind && !config.Security.AlwaysRequireAuth && !config.Security.IsOidcMode)
             return true;
 
-        if (string.IsNullOrWhiteSpace(config.AuthToken))
-            return false;
+        // OIDC mode OR JWT token: UseAuthentication() middleware validated the JWT
+        // and populated ctx.User. Accept the request if the user is authenticated.
+        if (ctx.User.Identity?.IsAuthenticated == true)
+            return true;
 
-        var token = GatewaySecurity.GetToken(ctx, config.Security.AllowQueryStringToken);
-        return GatewaySecurity.IsTokenValid(token, config.AuthToken);
+        // Static AuthToken check (bootstrap token).
+        if (!string.IsNullOrWhiteSpace(config.AuthToken))
+        {
+            var token = GatewaySecurity.GetToken(ctx, config.Security.AllowQueryStringToken);
+            if (GatewaySecurity.IsTokenValid(token, config.AuthToken))
+                return true;
+        }
+
+        // Fall through to operator account tokens and browser sessions
+        // so that AlwaysRequireAuth works with non-bootstrap auth methods.
+        var organizationPolicy = ctx.RequestServices.GetService<OrganizationPolicyService>();
+        var policy = organizationPolicy?.GetSnapshot() ?? new OrganizationPolicySnapshot();
+
+        // Operator account token.
+        if (IsAllowedAuthMode(policy, OrganizationAuthModeNames.AccountToken))
+        {
+            var operatorAccounts = ctx.RequestServices.GetService<OperatorAccountService>();
+            if (operatorAccounts is not null)
+            {
+                var token = GatewaySecurity.GetToken(ctx, config.Security.AllowQueryStringToken);
+                if (!string.IsNullOrWhiteSpace(token) && operatorAccounts.TryAuthenticateToken(token, out _))
+                    return true;
+            }
+        }
+
+        // Browser session (cookie-based).
+        if (IsAllowedAuthMode(policy, OrganizationAuthModeNames.BrowserSession))
+        {
+            var browserSessions = ctx.RequestServices.GetService<BrowserSessionAuthService>();
+            if (browserSessions is not null && browserSessions.TryAuthorize(ctx, requireCsrf: false, out _))
+                return true;
+        }
+
+        return false;
     }
 
     public static OperatorAuthorizationResult AuthorizeOperatorRequest(
@@ -54,7 +90,12 @@ internal static class EndpointHelpers
         var operatorAccounts = ctx.RequestServices.GetService<OperatorAccountService>();
         var policy = organizationPolicy?.GetSnapshot() ?? new OrganizationPolicySnapshot();
 
-        if (!startup.IsNonLoopbackBind)
+        var useOidc = !string.IsNullOrWhiteSpace(startup.Config.Security.Oidc.Authority);
+
+        // Loopback bypass: skip auth only when neither AlwaysRequireAuth nor OIDC is active.
+        if (!startup.IsNonLoopbackBind
+            && !startup.Config.Security.AlwaysRequireAuth
+            && !useOidc)
         {
             return new OperatorAuthorizationResult(
                 true,
@@ -65,6 +106,32 @@ internal static class EndpointHelpers
                 AccountId: null,
                 Username: null,
                 DisplayName: "Loopback operator",
+                IsBootstrapAdmin: false);
+        }
+
+        // OIDC/JWT: UseAuthentication() has already validated the JWT and populated ctx.User.
+        if (useOidc && ctx.User.Identity?.IsAuthenticated == true)
+        {
+            var sub = ctx.User.FindFirstValue(ClaimTypes.NameIdentifier)
+                      ?? ctx.User.FindFirstValue("sub");
+            var username = ctx.User.FindFirstValue("preferred_username")
+                           ?? ctx.User.FindFirstValue(ClaimTypes.Name)
+                           ?? sub;
+            var displayName = ctx.User.FindFirstValue("name")
+                              ?? ctx.User.FindFirstValue(ClaimTypes.GivenName)
+                              ?? username;
+            var rawRole = ctx.User.FindFirstValue(startup.Config.Security.Oidc.RoleClaim)
+                          ?? ctx.User.FindFirstValue(ClaimTypes.Role);
+            var role = OperatorRoleNames.Normalize(rawRole);
+            return new OperatorAuthorizationResult(
+                true,
+                OrganizationAuthModeNames.OidcJwt,
+                UsedBrowserSession: false,
+                BrowserSession: null,
+                Role: role,
+                AccountId: sub,
+                Username: username,
+                DisplayName: displayName,
                 IsBootstrapAdmin: false);
         }
 
@@ -171,6 +238,7 @@ internal static class EndpointHelpers
         {
             "browser-session" when auth.BrowserSession is not null => $"browser:{auth.BrowserSession.SessionId}",
             OrganizationAuthModeNames.AccountToken => $"account-token:{GetRemoteIpKey(ctx)}",
+            OrganizationAuthModeNames.OidcJwt => $"oidc:{GetRemoteIpKey(ctx)}",
             "bearer" => $"bearer:{GetRemoteIpKey(ctx)}",
             "loopback-open" => "loopback",
             _ => $"operator:{GetRemoteIpKey(ctx)}"
@@ -264,6 +332,7 @@ internal static class EndpointHelpers
             scope.StartsWith("admin.provider-policies", StringComparison.Ordinal) ||
             scope.StartsWith("admin.providers.reset", StringComparison.Ordinal) ||
             scope.StartsWith("admin.plugins.mutate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.skills", StringComparison.Ordinal) ||
             scope.StartsWith("admin.rate-limits.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("integration.accounts", StringComparison.Ordinal))
         {
@@ -275,13 +344,19 @@ internal static class EndpointHelpers
             scope.StartsWith("admin.agent-bundle.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("admin.profiles.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("admin.learning.mutate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.harness.mutate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.governance.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("admin.webhooks.mutate", StringComparison.Ordinal) ||
-            scope.StartsWith("admin.automations.mutate", StringComparison.Ordinal) ||
-            scope.StartsWith("admin.automations.run", StringComparison.Ordinal) ||
-            scope.StartsWith("admin.automations.migrate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.pulse.mutate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.pulse.run", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.pulse.status", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.pulse.events", StringComparison.Ordinal) ||
             scope.StartsWith("admin.session.promote", StringComparison.Ordinal) ||
             scope.StartsWith("admin.branch.restore", StringComparison.Ordinal) ||
             scope.StartsWith("admin.session.metadata", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.sessions.abort", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.sessions.delete", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.automations.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("admin.control", StringComparison.Ordinal) ||
             scope.StartsWith("admin.approvals", StringComparison.Ordinal) ||
             scope.StartsWith("admin.approval-policies.mutate", StringComparison.Ordinal) ||
@@ -289,6 +364,7 @@ internal static class EndpointHelpers
             scope.StartsWith("admin.channels.auth.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("admin.channels.auth.restart", StringComparison.Ordinal) ||
             scope.StartsWith("admin.models.evaluate", StringComparison.Ordinal) ||
+            scope.StartsWith("admin.external-cli", StringComparison.Ordinal) ||
             scope.StartsWith("contract.mutate", StringComparison.Ordinal) ||
             scope.StartsWith("integration.mutate", StringComparison.Ordinal))
         {

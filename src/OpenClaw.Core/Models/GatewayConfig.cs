@@ -14,11 +14,16 @@ public sealed class GatewayConfig
     public RuntimeConfig Runtime { get; set; } = new();
     public LlmProviderConfig Llm { get; set; } = new();
     public ModelsConfig Models { get; set; } = new();
+    public LocalInferenceConfig LocalInference { get; set; } = new();
     public MemoryConfig Memory { get; set; } = new();
     public SecurityConfig Security { get; set; } = new();
     public WebSocketConfig WebSocket { get; set; } = new();
     public CanvasConfig Canvas { get; set; } = new();
     public ToolingConfig Tooling { get; set; } = new();
+    public HarnessConfig Harness { get; set; } = new();
+    public ToolGovernanceConfig Governance { get; set; } = new();
+    public PaymentConfig Payments { get; set; } = new();
+    public ExternalCliOptions ExternalCli { get; set; } = new();
     public SandboxConfig Sandbox { get; set; } = new();
     public ExecutionConfig Execution { get; set; } = new();
     public CodingBackendsConfig CodingBackends { get; set; } = new();
@@ -27,12 +32,18 @@ public sealed class GatewayConfig
     public PluginsConfig Plugins { get; set; } = new();
     public SkillsConfig Skills { get; set; } = new();
     public DelegationConfig Delegation { get; set; } = new();
+    public WorkflowsConfig Workflows { get; set; } = new();
+    public PulseConfig Pulse { get; set; } = new();
     public CronConfig Cron { get; set; } = new();
     public AutomationsConfig Automations { get; set; } = new();
     public ProfilesConfig Profiles { get; set; } = new();
     public LearningConfig Learning { get; set; } = new();
     public WebhooksConfig Webhooks { get; set; } = new();
+    public DynamicTurnRoutingConfig DynamicTurnRouting { get; set; } = new();
     public RoutingConfig Routing { get; set; } = new();
+    public McpAppsConfig McpApps { get; set; } = new();
+    public McpCompatibilityConfig McpCompatibility { get; set; } = new();
+    public DeploymentConfig Deployment { get; set; } = new();
     public TailscaleConfig Tailscale { get; set; } = new();
     public GmailPubSubConfig GmailPubSub { get; set; } = new();
     public MdnsConfig Mdns { get; set; } = new();
@@ -41,6 +52,7 @@ public sealed class GatewayConfig
 
     public int MaxConcurrentSessions { get; set; } = 64;
     public int SessionTimeoutMinutes { get; set; } = 30;
+    public BackgroundExecutionConfig BackgroundExecution { get; set; } = new();
 
     /// <summary>Max total tokens (input + output) per session. 0 = unlimited.</summary>
     public long SessionTokenBudget { get; set; } = 0;
@@ -70,10 +82,35 @@ public sealed class GatewayConfig
     public Dictionary<string, TokenCostRateConfig> TokenCostRateDetails { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+public sealed class McpCompatibilityConfig
+{
+    public bool EnableDiscoveryFirst { get; set; } = true;
+    public bool ForceLegacyInitialize { get; set; } = false;
+}
+
 public sealed class TokenCostRateConfig
 {
     public decimal InputUsdPer1K { get; set; }
     public decimal OutputUsdPer1K { get; set; }
+}
+
+public sealed class BackgroundExecutionConfig
+{
+    public bool Enabled { get; set; } = false;
+    public bool AutoResumeOnStartup { get; set; } = false;
+    public int AutoResumeStaggerSeconds { get; set; } = 5;
+    public int AutoResumeMaxConcurrent { get; set; } = 3;
+    public int MaxConcurrentBackgroundTurns { get; set; } = 3;
+    public int MaxIterationsPerBatch { get; set; } = 20;
+    public long DefaultTokenBudget { get; set; } = 128_000;
+    public int MaxWallClockMinutes { get; set; } = 360;
+    public int MaxToolCalls { get; set; } = 1_000;
+    public int MaxContinuationTurns { get; set; } = 200;
+    public int ProgressNotifyIntervalMinutes { get; set; } = 10;
+    public bool NotifyOnStart { get; set; } = true;
+    public bool NotifyOnCompletion { get; set; } = true;
+    public bool NotifyOnBlocked { get; set; } = true;
+    public bool NotifyOnBudgetLimited { get; set; } = true;
 }
 
 public sealed class LlmProviderConfig
@@ -82,9 +119,19 @@ public sealed class LlmProviderConfig
     public string Model { get; set; } = "gpt-4o";
     public string? ApiKey { get; set; }
     public string? Endpoint { get; set; }
+    public string AuthMode { get; set; } = "bearer";
+    public bool SendRequestMetadata { get; set; } = false;
+    public string? CorrelationIdHeader { get; set; }
     public string[] FallbackModels { get; set; } = [];
     public int MaxTokens { get; set; } = 4096;
     public float Temperature { get; set; } = 0.7f;
+
+    /// <summary>
+    /// When true, image-bearing user messages are forwarded as multi-modal content
+    /// parts and sent directly to the model (requires a vision-capable model such as gpt-4o).
+    /// When false, image analysis is delegated to the <c>image_analyze</c> tool (Layer 2).
+    /// </summary>
+    public bool SupportsVision { get; set; } = false;
 
     /// <summary>Per-call timeout in seconds for LLM requests. 0 = no timeout.</summary>
     public int TimeoutSeconds { get; set; } = 120;
@@ -99,6 +146,40 @@ public sealed class LlmProviderConfig
     public int CircuitBreakerCooldownSeconds { get; set; } = 30;
 
     public PromptCachingConfig PromptCaching { get; set; } = new();
+    /// <summary>
+    /// Controls thinking mode for DeepSeek models.
+    /// true (default) = enabled; false = disabled.
+    /// </summary>
+    public bool EnableThinking { get; set; } = true;
+}
+
+public sealed class LocalInferenceConfig
+{
+    public bool Enabled { get; set; } = false;
+    public bool AutoStart { get; set; } = true;
+    public string Backend { get; set; } = "llama.cpp";
+    public string? RuntimePath { get; set; }
+    public string? ModelsRoot { get; set; }
+    public string? LogsPath { get; set; }
+    public string Host { get; set; } = "127.0.0.1";
+    public int Port { get; set; } = 0;
+    public string Threads { get; set; } = "auto";
+    public string GpuLayers { get; set; } = "auto";
+    public int ContextSize { get; set; } = 0;
+    public int StartupTimeoutSeconds { get; set; } = 30;
+    public int MaxRestartAttempts { get; set; } = 3;
+    public bool EnableJinja { get; set; } = true;
+    public string? ChatTemplate { get; set; }
+    public string? ChatTemplateFilePath { get; set; }
+    public string? MultimodalProjectorPath { get; set; }
+    public string? MediaPath { get; set; }
+    public string? DraftModelPath { get; set; }
+    public string DraftModelGpuLayers { get; set; } = "auto";
+    public string? ReasoningEffort { get; set; }
+    public string? ReasoningMode { get; set; }
+    public int? ReasoningBudget { get; set; }
+    public string? LiteRtRuntimePath { get; set; }
+    public string? LiteRtMediaPipeGraphPath { get; set; }
 }
 
 public sealed class PromptCachingConfig
@@ -128,7 +209,7 @@ public sealed class PromptCacheTraceConfig
 
 public sealed class MemoryConfig
 {
-    /// <summary>Memory backend provider: "file" (default) or "sqlite".</summary>
+    /// <summary>Memory backend provider: "file" (default), "sqlite", or "mempalace".</summary>
     public string Provider { get; set; } = "file";
 
     public string StoragePath { get; set; } = "./memory";
@@ -136,6 +217,8 @@ public sealed class MemoryConfig
     public int? MaxCachedSessions { get; set; }
 
     public MemorySqliteConfig Sqlite { get; set; } = new();
+    public MemoryMempalaceConfig Mempalace { get; set; } = new();
+    public FractalMemoryConfig Fractal { get; set; } = new();
     public MemoryRecallConfig Recall { get; set; } = new();
     public MemoryRetentionConfig Retention { get; set; } = new();
 
@@ -176,6 +259,41 @@ public sealed class MemorySqliteConfig
 
     /// <summary>Embedding vector dimensions. Defaults to 1536 (OpenAI text-embedding-3-small).</summary>
     public int EmbeddingDimensions { get; set; } = 1536;
+}
+
+public sealed class MemoryMempalaceConfig
+{
+    public string BasePath { get; set; } = "./memory/mempalace";
+    public string PalaceId { get; set; } = "openclaw";
+    public string? Namespace { get; set; }
+    public string CollectionName { get; set; } = "memories";
+    public int EmbeddingDimensions { get; set; } = 384;
+    public string EmbedderIdentifier { get; set; } = "openclaw:mempalace:hash-v1";
+    public string DefaultWing { get; set; } = "openclaw";
+    public string DefaultRoom { get; set; } = "notes";
+    public string SessionDbPath { get; set; } = "./memory/mempalace/openclaw-sessions.db";
+    public string KnowledgeGraphDbPath { get; set; } = "./memory/mempalace/kg.db";
+    public int MaxSearchCandidates { get; set; } = 200;
+}
+
+public sealed class FractalMemoryConfig
+{
+    public bool Enabled { get; set; } = false;
+    public string Mode { get; set; } = "mcp";
+    public string RepositoryRoot { get; set; } = "";
+    public string McpCommand { get; set; } = "fractalmem-mcp";
+    public int DefaultDepth { get; set; } = 1;
+    public string DefaultView { get; set; } = "index";
+    public string DefaultExportMode { get; set; } = "compact";
+    public int MaxContextChars { get; set; } = 24_000;
+    public int MaxContextTokens { get; set; } = 6_000;
+    public string AutoContextMode { get; set; } = "off";
+    public bool AllowWrites { get; set; } = false;
+    public bool RequireApprovalForWrites { get; set; } = true;
+    public bool AutoRefreshIndexes { get; set; } = false;
+    public bool IncludeTimeline { get; set; } = false;
+    public bool IncludeDecisions { get; set; } = true;
+    public bool IncludeArtifacts { get; set; } = false;
 }
 
 /// <summary>
@@ -283,6 +401,55 @@ public sealed class SecurityConfig
 
     /// <summary>Lifetime (days) for persistent browser admin sessions created with "Remember me". Default 30 days.</summary>
     public int BrowserRememberDays { get; set; } = 30;
+
+    // ── Authentication Mode ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Authentication mode. "token" (default) = static AuthToken; "oidc" = OIDC/JWT Bearer (e.g. Keycloak).
+    /// </summary>
+    public string AuthMode { get; set; } = SecurityAuthModeNames.Token;
+
+    /// <summary>OIDC configuration. Only used when <see cref="AuthMode"/> is "oidc".</summary>
+    public OidcConfig Oidc { get; set; } = new();
+
+    /// <summary>
+    /// When true all requests to /api and /mcp must carry a valid token or OIDC JWT even
+    /// when the gateway is bound to a loopback address.
+    /// Has no effect when AuthMode is "oidc" (OIDC mode always enforces auth on all paths).
+    /// </summary>
+    public bool AlwaysRequireAuth { get; set; } = false;
+
+    /// <summary>Convenience: true when <see cref="AuthMode"/> is "oidc".</summary>
+    public bool IsOidcMode => string.Equals(AuthMode, SecurityAuthModeNames.Oidc, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>Authentication mode names for <see cref="SecurityConfig.AuthMode"/>.</summary>
+public static class SecurityAuthModeNames
+{
+    public const string Token = "token";
+    public const string Oidc = "oidc";
+}
+
+/// <summary>OIDC / JWT Bearer configuration. Used when <see cref="SecurityConfig.AuthMode"/> is "oidc".</summary>
+public sealed class OidcConfig
+{
+    /// <summary>
+    /// OIDC Authority URL (e.g. Keycloak realm URL).
+    /// Example: https://auth.example.com/realms/myrealm
+    /// </summary>
+    public string? Authority { get; set; }
+
+    /// <summary>Expected audience claim. Leave empty to skip validation.</summary>
+    public string? Audience { get; set; }
+
+    /// <summary>Whether to require HTTPS for OIDC metadata discovery. Default true.</summary>
+    public bool RequireHttpsMetadata { get; set; } = true;
+
+    /// <summary>
+    /// JWT claim name to extract the operator role from. Default "roles".
+    /// The claim value is mapped to an <see cref="OpenClaw.Core.Models.OperatorRoleNames"/> value.
+    /// </summary>
+    public string RoleClaim { get; set; } = "roles";
 }
 
 public sealed class UrlSafetyConfig
@@ -364,6 +531,17 @@ public sealed class ToolingConfig
     public int ToolApprovalTimeoutSeconds { get; set; } = 300;
 
     public bool EnableBrowserTool { get; set; } = true;
+
+    /// <summary>Enable the <c>todo</c> tool for session-scoped task tracking. Default: false.</summary>
+    public bool EnableTodoTool { get; set; } = false;
+
+
+    /// <summary>Enable the <c>publish_file</c> tool that publishes a local file as a downloadable attachment. Default: true.</summary>
+    public bool EnablePublishFile { get; set; } = true;
+
+    /// <summary>Enable the <c>emit_artifact</c> tool for pushing file/data artifacts to the frontend via WebSocket. Default: true.</summary>
+    public bool EnableEmitArtifact { get; set; } = true;
+
     public bool AllowBrowserEvaluate { get; set; } = true;
     public bool BrowserHeadless { get; set; } = true;
     public int BrowserTimeoutSeconds { get; set; } = 30;
@@ -371,6 +549,81 @@ public sealed class ToolingConfig
     public Dictionary<string, ToolsetConfig> Toolsets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, ToolPresetConfig> Presets { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> SurfaceBindings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class HarnessConfig
+{
+    /// <summary>Runtime harness mode. Defaults to normal so chat/tool behavior is unchanged.</summary>
+    public string ExecutionMode { get; set; } = HarnessExecutionModes.Normal;
+
+    public PlanExecuteVerifyOptions PlanExecuteVerify { get; set; } = new();
+}
+
+public sealed class PlanExecuteVerifyOptions
+{
+    public bool Enabled { get; set; } = false;
+    public string[] ContractRequiredFor { get; set; } =
+    [
+        PlanExecuteVerifyContractTriggers.HighRiskTools,
+        PlanExecuteVerifyContractTriggers.WriteTools,
+        PlanExecuteVerifyContractTriggers.Shell,
+        PlanExecuteVerifyContractTriggers.Browser,
+        PlanExecuteVerifyContractTriggers.ExternalApi,
+        PlanExecuteVerifyContractTriggers.MultiToolWorkflows
+    ];
+    public string[] RequireApprovalForRisk { get; set; } =
+    [
+        HarnessContractRiskLevels.High,
+        HarnessContractRiskLevels.Critical
+    ];
+    public bool CreateEvidenceBundles { get; set; } = true;
+    public bool RunVerification { get; set; } = true;
+    public bool AutoRollbackOnFailedVerification { get; set; } = false;
+    public int MaxPlanActions { get; set; } = 20;
+    public int MaxVerificationSteps { get; set; } = 20;
+    public string[] RegressionCategories { get; set; } = [];
+}
+
+public sealed class PaymentConfig
+{
+    /// <summary>Native payments are disabled by default and must be explicitly enabled.</summary>
+    public bool Enabled { get; set; } = false;
+
+    public bool ToolEnabled { get; set; } = true;
+    public string Provider { get; set; } = "mock";
+    public string Environment { get; set; } = "test";
+    public int SecretTtlMinutes { get; set; } = 30;
+    public PaymentPolicyConfig Policy { get; set; } = new();
+    public PaymentMockProviderConfig Mock { get; set; } = new();
+    public PaymentStripeLinkConfig StripeLink { get; set; } = new();
+    public PaymentMachineConfig MachinePayments { get; set; } = new();
+}
+
+public sealed class PaymentPolicyConfig
+{
+    public bool AllowTestModeWithoutApproval { get; set; } = true;
+    public bool DenyLiveWithoutApprovalService { get; set; } = true;
+    public long? MaxLiveAmountMinor { get; set; }
+}
+
+public sealed class PaymentMockProviderConfig
+{
+    public string ProviderId { get; set; } = "mock";
+    public string FundingSourceDisplayName { get; set; } = "Mock Visa ending 4242";
+}
+
+public sealed class PaymentStripeLinkConfig
+{
+    public string ProviderId { get; set; } = "stripe-link";
+    public string CliPath { get; set; } = "link-cli";
+    public int TimeoutSeconds { get; set; } = 30;
+    public string? WorkingDirectory { get; set; }
+    public Dictionary<string, string> EnvironmentVariables { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class PaymentMachineConfig
+{
+    public bool EnableHttp402Handler { get; set; } = false;
 }
 
 public sealed class ChannelsConfig
@@ -384,6 +637,9 @@ public sealed class ChannelsConfig
     public SlackChannelConfig Slack { get; set; } = new();
     public DiscordChannelConfig Discord { get; set; } = new();
     public SignalChannelConfig Signal { get; set; } = new();
+    public FeishuChannelConfig Feishu { get; set; } = new();
+    public DingTalkChannelConfig DingTalk { get; set; } = new();
+    public WeComChannelConfig WeCom { get; set; } = new();
 }
 
 public sealed class WhatsAppChannelConfig
@@ -555,6 +811,16 @@ public sealed class TelegramChannelConfig
     public string DmPolicy { get; set; } = "pairing"; // open, pairing, closed
     public string? BotToken { get; set; }
     public string BotTokenRef { get; set; } = "env:TELEGRAM_BOT_TOKEN";
+    /// <summary>Inbound delivery mode: "webhook" or "long-polling".</summary>
+    public string UpdateMode { get; set; } = "webhook";
+    public bool UsesWebhook() => MatchesUpdateMode("webhook");
+    public bool UsesLongPolling() => MatchesUpdateMode("long-polling");
+    /// <summary>Telegram getUpdates long-poll timeout in seconds.</summary>
+    public int PollingTimeoutSeconds { get; set; } = 30;
+    /// <summary>Delay before retrying a failed long-poll request.</summary>
+    public int PollingRetryDelaySeconds { get; set; } = 5;
+    /// <summary>Discard updates queued by Telegram when long polling starts.</summary>
+    public bool DropPendingUpdatesOnStart { get; set; } = false;
     public string WebhookPath { get; set; } = "/telegram/inbound";
     public string? WebhookPublicBaseUrl { get; set; }
     public string[] AllowedFromUserIds { get; set; } = [];
@@ -569,6 +835,9 @@ public sealed class TelegramChannelConfig
 
     /// <summary>Secret token reference (env: or raw:). Used when WebhookSecretToken is null.</summary>
     public string WebhookSecretTokenRef { get; set; } = "env:TELEGRAM_WEBHOOK_SECRET";
+
+    private bool MatchesUpdateMode(string expected)
+        => string.Equals(UpdateMode?.Trim(), expected, StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class SlackChannelConfig
@@ -689,7 +958,15 @@ public sealed class AgentRouteConfig
     public string[] AllowedTools { get; set; } = [];
 }
 
-// ── Tailscale ───────────────────────────────────────────────────
+// ── Deployment ──────────────────────────────────────────────────
+
+public sealed class DeploymentConfig
+{
+    public string Mode { get; set; } = "local";
+    public bool PublicExposure { get; set; } = false;
+    public string? ReverseProxy { get; set; }
+    public string? ExpectedLocalUrl { get; set; }
+}
 
 public sealed class TailscaleConfig
 {

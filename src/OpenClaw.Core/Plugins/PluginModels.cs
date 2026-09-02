@@ -39,6 +39,18 @@ public sealed class PluginManifest
 
     /// <summary>UI hints for config rendering.</summary>
     public JsonElement? UiHints { get; init; }
+
+    /// <summary>Static activation metadata published by newer OpenClaw plugins.</summary>
+    public JsonElement? Activation { get; init; }
+
+    /// <summary>Static capability ownership metadata published by newer OpenClaw plugins.</summary>
+    public JsonElement? Contracts { get; init; }
+
+    /// <summary>Channel configuration metadata available before plugin activation.</summary>
+    public JsonElement? ChannelConfigs { get; init; }
+
+    /// <summary>Setup and onboarding metadata available before plugin activation.</summary>
+    public JsonElement? Setup { get; init; }
 }
 
 /// <summary>
@@ -53,6 +65,33 @@ public sealed class DiscoveredPlugin
 
     /// <summary>Absolute path to the plugin entry file (TypeScript/JavaScript).</summary>
     public required string EntryPath { get; init; }
+
+    /// <summary>Discovery format: native or bundle.</summary>
+    public string Format { get; init; } = PluginFormats.Native;
+
+    /// <summary>Compatible bundle ecosystem: codex, claude, or cursor.</summary>
+    public string? BundleFormat { get; init; }
+
+    /// <summary>Bundle capabilities mapped into native OpenClaw.NET features.</summary>
+    public string[] BundleMappedCapabilities { get; init; } = [];
+
+    /// <summary>Bundle capabilities detected for operator visibility but not executed.</summary>
+    public string[] BundleDetectedCapabilities { get; init; } = [];
+
+    /// <summary>Minimum plugin API range declared in package.json openclaw.compat.pluginApi.</summary>
+    public string? PluginApiRange { get; init; }
+
+    /// <summary>Minimum host version declared by package metadata.</summary>
+    public string? MinHostVersion { get; init; }
+
+    /// <summary>Expected package integrity declared by package metadata.</summary>
+    public string? ExpectedIntegrity { get; init; }
+}
+
+public static class PluginFormats
+{
+    public const string Native = "native";
+    public const string Bundle = "bundle";
 }
 
 /// <summary>
@@ -151,6 +190,69 @@ public sealed class McpServerConfig
     public int RequestTimeoutSeconds { get; set; } = 60;
 }
 
+/// <summary>
+/// Top-level MCP Apps configuration section. Lives under
+/// <c>McpApps</c> in GatewayConfig / appsettings.
+/// MCP Apps are self-contained MCP servers (like GroceryInventory.Api)
+/// that can be discovered via manifest files and hosted by OpenClaw.
+/// </summary>
+public sealed class McpAppsConfig
+{
+    /// <summary>Master toggle for MCP App support.</summary>
+    public bool Enabled { get; set; } = false;
+
+    /// <summary>
+    /// Directories to scan for MCP App manifests (openclaw.mcpapp.json).
+    /// Relative paths are resolved against the gateway root.
+    /// </summary>
+    public string[] DiscoveryPaths { get; set; } = ["./mcpapps"];
+
+    /// <summary>
+    /// Allowlist semantics for MCP Apps: "legacy" (backward-compatible)
+    /// or "strict" ([]=deny, ["*"]=allow-all).
+    /// </summary>
+    public string AllowlistSemantics { get; set; } = "legacy";
+
+    /// <summary>App id allowlist. Empty means all allowed in legacy mode.</summary>
+    public string[] Allow { get; set; } = [];
+
+    /// <summary>App id denylist. Deny wins over allow.</summary>
+    public string[] Deny { get; set; } = [];
+
+    /// <summary>Per-app toggles and overrides.</summary>
+    public Dictionary<string, McpAppEntryConfig> Entries { get; set; } = new(StringComparer.Ordinal);
+}
+
+/// <summary>
+/// Per-app configuration entry with enable/disable and optional overrides.
+/// </summary>
+public sealed class McpAppEntryConfig
+{
+    /// <summary>Whether this specific app is enabled.</summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Override the transport mode for this app.</summary>
+    public string? Transport { get; set; }
+
+    /// <summary>Override the command for this app.</summary>
+    public string? Command { get; set; }
+
+    /// <summary>Override the URL for this app.</summary>
+    public string? Url { get; set; }
+
+    /// <summary>Override the tool name prefix for this app.</summary>
+    public string? ToolNamePrefix { get; set; }
+
+    /// <summary>Override startup timeout.</summary>
+    public int? StartupTimeoutSeconds { get; set; }
+
+    /// <summary>Override request timeout.</summary>
+    public int? RequestTimeoutSeconds { get; set; }
+
+    /// <summary>Extra environment variables for this app instance.</summary>
+    public Dictionary<string, string> Environment { get; set; } = new(StringComparer.Ordinal);
+}
+
 public static class McpServerConfigExtensions
 {
     public static string NormalizeTransport(this McpServerConfig config)
@@ -180,7 +282,9 @@ public sealed class NativePluginsConfig
     public GitToolsConfig GitTools { get; set; } = new();
     public CodeExecConfig CodeExec { get; set; } = new();
     public ImageGenConfig ImageGen { get; set; } = new();
+    public ImageAnalyzeConfig ImageAnalyze { get; set; } = new();
     public PdfReadConfig PdfRead { get; set; } = new();
+    public MinerUPdfConfig MinerUPdf { get; set; } = new();
     public CalendarConfig Calendar { get; set; } = new();
     public EmailConfig Email { get; set; } = new();
     public DatabaseConfig Database { get; set; } = new();
@@ -399,13 +503,28 @@ public sealed class ImageGenConfig
 {
     public bool Enabled { get; set; } = false;
 
-    /// <summary>Provider: "openai" (DALL-E).</summary>
+    /// <summary>
+    /// Optional model profile id used to resolve provider/model/base-url/api-key for image generation.
+    /// When unset, falls back to the configured/default model profile if available.
+    /// </summary>
+    public string? ModelProfileId { get; set; }
+
+    /// <summary>
+    /// Provider: "openai" (OpenAI/Azure/OpenAI-compatible via the official SDK)
+    /// or "dashscope"/"qwen" (Alibaba Tongyi Qwen via the DashScope API).
+    /// </summary>
     public string Provider { get; set; } = "openai";
 
     /// <summary>API key (or env: / raw: secret ref).</summary>
     public string? ApiKey { get; set; }
 
-    /// <summary>API endpoint (optional, for compatible APIs).</summary>
+    /// <summary>
+    /// API endpoint.
+    /// For "openai": the base URL (e.g. https://api.openai.com/v1); the SDK appends the operation path.
+    /// For "dashscope"/"qwen": the FULL API path is used as-is (no path is appended), so a future
+    /// API/path change only requires a config update — e.g.
+    /// https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation
+    /// </summary>
     public string? Endpoint { get; set; }
 
     /// <summary>Model name (e.g. "dall-e-3").</summary>
@@ -416,6 +535,25 @@ public sealed class ImageGenConfig
 
     /// <summary>Default quality ("standard" or "hd" for DALL-E 3).</summary>
     public string Quality { get; set; } = "standard";
+
+    /// <summary>Per-call timeout in seconds. Set to 0 to disable the tool-level timeout.</summary>
+    public int TimeoutSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// Negative prompt describing what should NOT appear in the image.
+    /// DashScope (Qwen) only; ignored by the OpenAI provider.
+    /// </summary>
+    public string? NegativePrompt { get; set; }
+
+    /// <summary>
+    /// Enable intelligent prompt rewriting/expansion. DashScope (Qwen) only.
+    /// </summary>
+    public bool PromptExtend { get; set; } = true;
+
+    /// <summary>
+    /// Whether to add a watermark to the generated image. DashScope (Qwen) only.
+    /// </summary>
+    public bool Watermark { get; set; } = false;
 }
 
 public sealed class PdfReadConfig
@@ -600,6 +738,7 @@ public sealed class PluginLoadReport
     public required string SourcePath { get; init; }
     public string? EntryPath { get; init; }
     public string Origin { get; init; } = "bridge";
+    public string? BundleFormat { get; init; }
     public bool Loaded { get; init; }
     public string EffectiveRuntimeMode { get; init; } = "jit";
     public string[] RequestedCapabilities { get; init; } = [];
@@ -608,6 +747,8 @@ public sealed class PluginLoadReport
     public int ToolCount { get; init; }
     public int ChannelCount { get; init; }
     public int CommandCount { get; init; }
+    public int CliCommandCount { get; init; }
+    public string[] CliCommandNames { get; init; } = [];
     public int EventSubscriptionCount { get; init; }
     public int ProviderCount { get; init; }
     public string[] SkillDirectories { get; init; } = [];
@@ -625,6 +766,9 @@ public sealed class PluginToolRegistration
 
     /// <summary>JSON Schema for tool parameters.</summary>
     public required JsonElement Parameters { get; init; }
+
+    /// <summary>Optional JSON Schema for the tool's structured result.</summary>
+    public JsonElement? OutputSchema { get; init; }
 
     /// <summary>Whether this tool is optional (opt-in only).</summary>
     public bool Optional { get; init; }
@@ -667,6 +811,7 @@ public sealed class BridgeInitResult
     public PluginToolRegistration[] Tools { get; init; } = [];
     public BridgeChannelRegistration[] Channels { get; init; } = [];
     public BridgeCommandRegistration[] Commands { get; init; } = [];
+    public BridgeCliCommandRegistration[] CliCommands { get; init; } = [];
     public string[] EventSubscriptions { get; init; } = [];
     public BridgeProviderRegistration[] Providers { get; init; } = [];
     public string[] Capabilities { get; init; } = [];
@@ -750,6 +895,15 @@ public sealed class BridgeChannelRegistration
 /// Command registration from a plugin bridge.
 /// </summary>
 public sealed class BridgeCommandRegistration
+{
+    public required string Name { get; init; }
+    public string Description { get; init; } = "";
+}
+
+/// <summary>
+/// Root CLI command registered by a bridge plugin through <c>registerCli()</c>.
+/// </summary>
+public sealed class BridgeCliCommandRegistration
 {
     public required string Name { get; init; }
     public string Description { get; init; } = "";
@@ -968,6 +1122,7 @@ public sealed class BridgeHookAfterRequest
 public sealed class BridgeToolResult
 {
     public ToolContentItem[] Content { get; init; } = [];
+    public JsonElement? Details { get; init; }
 }
 
 /// <summary>

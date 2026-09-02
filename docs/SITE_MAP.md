@@ -1,0 +1,180 @@
+# Documentation Site Map
+
+Use this map when turning the Markdown docs into a documentation website. It keeps the first-run path short, separates operator material from contributor material, and gives every sidebar item a stable source file.
+
+## Primary Navigation
+
+| Section | Label | Source |
+| --- | --- | --- |
+| Overview | Overview | [README.md](../README.md) |
+| Overview | Start Here | [START_HERE.md](START_HERE.md) |
+| Overview | Quickstart | [QUICKSTART.md](QUICKSTART.md) |
+| Overview | Getting Started | [GETTING_STARTED.md](GETTING_STARTED.md) |
+| Guides | User Guide | [USER_GUIDE.md](USER_GUIDE.md) |
+| Guides | Tools Guide | [TOOLS_GUIDE.md](TOOLS_GUIDE.md) |
+| Guides | Tool Hooks | [HOOKS.md](HOOKS.md) |
+| Guides | Tool Hooks (zh-CN) | [zh-CN/HOOKS.md](zh-CN/HOOKS.md) |
+| Guides | TokenJuice Output Reduction | [tokenjuice.md](tokenjuice.md) |
+| Guides | Goal Auto-Continuation | [GOAL_TECHNICAL_ARCHITECTURE.md](GOAL_TECHNICAL_ARCHITECTURE.md) |
+| Guides | Loop Recurring Prompts | [LOOP_TECHNICAL_ARCHITECTURE.md](LOOP_TECHNICAL_ARCHITECTURE.md) |
+| Guides | Embedded Local Models | [LOCAL_MODELS.md](LOCAL_MODELS.md) |
+| Guides | MetaSkills (Feature Overview) | [meta-skills.md](meta-skills.md) |
+| Guides | MetaSkill Orchestration Architecture | [meta-skill-orchestration.md](meta-skill-orchestration.md) |
+| Guides | MetaSkill Orchestration (zh-CN) | [zh-CN/meta-skill-orchestration.md](zh-CN/meta-skill-orchestration.md) |
+| Guides | MetaSkill User Guide | [meta-skill-user-guide.md](meta-skill-user-guide.md) |
+| Guides | MetaSkill Authoring Guide | [authoring/meta-skills.md](authoring/meta-skills.md) |
+| Guides | OpenSquilla Meta-Skill Migration | [opensquilla-meta-skill-migration.md](opensquilla-meta-skill-migration.md) |
+| Guides | OpenSquilla Dynamic Turn Routing | [opensquilla-dynamic-turn-routing.md](opensquilla-dynamic-turn-routing.md) |
+| Guides | Dynamic Routing and Model Profiles | [dynamic-turn-routing-model-profiles.md](dynamic-turn-routing-model-profiles.md) |
+| Guides | External CLI Connectors | [EXTERNAL_CLI_CONNECTORS.md](EXTERNAL_CLI_CONNECTORS.md) |
+| Guides | Fractal Memory | [FRACTAL_MEMORY.md](FRACTAL_MEMORY.md) |
+| Guides | Model Profiles | [MODEL_PROFILES.md](MODEL_PROFILES.md) |
+| Guides | Prompt Caching | [PROMPT_CACHING.md](PROMPT_CACHING.md) |
+| Guides | Learning Proposals | [LEARNING.md](LEARNING.md) |
+| Guides | Agent Testing Harness | [testing/agent-testing-harness.md](testing/agent-testing-harness.md) |
+| Guides | AI-Assisted Testing Playbook | [testing/ai-assisted-testing-playbook.md](testing/ai-assisted-testing-playbook.md) |
+| Guides | Harness Regression Suite | [HARNESS_REGRESSION.md](HARNESS_REGRESSION.md) |
+| Guides | Plan-Execute-Verify Mode | [PLAN_EXECUTE_VERIFY.md](PLAN_EXECUTE_VERIFY.md) |
+| Guides | Harness Evolution Proposals | [HARNESS_EVOLUTION.md](HARNESS_EVOLUTION.md) |
+| Guides | Shared Harness State | [SHARED_HARNESS_STATE.md](SHARED_HARNESS_STATE.md) |
+| Guides | Codebase Harness Map | [CODEBASE_HARNESS_MAP.md](CODEBASE_HARNESS_MAP.md) |
+| Reference | Compatibility | [COMPATIBILITY.md](COMPATIBILITY.md) |
+| Reference | Capability Matrix | [CAPABILITY_MATRIX.md](CAPABILITY_MATRIX.md) |
+| Reference | Architecture Boundaries | [ARCHITECTURE_BOUNDARIES.md](ARCHITECTURE_BOUNDARIES.md) |
+| Reference | Sessions and Token Accounting | [SESSIONS.md](SESSIONS.md) |
+| Reference | Canvas and A2UI | [CANVAS_A2UI.md](CANVAS_A2UI.md) |
+| Reference | Glossary | [GLOSSARY.md](GLOSSARY.md) |
+| Integrations | Semantic Kernel | [SEMANTIC_KERNEL.md](SEMANTIC_KERNEL.md) |
+| Integrations | MCP Apps | [MCPAPP.md](MCPAPP.md) |
+| Integrations | AgentQi Mobile Companion | [agentqi/agentqi-mobile](https://github.com/agentqi/agentqi-mobile) |
+| Integrations | Microsoft Agent Framework | [integrations/microsoft-agent-framework.md](integrations/microsoft-agent-framework.md) |
+| Integrations | Workflow Backends | [workflow-backends.md](workflow-backends.md) |
+| Integrations | Enterprise Channels (Feishu/DingTalk/WeCom) | [ENTERPRISE_CHANNELS.md](ENTERPRISE_CHANNELS.md) |
+| Integrations | Microsoft Teams | [TEAMS_SETUP.md](TEAMS_SETUP.md) |
+| Integrations | WhatsApp | [WHATSAPP_SETUP.md](WHATSAPP_SETUP.md) |
+| Integrations | A2A | [a2a.md](a2a.md) |
+| Integrations | External Coding Backends | [external-coding-backends.md](external-coding-backends.md) |
+| Integrations | Tailscale Deployment | [deployment/TAILSCALE.md](deployment/TAILSCALE.md) |
+| Operations | Workspace Admin APIs | [WORKSPACE_ADMIN.md](WORKSPACE_ADMIN.md) |
+| Operations | Security | [SECURITY.md](../SECURITY.md) |
+| Operations | Payment Security | [security/payments.md](security/payments.md) |
+| Operations | Tool Governance Sidecar | [governance/sidecar-pattern.md](governance/sidecar-pattern.md) |
+| Operations | Microsoft Agent Governance | [governance/microsoft-agent-governance.md](governance/microsoft-agent-governance.md) |
+| Operations | Releases | [RELEASES.md](RELEASES.md) |
+| Operations | Dashboard Asset Build | [build/dashboard-assets.md](build/dashboard-assets.md) |
+| Operations | Docker Hub | [DOCKERHUB.md](DOCKERHUB.md) |
+| Operations | Optional Sandboxing | [sandboxing.md](sandboxing.md) |
+| Project | Contributing | [CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Project | Governance | [project/governance.md](project/governance.md) |
+| Project | Maintainers | [project/maintainers.md](project/maintainers.md) |
+| Project | Sponsors | [project/sponsors.md](project/sponsors.md) |
+| Project | Branch Protection | [project/branch-protection.md](project/branch-protection.md) |
+| Project | Maintainer Review Checklist | [maintainers/review-checklist.md](maintainers/review-checklist.md) |
+| Project | Optional Dependency Split | [architecture/optional-dependency-split.md](architecture/optional-dependency-split.md) |
+| Project | Industrial Pack Preview Proposal | [proposals/industrial-pack-preview.md](proposals/industrial-pack-preview.md) |
+| Project | Roadmap | [ROADMAP.md](ROADMAP.md) |
+| Project | AI Contributor Guide | [ai-contributor-guide.md](ai-contributor-guide.md) |
+| International | Simplified Chinese Start Here | [zh-CN/START_HERE.md](zh-CN/START_HERE.md) |
+| International | Simplified Chinese Site Map | [zh-CN/SITE_MAP.md](zh-CN/SITE_MAP.md) |
+| International | 中文用户指南 | [zh-CN/USER_GUIDE.md](zh-CN/USER_GUIDE.md) |
+| International | 中文工具指南 | [zh-CN/TOOLS_GUIDE.md](zh-CN/TOOLS_GUIDE.md) |
+| International | 中文 MetaSkill 用户指南 | [zh-CN/meta-skill-user-guide.md](zh-CN/meta-skill-user-guide.md) |
+| International | 中文 MetaSkill 功能概览 | [zh-CN/meta-skills.md](zh-CN/meta-skills.md) |
+| International | 中文 MetaSkill 编写指南 | [zh-CN/authoring/meta-skills.md](zh-CN/authoring/meta-skills.md) |
+
+## Suggested Landing Path
+
+1. Start with [README.md](../README.md) for the product-level overview.
+2. Send evaluators to [START_HERE.md](START_HERE.md) when they need the shortest technical orientation.
+3. Send hands-on users to [QUICKSTART.md](QUICKSTART.md), then [GETTING_STARTED.md](GETTING_STARTED.md) if they need repository context.
+4. Link operators to [SECURITY.md](../SECURITY.md), [COMPATIBILITY.md](COMPATIBILITY.md), and [RELEASES.md](RELEASES.md) before any public deployment.
+5. Link contributors to [CONTRIBUTING.md](../CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md), and [ai-contributor-guide.md](ai-contributor-guide.md).
+
+## Sidebar Grouping
+
+```text
+Overview
+  Overview
+  Start Here
+  Quickstart
+  Getting Started
+
+Guides
+  User Guide
+  Tools Guide
+  Tool Hooks
+  TokenJuice Output Reduction
+  Goal Auto-Continuation
+  Loop Recurring Prompts
+  Embedded Local Models
+  OpenSquilla Dynamic Turn Routing
+  Dynamic Routing and Model Profiles
+  External CLI Connectors
+  Fractal Memory
+  Model Profiles
+  Prompt Caching
+  Learning Proposals
+  Agent Testing Harness
+  AI-Assisted Testing Playbook
+  Harness Regression Suite
+  Plan-Execute-Verify Mode
+  Harness Evolution Proposals
+  Shared Harness State
+  Codebase Harness Map
+
+Reference
+  Compatibility
+  Capability Matrix
+  Architecture Boundaries
+  Sessions and Token Accounting
+  Canvas and A2UI
+  Glossary
+
+Integrations
+  Semantic Kernel
+  MCP Apps
+  AgentQi Mobile Companion
+  Microsoft Agent Framework
+  Workflow Backends
+  Microsoft Teams
+  WhatsApp
+  A2A
+  External Coding Backends
+  Tailscale Deployment
+
+Operations
+  Security
+  Payment Security
+  Tool Governance Sidecar
+  Microsoft Agent Governance
+  Releases
+  Dashboard Asset Build
+  Docker Hub
+  Optional Sandboxing
+
+Project
+  Contributing
+  Governance
+  Maintainers
+  Sponsors
+  Branch Protection
+  Maintainer Review Checklist
+  Optional Dependency Split
+  Industrial Pack Preview Proposal
+  Roadmap
+  AI Contributor Guide
+
+International
+  Simplified Chinese Start Here
+  Simplified Chinese Site Map
+  中文用户指南
+  中文工具指南
+```
+
+## Build Notes
+
+- Preserve the existing relative links when importing pages into a static site generator.
+- Treat files under `docs/experiments/` as historical research notes, not primary navigation.
+- Keep [docs/README.md](README.md) as the source-index page for GitHub browsing.
+- Add redirects or aliases for lower-case route names if the website framework normalizes slugs.
+- Keep security and contribution pages at the repository root in source control even if the website renders them under an operations or project section.

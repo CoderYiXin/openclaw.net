@@ -16,11 +16,14 @@ public sealed class SessionAdminStoreTests
             var store = new FileMemoryStore(root);
             await SeedSessionsAsync(store);
 
-            var page = await ((ISessionAdminStore)store).ListSessionsAsync(page: 1, pageSize: 1, new SessionListQuery(), CancellationToken.None);
+            var page = await ((ISessionAdminStore)store).ListSessionsAsync(page: 1, pageSize: 1, new SessionListQuery(), TestContext.Current.CancellationToken);
 
             Assert.Single(page.Items);
             Assert.True(page.HasMore);
             Assert.Equal("session-2", page.Items[0].Id);
+            Assert.Equal(SessionRunState.Continuing, page.Items[0].RunState);
+            Assert.Equal("continue file-backed work", page.Items[0].BackgroundRunObjective);
+            Assert.Equal(3, page.Items[0].BackgroundContinuationCount);
         }
         finally
         {
@@ -39,11 +42,14 @@ public sealed class SessionAdminStoreTests
             {
                 await SeedSessionsAsync(store);
 
-                var page = await ((ISessionAdminStore)store).ListSessionsAsync(page: 1, pageSize: 1, new SessionListQuery(), CancellationToken.None);
+                var page = await ((ISessionAdminStore)store).ListSessionsAsync(page: 1, pageSize: 1, new SessionListQuery(), TestContext.Current.CancellationToken);
 
                 Assert.Single(page.Items);
                 Assert.True(page.HasMore);
                 Assert.Equal("session-2", page.Items[0].Id);
+                Assert.Equal(SessionRunState.Continuing, page.Items[0].RunState);
+                Assert.Equal("continue file-backed work", page.Items[0].BackgroundRunObjective);
+                Assert.Equal(3, page.Items[0].BackgroundContinuationCount);
             }
         }
         finally
@@ -65,7 +71,7 @@ public sealed class SessionAdminStoreTests
                 page: 1,
                 pageSize: 10,
                 new SessionListQuery { ChannelId = "sms" },
-                CancellationToken.None);
+                TestContext.Current.CancellationToken);
 
             Assert.Single(page.Items);
             Assert.Equal("session-3", page.Items[0].Id);
@@ -91,7 +97,7 @@ public sealed class SessionAdminStoreTests
                     page: 1,
                     pageSize: 1,
                     new SessionListQuery { Search = "sms" },
-                    CancellationToken.None);
+                    TestContext.Current.CancellationToken);
 
                 Assert.Single(page.Items);
                 Assert.False(page.HasMore);
@@ -119,7 +125,7 @@ public sealed class SessionAdminStoreTests
                     page: 1,
                     pageSize: 10,
                     new SessionListQuery { State = SessionState.Paused },
-                    CancellationToken.None);
+                    TestContext.Current.CancellationToken);
 
                 Assert.Single(page.Items);
                 Assert.Equal("session-3", page.Items[0].Id);
@@ -139,15 +145,22 @@ public sealed class SessionAdminStoreTests
             ChannelId = "websocket",
             SenderId = "alice",
             LastActiveAt = DateTimeOffset.UtcNow.AddMinutes(-10)
-        }, CancellationToken.None);
+        }, TestContext.Current.CancellationToken);
 
         await store.SaveSessionAsync(new Session
         {
             Id = "session-2",
             ChannelId = "websocket",
             SenderId = "bob",
-            LastActiveAt = DateTimeOffset.UtcNow
-        }, CancellationToken.None);
+            LastActiveAt = DateTimeOffset.UtcNow,
+            RunState = SessionRunState.Continuing,
+            BackgroundRun = new BackgroundRunMetadata
+            {
+                RunId = "run-session-2",
+                Objective = "continue file-backed work",
+                ContinuationCount = 3
+            }
+        }, TestContext.Current.CancellationToken);
 
         await store.SaveSessionAsync(new Session
         {
@@ -156,7 +169,7 @@ public sealed class SessionAdminStoreTests
             SenderId = "carol",
             LastActiveAt = DateTimeOffset.UtcNow.AddMinutes(-1),
             State = SessionState.Paused
-        }, CancellationToken.None);
+        }, TestContext.Current.CancellationToken);
     }
 
     private static string CreateTempDirectory()

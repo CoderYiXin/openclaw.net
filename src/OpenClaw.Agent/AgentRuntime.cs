@@ -2,14 +2,18 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 using OpenClaw.Agent.Execution;
+using OpenClaw.Agent.Routing;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Security;
 using OpenClaw.Core.Skills;
 
 namespace OpenClaw.Agent;
@@ -51,7 +55,10 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly CircuitBreaker _circuitBreaker;
     private readonly RuntimeMetrics? _metrics;
     private readonly ProviderUsageTracker? _providerUsage;
+    private readonly ITurnTokenUsageObserver? _turnTokenUsageObserver;
     private readonly ILlmExecutionService? _llmExecutionService;
+    private readonly IGoalService? _goalService;
+    private readonly Agent.Goal.AgentRuntimeGoalIntegration? _goalIntegration;
     private readonly long _sessionTokenBudget;
     private readonly bool _estimateTokenBudgetAdmission;
     private readonly LlmProviderConfig _config;
@@ -63,11 +70,19 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly Action<Session, string, string, long, long>? _recordContractTurnUsage;
     private readonly Action<Session, string>? _appendContractSnapshot;
     private readonly SkillsConfig? _skillsConfig;
+    private readonly bool _metaSkillsEnabled;
     private readonly string? _skillWorkspacePath;
     private readonly IReadOnlyList<string> _pluginSkillDirs;
+    private readonly IRedactionPipeline _redaction;
+    private readonly ISentinelSubstitutionService _sentinelSubstitution;
     private readonly string? _memoryRecallPrefix;
+    private readonly ContextBudgetPlanner? _contextBudgetPlanner;
+    private readonly FractalMemoryConfig? _fractalMemory;
+    private readonly bool _backgroundExecutionEnabled;
+    private readonly ITurnRoutingPolicy _turnRoutingPolicy;
     private readonly object _skillGate = new();
     private string[] _loadedSkillNames = [];
+    private IReadOnlyList<SkillDefinition> _loadedSkills = [];
     private int _skillPromptLength;
 
     public AgentRuntime(
@@ -84,6 +99,7 @@ public sealed class AgentRuntime : IAgentRuntime
         int toolTimeoutSeconds = 30,
         RuntimeMetrics? metrics = null,
         ProviderUsageTracker? providerUsage = null,
+        ITurnTokenUsageObserver? turnTokenUsageObserver = null,
         ILlmExecutionService? llmExecutionService = null,
         bool parallelToolExecution = true,
         bool enableCompaction = false,
@@ -106,7 +122,15 @@ public sealed class AgentRuntime : IAgentRuntime
         Func<Session, bool>? isContractRuntimeBudgetExceeded = null,
         Action<Session, string, string, long, long>? recordContractTurnUsage = null,
         Action<Session, string>? appendContractSnapshot = null,
-        ToolAuditLog? toolAuditLog = null)
+        ToolAuditLog? toolAuditLog = null,
+        IRedactionPipeline? redaction = null,
+        ISentinelSubstitutionService? sentinelSubstitution = null,
+        IToolGovernanceService? toolGovernance = null,
+        IPlanExecuteVerifyOrchestrator? planExecuteVerify = null,
+        ContextBudgetPlanner? contextBudgetPlanner = null,
+        ITurnRoutingPolicy? turnRoutingPolicy = null,
+        IGoalService? goalService = null,
+        IReadOnlyList<IToolResultInterceptor>? interceptors = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -129,10 +153,18 @@ public sealed class AgentRuntime : IAgentRuntime
         _hooks = hooks ?? [];
         _metrics = metrics;
         _providerUsage = providerUsage;
+        _turnTokenUsageObserver = turnTokenUsageObserver;
         _llmExecutionService = llmExecutionService;
+        _goalService = goalService;
+        _goalIntegration = goalService is not null
+            ? new Agent.Goal.AgentRuntimeGoalIntegration(goalService, logger)
+            : null;
         _skillsConfig = skillsConfig;
+        _metaSkillsEnabled = skillsConfig?.MetaSkill.Enabled ?? true;
         _skillWorkspacePath = skillWorkspacePath;
         _pluginSkillDirs = pluginSkillDirs ?? [];
+        _redaction = redaction ?? new NoopRedactionPipeline();
+        _sentinelSubstitution = sentinelSubstitution ?? new NoopSentinelSubstitutionService();
         _circuitBreaker = new CircuitBreaker(
             config.CircuitBreakerThreshold,
             TimeSpan.FromSeconds(config.CircuitBreakerCooldownSeconds),
@@ -151,12 +183,22 @@ public sealed class AgentRuntime : IAgentRuntime
             toolUsageTracker: toolUsageTracker,
             executionRouter: executionRouter,
             toolPresetResolver: toolPresetResolver,
-            auditLog: toolAuditLog);
+            redaction: _redaction,
+            sentinelSubstitution: _sentinelSubstitution,
+            toolGovernance: toolGovernance,
+            planExecuteVerify: planExecuteVerify,
+            auditLog: toolAuditLog,
+            interceptors: interceptors,
+            metaInvokeExecutor: (session, skillName, input, token) => ExecuteMetaSkillAsync(session, skillName, input, token));
         _sessionTokenBudget = sessionTokenBudget;
         _estimateTokenBudgetAdmission = gatewayConfig?.EnableEstimatedTokenAdmissionControl ?? false;
         _recall = recall;
         _profileStore = profileStore;
         _profilesConfig = profilesConfig;
+        _contextBudgetPlanner = contextBudgetPlanner;
+        _fractalMemory = gatewayConfig?.Memory.Fractal;
+        _backgroundExecutionEnabled = gatewayConfig?.BackgroundExecution.Enabled ?? false;
+        _turnRoutingPolicy = turnRoutingPolicy ?? NoopTurnRoutingPolicy.Instance;
         _isContractTokenBudgetExceeded = isContractTokenBudgetExceeded;
         _isContractRuntimeBudgetExceeded = isContractRuntimeBudgetExceeded;
         _recordContractTurnUsage = recordContractTurnUsage;
@@ -174,6 +216,17 @@ public sealed class AgentRuntime : IAgentRuntime
             lock (_skillGate)
             {
                 return _loadedSkillNames;
+            }
+        }
+    }
+
+    public IReadOnlyList<SkillDefinition> LoadedSkills
+    {
+        get
+        {
+            lock (_skillGate)
+            {
+                return _loadedSkills;
             }
         }
     }
@@ -197,10 +250,25 @@ public sealed class AgentRuntime : IAgentRuntime
         return Task.FromResult<IReadOnlyList<string>>(LoadedSkillNames);
     }
 
+    public Task ApplyMcpToolChangesAsync(
+        IReadOnlyList<ITool> toAdd,
+        IReadOnlyList<string> toRemove,
+        CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        _toolExecutor.ReplaceMcpTools(toAdd, toRemove);
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// Exposes the circuit breaker state for health/metrics endpoints.
     /// </summary>
     public CircuitState CircuitBreakerState => _llmExecutionService?.DefaultCircuitState ?? _circuitBreaker.State;
+
+    private static string ResolveCorrelationId(string? correlationId)
+        => !string.IsNullOrWhiteSpace(correlationId)
+            ? correlationId.Trim()
+            : Activity.Current?.TraceId.ToString() ?? Guid.NewGuid().ToString("N")[..16];
 
     /// <summary>
     /// Run the agent loop for a single user turn. Supports multi-step tool use,
@@ -209,17 +277,32 @@ public sealed class AgentRuntime : IAgentRuntime
     public async Task<string> RunAsync(
         Session session, string userMessage, CancellationToken ct,
         ToolApprovalCallback? approvalCallback = null,
-        JsonElement? responseSchema = null)
+        JsonElement? responseSchema = null,
+        string? correlationId = null)
+    {
+        var result = await RunTurnAsync(session, userMessage, ct, approvalCallback, responseSchema, correlationId);
+        return result.Text;
+    }
+
+    /// <inheritdoc />
+    public async Task<AgentTurnResult> RunTurnAsync(
+        Session session, string userMessage, CancellationToken ct,
+        ToolApprovalCallback? approvalCallback = null,
+        JsonElement? responseSchema = null,
+        string? correlationId = null)
     {
         using var activity = Telemetry.ActivitySource.StartActivity("Agent.RunAsync");
         activity?.SetTag("session.id", session.Id);
         activity?.SetTag("channel.id", session.ChannelId);
 
+        var resolvedCorrelationId = ResolveCorrelationId(correlationId);
         var turnCtx = new TurnContext
         {
+            CorrelationId = resolvedCorrelationId,
             SessionId = session.Id,
             ChannelId = session.ChannelId
         };
+        userMessage = _redaction.Redact(userMessage);
 
         _metrics?.IncrementRequests();
         _logger?.LogInformation("[{CorrelationId}] Turn start session={SessionId} channel={ChannelId}",
@@ -229,7 +312,7 @@ public sealed class AgentRuntime : IAgentRuntime
         {
             AppendContractSnapshot(session, "budget_exceeded");
             LogTurnComplete(turnCtx);
-            return contractBudgetMessage;
+            return AgentTurnResult.Completed(contractBudgetMessage);
         }
 
         var resumeCheckpoint = TryGetResumableCheckpoint(session);
@@ -240,7 +323,7 @@ public sealed class AgentRuntime : IAgentRuntime
 
             // Compaction or simple trim
             if (_enableCompaction)
-                await CompactHistoryAsync(session, ct);
+                await CompactHistoryAsync(session, ct, resolvedCorrelationId);
             else
                 TrimHistory(session);
         }
@@ -254,8 +337,10 @@ public sealed class AgentRuntime : IAgentRuntime
                 resumeCheckpoint.CheckpointId);
         }
 
+            using var turnRoutingScope = await ApplyTurnRoutingAsync(session, userMessage, resumeCheckpoint is not null, responseSchema, ct);
+
         // Build conversation for LLM
-        var messages = BuildMessages(session, exactLatestToolBatch: resumeCheckpoint is not null);
+        var messages = BuildMessages(session, exactLatestToolBatch: resumeCheckpoint is not null, userMessage: userMessage);
         if (resumeCheckpoint is not null)
         {
             messages.Insert(1, new ChatMessage(ChatRole.System, BuildCheckpointResumeInstruction(resumeCheckpoint)));
@@ -265,8 +350,21 @@ public sealed class AgentRuntime : IAgentRuntime
         else
         {
             // Order matters: memory recall first, then profile recall (inserted near conversation start).
-            await TryInjectRecallAsync(messages, userMessage, ct);
+            var memoryRecallInjected = await TryInjectRecallAsync(messages, userMessage, ct);
+            await TryInjectStructuredMemoryContextAsync(messages, session, userMessage, memoryRecallInjected, ct);
             await TryInjectProfileRecallAsync(messages, session, ct);
+        }
+
+        // Inject Goal activation prompt if a goal is active
+        if (_goalIntegration is not null)
+        {
+            var goalPrompt = _goalIntegration.BuildGoalSystemPrompt(session.Id);
+            if (goalPrompt is not null)
+            {
+                // Insert after system prompt but before user message
+                messages.Insert(1, new ChatMessage(ChatRole.System, goalPrompt));
+                _logger?.LogInformation("[{CorrelationId}] Goal activation prompt injected", turnCtx.CorrelationId);
+            }
         }
 
         // Build tool definitions for the LLM (use pre-cached declarations)
@@ -295,14 +393,19 @@ public sealed class AgentRuntime : IAgentRuntime
                 _logger?.LogInformation("[{CorrelationId}] Session token budget exceeded mid-turn ({Used}/{Budget})",
                     turnCtx.CorrelationId, session.GetTotalTokens(), _sessionTokenBudget);
                 LogTurnComplete(turnCtx);
-                return "You've reached the token limit for this session. Please start a new conversation.";
+                return new AgentTurnResult
+                {
+                    Text = "You've reached the token limit for this session. Please start a new conversation.",
+                    ShouldContinue = false,
+                    StopReason = AgentTurnStopReason.BudgetLimited
+                };
             }
 
             if (TryRejectContractBudget(session, out contractBudgetMessage))
             {
                 AppendContractSnapshot(session, "budget_exceeded");
                 LogTurnComplete(turnCtx);
-                return contractBudgetMessage;
+                return AgentTurnResult.Completed(contractBudgetMessage);
             }
 
             LlmExecutionResult? executionResult = null;
@@ -316,7 +419,12 @@ public sealed class AgentRuntime : IAgentRuntime
                 _logger?.LogWarning("[{CorrelationId}] Circuit breaker open — retry after {RetryAfter}s",
                     turnCtx.CorrelationId, coe.RetryAfter.TotalSeconds);
                 LogTurnComplete(turnCtx);
-                return coe.Message;
+                return new AgentTurnResult
+                {
+                    Text = coe.Message,
+                    ShouldContinue = false,
+                    StopReason = AgentTurnStopReason.Failed
+                };
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -325,28 +433,38 @@ public sealed class AgentRuntime : IAgentRuntime
             catch (EstimatedBudgetAdmissionException ex)
             {
                 LogTurnComplete(turnCtx);
-                return ex.Message;
+                return new AgentTurnResult
+                {
+                    Text = ex.Message,
+                    ShouldContinue = false,
+                    StopReason = AgentTurnStopReason.BudgetLimited
+                };
             }
             catch (ModelSelectionException ex)
             {
                 _logger?.LogWarning("[{CorrelationId}] Model selection failed: {Message}", turnCtx.CorrelationId, ex.Message);
                 LogTurnComplete(turnCtx);
-                return ex.Message;
+                return new AgentTurnResult
+                {
+                    Text = ex.Message,
+                    ShouldContinue = false,
+                    StopReason = AgentTurnStopReason.Failed
+                };
             }
 
-            catch (Exception ex)
+            catch (Exception ex) when (IsExpectedLlmFailure(ex))
             {
                 _metrics?.IncrementLlmErrors();
                 _logger?.LogError(ex, "[{CorrelationId}] LLM call failed after all retries and fallbacks", turnCtx.CorrelationId);
                 LogTurnComplete(turnCtx);
-                return "Sorry, I'm having trouble reaching my AI provider right now. Please try again shortly.";
+                return AgentTurnResult.Completed("Sorry, I'm having trouble reaching my AI provider right now. Please try again shortly.");
             }
             llmSw.Stop();
 
             if (executionResult is null)
             {
                  LogTurnComplete(turnCtx);
-                 return "Sorry, I'm having trouble reaching my AI provider right now. Please try again shortly.";
+                 return AgentTurnResult.Completed("Sorry, I'm having trouble reaching my AI provider right now. Please try again shortly.");
             }
 
             var response = executionResult.Response;
@@ -363,27 +481,30 @@ public sealed class AgentRuntime : IAgentRuntime
             _metrics?.AddPromptCacheWrites(cacheUsage.CacheWriteTokens);
             _providerUsage?.AddTokens(executionResult.ProviderId, executionResult.ModelId, inputTokens, outputTokens);
             _providerUsage?.AddCacheTokens(executionResult.ProviderId, executionResult.ModelId, cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens);
-            _providerUsage?.RecordTurn(
-                session.Id,
-                session.ChannelId,
+
+            // Track token usage on the session
+            session.AddTokenUsage(inputTokens, outputTokens);
+            session.AddCacheUsage(cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens);
+            _recordContractTurnUsage?.Invoke(session, executionResult.ProviderId, executionResult.ModelId, inputTokens, outputTokens);
+            RecordTurnUsage(
+                session,
                 executionResult.ProviderId,
                 executionResult.ModelId,
                 inputTokens,
                 outputTokens,
                 cacheUsage.CacheReadTokens,
                 cacheUsage.CacheWriteTokens,
-                LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, inputTokens, _skillPromptLength));
-
-            // Track token usage on the session
-            session.AddTokenUsage(inputTokens, outputTokens);
-            session.AddCacheUsage(cacheUsage.CacheReadTokens, cacheUsage.CacheWriteTokens);
-            _recordContractTurnUsage?.Invoke(session, executionResult.ProviderId, executionResult.ModelId, inputTokens, outputTokens);
+                response.Usage is null
+                    ? LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, inputTokens, _skillPromptLength)
+                    : new InputTokenComponentEstimate(),
+                isEstimated: response.Usage is null,
+                correlationId: turnCtx.CorrelationId);
 
             if (TryRejectContractBudget(session, out contractBudgetMessage))
             {
                 AppendContractSnapshot(session, "budget_exceeded");
                 LogTurnComplete(turnCtx);
-                return contractBudgetMessage;
+                return AgentTurnResult.Completed(contractBudgetMessage);
             }
 
             // Check for tool calls
@@ -394,12 +515,35 @@ public sealed class AgentRuntime : IAgentRuntime
             if (toolCalls.Count == 0)
             {
                 // Final text response
-                var text = response.Text ?? "";
+                var text = _redaction.Redact(response.Text ?? "");
+
+                // ── Goal continuation check ──
+                if (_goalIntegration is not null)
+                {
+                    _goalIntegration.UpdateGoalTokenUsage(session);
+                    var continuationPrompt = _goalIntegration.EvaluateGoalContinuation(
+                        session, i, _maxIterations, text);
+                    if (continuationPrompt is not null)
+                    {
+                        messages.Add(new ChatMessage(ChatRole.System, continuationPrompt));
+                        session.History.Add(new ChatTurn
+                        {
+                            Role = "system",
+                            Content = $"[goal_check:{i}] Continue working toward objective..."
+                        });
+                        _logger?.LogInformation(
+                            "[{CorrelationId}] Goal auto-continue iteration {Iter}/{Max}",
+                            turnCtx.CorrelationId, i + 1, _maxIterations);
+                        continue; // ← Don't return — continue the loop
+                    }
+                }
+                // ── End Goal continuation check ──
+
                 session.History.Add(new ChatTurn { Role = "assistant", Content = text });
                 MarkCheckpointCompleted(session, SessionCheckpointStates.Completed, "final_response");
                 AppendContractSnapshot(session, "active");
                 LogTurnComplete(turnCtx);
-                return text;
+                return AgentTurnResult.Completed(text);
             }
 
             // Execute tool calls (parallel or sequential based on config)
@@ -426,7 +570,20 @@ public sealed class AgentRuntime : IAgentRuntime
         MarkCheckpointCompleted(session, SessionCheckpointStates.Failed, "max_iterations");
         AppendContractSnapshot(session, "active");
         LogTurnComplete(turnCtx);
-        return "I've reached the maximum number of tool iterations. Please try a simpler request.";
+
+        var hasActiveGoal = _goalIntegration?.BuildGoalSystemPrompt(session.Id) is not null;
+        var canContinue = _backgroundExecutionEnabled;
+        return new AgentTurnResult
+        {
+            Text = canContinue
+                ? "I've reached the maximum number of tool iterations. Continuing in the background."
+                : "I've reached the maximum number of tool iterations. Task requires more work.",
+            ShouldContinue = canContinue,
+            StopReason = AgentTurnStopReason.BatchLimitReached,
+            ContinuePrompt = canContinue
+                ? (hasActiveGoal ? "Continue working toward the active goal." : "Continue working on the task.")
+                : null
+        };
     }
 
     /// <summary>
@@ -436,17 +593,21 @@ public sealed class AgentRuntime : IAgentRuntime
     public async IAsyncEnumerable<AgentStreamEvent> RunStreamingAsync(
         Session session, string userMessage,
         [EnumeratorCancellation] CancellationToken ct,
-        ToolApprovalCallback? approvalCallback = null)
+        ToolApprovalCallback? approvalCallback = null,
+        string? correlationId = null)
     {
         using var activity = Telemetry.ActivitySource.StartActivity("Agent.RunStreamingAsync");
         activity?.SetTag("session.id", session.Id);
         activity?.SetTag("channel.id", session.ChannelId);
 
+        var resolvedCorrelationId = ResolveCorrelationId(correlationId);
         var turnCtx = new TurnContext
         {
+            CorrelationId = resolvedCorrelationId,
             SessionId = session.Id,
             ChannelId = session.ChannelId
         };
+        userMessage = _redaction.Redact(userMessage);
 
         _metrics?.IncrementRequests();
         _logger?.LogInformation("[{CorrelationId}] Streaming turn start session={SessionId} channel={ChannelId}",
@@ -475,7 +636,7 @@ public sealed class AgentRuntime : IAgentRuntime
             session.History.Add(new ChatTurn { Role = "user", Content = userMessage });
 
             if (_enableCompaction)
-                await CompactHistoryAsync(session, ct);
+                await CompactHistoryAsync(session, ct, resolvedCorrelationId);
             else
                 TrimHistory(session);
         }
@@ -489,7 +650,9 @@ public sealed class AgentRuntime : IAgentRuntime
                 resumeCheckpoint.CheckpointId);
         }
 
-        var messages = BuildMessages(session, exactLatestToolBatch: resumeCheckpoint is not null);
+            using var turnRoutingScope = await ApplyTurnRoutingAsync(session, userMessage, resumeCheckpoint is not null, responseSchema: null, ct);
+
+        var messages = BuildMessages(session, exactLatestToolBatch: resumeCheckpoint is not null, userMessage: userMessage);
         if (resumeCheckpoint is not null)
         {
             messages.Insert(1, new ChatMessage(ChatRole.System, BuildCheckpointResumeInstruction(resumeCheckpoint)));
@@ -499,9 +662,19 @@ public sealed class AgentRuntime : IAgentRuntime
         else
         {
             // Order matters: memory recall first, then profile recall (inserted near conversation start).
-            await TryInjectRecallAsync(messages, userMessage, ct);
+            var memoryRecallInjected = await TryInjectRecallAsync(messages, userMessage, ct);
+            await TryInjectStructuredMemoryContextAsync(messages, session, userMessage, memoryRecallInjected, ct);
             await TryInjectProfileRecallAsync(messages, session, ct);
         }
+
+        // Inject Goal activation prompt in streaming path
+        if (_goalIntegration is not null)
+        {
+            var goalPrompt = _goalIntegration.BuildGoalSystemPrompt(session.Id);
+            if (goalPrompt is not null)
+                messages.Insert(1, new ChatMessage(ChatRole.System, goalPrompt));
+        }
+
         var chatOptions = new ChatOptions
         {
             ModelId = session.ModelOverride ?? _config.Model,
@@ -544,9 +717,18 @@ public sealed class AgentRuntime : IAgentRuntime
             // We buffer events because C# doesn't allow yield in try/catch.
             var streamResult = await StreamLlmCollectAsync(session, messages, chatOptions, turnCtx, ct);
 
-            // Yield buffered text deltas
-            foreach (var delta in streamResult.TextDeltas)
-                yield return AgentStreamEvent.TextDelta(delta);
+            // Redact the complete buffered text so secrets split across provider chunks cannot leak.
+            var fullText = streamResult.FullText;
+            var redactedText = _redaction.Redact(fullText);
+            if (string.Equals(redactedText, fullText, StringComparison.Ordinal))
+            {
+                foreach (var delta in streamResult.TextDeltas)
+                    yield return AgentStreamEvent.TextDelta(delta);
+            }
+            else if (!string.IsNullOrEmpty(redactedText))
+            {
+                yield return AgentStreamEvent.TextDelta(redactedText);
+            }
 
             // If streaming failed, yield error and stop
             if (streamResult.Error is not null)
@@ -563,16 +745,20 @@ public sealed class AgentRuntime : IAgentRuntime
                 _recordContractTurnUsage?.Invoke(session, streamResult.ProviderId, streamResult.ModelId, streamResult.InputTokens, streamResult.OutputTokens);
             if (!string.IsNullOrWhiteSpace(streamResult.ProviderId) && !string.IsNullOrWhiteSpace(streamResult.ModelId))
             {
-                _providerUsage?.RecordTurn(
-                    session.Id,
-                    session.ChannelId,
+                    var isUsageEstimated = streamResult.IsUsageEstimated;
+                RecordTurnUsage(
+                    session,
                     streamResult.ProviderId,
                     streamResult.ModelId,
                     streamResult.InputTokens,
                     streamResult.OutputTokens,
                     streamResult.CacheReadTokens,
                     streamResult.CacheWriteTokens,
-                    LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, streamResult.InputTokens, _skillPromptLength));
+                        isUsageEstimated
+                            ? LlmExecutionEstimateBuilder.BuildInputTokenEstimate(messages, streamResult.InputTokens, _skillPromptLength)
+                            : new InputTokenComponentEstimate(),
+                        isEstimated: isUsageEstimated,
+                        correlationId: turnCtx.CorrelationId);
             }
 
             if (TryRejectContractBudget(session, out contractBudgetMessage))
@@ -589,7 +775,28 @@ public sealed class AgentRuntime : IAgentRuntime
             if (toolCalls.Count == 0)
             {
                 // Final text response
-                session.History.Add(new ChatTurn { Role = "assistant", Content = streamResult.FullText });
+                var finalText = _redaction.Redact(streamResult.FullText);
+
+                // ── Goal continuation check (streaming path) ──
+                if (_goalIntegration is not null)
+                {
+                    _goalIntegration.UpdateGoalTokenUsage(session);
+                    var continuationPrompt = _goalIntegration.EvaluateGoalContinuation(
+                        session, i, _maxIterations, finalText);
+                    if (continuationPrompt is not null)
+                    {
+                        messages.Add(new ChatMessage(ChatRole.System, continuationPrompt));
+                        session.History.Add(new ChatTurn
+                        {
+                            Role = "system",
+                            Content = $"[goal_check:{i}] Continue working toward objective..."
+                        });
+                        continue; // ← Don't yield Complete — continue the loop
+                    }
+                }
+                // ── End Goal continuation check ──
+
+                session.History.Add(new ChatTurn { Role = "assistant", Content = finalText });
                 MarkCheckpointCompleted(session, SessionCheckpointStates.Completed, "final_response");
                 yield return AgentStreamEvent.Complete();
                 AppendContractSnapshot(session, "active");
@@ -612,9 +819,7 @@ public sealed class AgentRuntime : IAgentRuntime
 
                 foreach (var call in toolCalls)
                 {
-                    var argsJson = call.Arguments is not null
-                        ? JsonSerializer.Serialize(call.Arguments, CoreJsonContext.Default.IDictionaryStringObject)
-                        : "{}";
+                    var argsJson = SerializeToolArgumentsForEvent(call.Arguments);
                     yield return AgentStreamEvent.ToolStarted(call.Name, argsJson);
 
                     var channel = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
@@ -635,7 +840,8 @@ public sealed class AgentRuntime : IAgentRuntime
                                 isStreaming: true,
                                 approvalCallback,
                                 ct,
-                                onDelta: async chunk => await channel.Writer.WriteAsync(chunk, ct));
+                                onDelta: async chunk => await channel.Writer.WriteAsync(chunk, ct),
+                                toolCallCount: toolCalls.Count);
                             return (execution, execution.ToFunctionResultContent(call.CallId));
                         }
                         finally
@@ -664,13 +870,37 @@ public sealed class AgentRuntime : IAgentRuntime
             }
             else
             {
-                (invocations, toolResults) = await ExecuteToolCallsAsync(
-                    toolCalls, session, turnCtx, isStreaming: true, approvalCallback, ct);
-
-                foreach (var inv in invocations)
+                if (_parallelToolExecution && toolCalls.Count > 1)
                 {
-                    yield return AgentStreamEvent.ToolStarted(inv.ToolName, inv.Arguments);
-                    yield return AgentStreamEvent.ToolCompleted(inv.ToolName, inv.Result ?? "");
+                    foreach (var call in toolCalls)
+                    {
+                        var argsJson = SerializeToolArgumentsForEvent(call.Arguments);
+                        yield return AgentStreamEvent.ToolStarted(call.Name, argsJson);
+                    }
+
+                    (invocations, toolResults) = await ExecuteToolCallsAsync(
+                        toolCalls, session, turnCtx, isStreaming: true, approvalCallback, ct);
+
+                    foreach (var inv in invocations)
+                        yield return CreateToolCompletedEvent(inv);
+                }
+                else
+                {
+                    invocations = new List<ToolInvocation>(toolCalls.Count);
+                    toolResults = new List<FunctionResultContent>(toolCalls.Count);
+
+                    foreach (var call in toolCalls)
+                    {
+                        var argsJson = SerializeToolArgumentsForEvent(call.Arguments);
+                        yield return AgentStreamEvent.ToolStarted(call.Name, argsJson);
+
+                        var (invocation, result) = await ExecuteSingleToolCallAsync(
+                            call, session, turnCtx, isStreaming: true, approvalCallback, ct, onDelta: null, toolCallCount: toolCalls.Count);
+                        invocations.Add(invocation);
+                        toolResults.Add(result);
+
+                        yield return CreateToolCompletedEvent(invocation);
+                    }
                 }
             }
 
@@ -698,16 +928,72 @@ public sealed class AgentRuntime : IAgentRuntime
         LogTurnComplete(turnCtx);
     }
 
-    private async ValueTask TryInjectRecallAsync(List<ChatMessage> messages, string userMessage, CancellationToken ct)
+    private void RecordTurnUsage(
+        Session session,
+        string providerId,
+        string modelId,
+        long inputTokens,
+        long outputTokens,
+        long cacheReadTokens,
+        long cacheWriteTokens,
+        InputTokenComponentEstimate estimatedInputTokensByComponent,
+        bool isEstimated,
+        string? correlationId)
+    {
+        var record = new TurnTokenUsageRecord
+        {
+            CorrelationId = correlationId,
+            SessionId = session.Id,
+            ChannelId = session.ChannelId,
+            ProviderId = providerId,
+            ModelId = modelId,
+            InputTokens = inputTokens,
+            OutputTokens = outputTokens,
+            CacheReadTokens = cacheReadTokens,
+            CacheWriteTokens = cacheWriteTokens,
+            EstimatedInputTokensByComponent = estimatedInputTokensByComponent,
+            IsEstimated = isEstimated
+        };
+
+        if (_turnTokenUsageObserver is not null)
+        {
+            _turnTokenUsageObserver.RecordTurn(record);
+            return;
+        }
+
+        _providerUsage?.RecordTurn(
+            record.SessionId,
+            record.ChannelId,
+            record.ProviderId,
+            record.ModelId,
+            record.InputTokens,
+            record.OutputTokens,
+            record.CacheReadTokens,
+            record.CacheWriteTokens,
+            record.EstimatedInputTokensByComponent);
+    }
+
+    private static AgentStreamEvent CreateToolCompletedEvent(ToolInvocation invocation) =>
+        AgentStreamEvent.ToolCompleted(
+            invocation.ToolName,
+            invocation.Result ?? "",
+            resultStatus: string.IsNullOrWhiteSpace(invocation.ResultStatus)
+                ? ToolResultStatuses.Completed
+                : invocation.ResultStatus!,
+            failureCode: invocation.FailureCode,
+            failureMessage: invocation.FailureMessage,
+            nextStep: invocation.NextStep);
+
+    private async ValueTask<bool> TryInjectRecallAsync(List<ChatMessage> messages, string userMessage, CancellationToken ct)
     {
         if (_recall is null || !_recall.Enabled)
-            return;
+            return false;
 
         if (string.IsNullOrWhiteSpace(userMessage))
-            return;
+            return false;
 
         if (_memory is not IMemoryNoteSearch search)
-            return;
+            return false;
 
         try
         {
@@ -720,7 +1006,7 @@ public sealed class AgentRuntime : IAgentRuntime
                 hits = await search.SearchNotesAsync(userMessage, prefix: null, limit, ct);
             }
             if (hits.Count == 0)
-                return;
+                return false;
             _metrics?.AddMemoryRecallHits(hits.Count);
 
             var maxChars = Math.Clamp(_recall.MaxChars, 256, 100_000);
@@ -757,10 +1043,79 @@ public sealed class AgentRuntime : IAgentRuntime
             // Insert near the start for context, but do NOT inject as system prompt (prompt injection risk).
             // This is treated as user-provided context, and the system prompt explicitly warns it is untrusted.
             messages.Insert(Math.Min(1, messages.Count), new ChatMessage(ChatRole.User, text));
+            return true;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Memory recall injection failed; continuing without recall.");
+            return false;
+        }
+    }
+
+    private async ValueTask TryInjectStructuredMemoryContextAsync(
+        List<ChatMessage> messages,
+        Session session,
+        string userMessage,
+        bool memoryRecallInjected,
+        CancellationToken ct)
+    {
+        if (_contextBudgetPlanner is null ||
+            _fractalMemory is null ||
+            !_fractalMemory.Enabled ||
+            !string.Equals(_fractalMemory.AutoContextMode, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(userMessage))
+            return;
+
+        try
+        {
+            var result = await _contextBudgetPlanner.BuildContextAsync(new StructuredMemoryContextRequest
+            {
+                Query = userMessage,
+                SessionId = session.Id,
+                Mode = "auto",
+                MaxChars = _fractalMemory.MaxContextChars,
+                MaxTokens = _fractalMemory.MaxContextTokens
+            }, ct);
+
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Context))
+                return;
+
+            // Fractal Memory is reference data, not instruction authority.
+            var insertionIndex = memoryRecallInjected ? 2 : 1;
+            messages.Insert(Math.Min(insertionIndex, messages.Count), new ChatMessage(ChatRole.User, result.Context));
+            _logger?.LogInformation(
+                "Attached Fractal Memory context for session={SessionId} source={SourcePath} truncated={Truncated}",
+                session.Id,
+                result.SourcePath,
+                result.Truncated);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger?.LogWarning(ex, "Fractal Memory context injection failed; continuing without structured memory context.");
+        }
+        catch (JsonException ex)
+        {
+            _logger?.LogWarning(ex, "Fractal Memory context injection failed; continuing without structured memory context.");
+        }
+        catch (IOException ex)
+        {
+            _logger?.LogWarning(ex, "Fractal Memory context injection failed; continuing without structured memory context.");
+        }
+        catch (TimeoutException ex)
+        {
+            _logger?.LogWarning(ex, "Fractal Memory context injection failed; continuing without structured memory context.");
         }
     }
 
@@ -803,6 +1158,10 @@ public sealed class AgentRuntime : IAgentRuntime
 
             messages.Insert(Math.Min(2, messages.Count), new ChatMessage(ChatRole.User, text));
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "User profile recall injection failed; continuing without profile context.");
@@ -834,6 +1193,7 @@ public sealed class AgentRuntime : IAgentRuntime
         public int CacheWriteTokens { get; set; }
         public string? ProviderId { get; set; }
         public string? ModelId { get; set; }
+        public bool IsUsageEstimated { get; set; }
         public string? Error { get; set; }
     }
 
@@ -904,7 +1264,7 @@ public sealed class AgentRuntime : IAgentRuntime
                 LogTurnComplete(turnCtx);
                 return result;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (IsExpectedLlmFailure(ex))
             {
                 _metrics?.IncrementLlmErrors();
                 _logger?.LogError(ex, "[{CorrelationId}] Streaming LLM call failed after all retries and fallbacks", turnCtx.CorrelationId);
@@ -915,9 +1275,15 @@ public sealed class AgentRuntime : IAgentRuntime
 
             llmSw.Stop();
             if (result.InputTokens == 0)
+            {
                 result.InputTokens = LlmExecutionEstimateBuilder.EstimateInputTokens(messages);
+                result.IsUsageEstimated = true;
+            }
             if (result.OutputTokens == 0)
+            {
                 result.OutputTokens = LlmExecutionEstimateBuilder.EstimateTokenCount(result.FullText.Length);
+                result.IsUsageEstimated = true;
+            }
 
             turnCtx.RecordLlmCall(llmSw.Elapsed, result.InputTokens, result.OutputTokens);
             _metrics?.IncrementLlmCalls();
@@ -1001,7 +1367,7 @@ public sealed class AgentRuntime : IAgentRuntime
             {
                 throw; // External cancellation, propagate immediately
             }
-            catch (Exception ex)
+            catch (Exception ex) when (IsExpectedLlmFailure(ex))
             {
                 lastException = ex;
                 _providerUsage?.RecordError(_config.Provider, model);
@@ -1011,6 +1377,7 @@ public sealed class AgentRuntime : IAgentRuntime
                 result.ToolCalls.Clear();
                 result.InputTokens = 0;
                 result.OutputTokens = 0;
+                result.IsUsageEstimated = false;
             }
         }
 
@@ -1027,9 +1394,15 @@ public sealed class AgentRuntime : IAgentRuntime
 
         // Use actual provider-reported usage when available; fall back to estimation
         if (result.InputTokens == 0)
+        {
             result.InputTokens = LlmExecutionEstimateBuilder.EstimateInputTokens(messages);
+            result.IsUsageEstimated = true;
+        }
         if (result.OutputTokens == 0)
+        {
             result.OutputTokens = LlmExecutionEstimateBuilder.EstimateTokenCount(result.FullText.Length);
+            result.IsUsageEstimated = true;
+        }
 
         turnCtx.RecordLlmCall(llmSw.Elapsed, result.InputTokens, result.OutputTokens);
         _metrics?.IncrementLlmCalls();
@@ -1079,7 +1452,7 @@ public sealed class AgentRuntime : IAgentRuntime
 
         foreach (var call in toolCalls)
         {
-            var (invocation, result) = await ExecuteSingleToolCallAsync(call, session, turnCtx, isStreaming, approvalCallback, ct, onDelta: null);
+            var (invocation, result) = await ExecuteSingleToolCallAsync(call, session, turnCtx, isStreaming, approvalCallback, ct, onDelta: null, toolCallCount: toolCalls.Count);
             invocations.Add(invocation);
             toolResults.Add(result);
         }
@@ -1101,7 +1474,7 @@ public sealed class AgentRuntime : IAgentRuntime
         {
             try
             {
-                return await ExecuteSingleToolCallAsync(call, session, turnCtx, isStreaming, approvalCallback, linkedCts.Token, onDelta: null);
+                return await ExecuteSingleToolCallAsync(call, session, turnCtx, isStreaming, approvalCallback, linkedCts.Token, onDelta: null, toolCallCount: toolCalls.Count);
             }
             catch (Exception)
             {
@@ -1143,7 +1516,8 @@ public sealed class AgentRuntime : IAgentRuntime
         bool isStreaming,
         ToolApprovalCallback? approvalCallback,
         CancellationToken ct,
-        Func<string, ValueTask>? onDelta)
+        Func<string, ValueTask>? onDelta,
+        int toolCallCount)
     {
         var result = await _toolExecutor.ExecuteAsync(
             call,
@@ -1152,7 +1526,8 @@ public sealed class AgentRuntime : IAgentRuntime
             isStreaming,
             approvalCallback,
             ct,
-            onDelta);
+            onDelta,
+            toolCallCount);
 
         return (result.Invocation, result.ToFunctionResultContent(call.CallId));
     }
@@ -1281,11 +1656,34 @@ public sealed class AgentRuntime : IAgentRuntime
         return ex is System.IO.IOException or System.Net.Sockets.SocketException;
     }
 
+    private static bool IsExpectedLlmFailure(Exception ex)
+        => ex is HttpRequestException
+            or TimeoutException
+            or OperationCanceledException
+            or System.IO.IOException
+            or System.Net.Sockets.SocketException
+            || ex is InvalidOperationException invalidOperation && IsExpectedLlmInvalidOperation(invalidOperation);
+
+    private static bool IsExpectedLlmInvalidOperation(InvalidOperationException ex)
+    {
+        if (ex.InnerException is not null && IsExpectedLlmFailure(ex.InnerException))
+            return true;
+
+        var message = ex.Message;
+        return message.Contains("LLM", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("provider", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("model", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("credential", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("API key", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("endpoint", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("token budget", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// Compacts session history by summarizing older turns via the LLM.
     /// Keeps the most recent turns verbatim and replaces older ones with a summary.
     /// </summary>
-    public async Task CompactHistoryAsync(Session session, CancellationToken ct)
+    public async Task CompactHistoryAsync(Session session, CancellationToken ct, string? correlationId = null)
     {
         if (session.History.Count <= _compactionThreshold)
         {
@@ -1339,6 +1737,7 @@ public sealed class AgentRuntime : IAgentRuntime
             var summaryOptions = new ChatOptions { MaxOutputTokens = 256, Temperature = 0.3f };
             var compactionTurnCtx = new TurnContext
             {
+                CorrelationId = ResolveCorrelationId(correlationId),
                 SessionId = session.Id,
                 ChannelId = session.ChannelId
             };
@@ -1375,6 +1774,10 @@ public sealed class AgentRuntime : IAgentRuntime
                 TrimHistory(session);
             }
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "History compaction failed — falling back to simple trim");
@@ -1382,11 +1785,11 @@ public sealed class AgentRuntime : IAgentRuntime
         }
     }
 
-    private List<ChatMessage> BuildMessages(Session session, bool exactLatestToolBatch = false)
+    private List<ChatMessage> BuildMessages(Session session, bool exactLatestToolBatch = false, string? userMessage = null)
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, GetSystemPrompt(session))
+            new(ChatRole.System, GetSystemPrompt(session, userMessage))
         };
 
         // Add history (bounded to avoid context overflow)
@@ -1641,20 +2044,2607 @@ public sealed class AgentRuntime : IAgentRuntime
         }
     }
 
-    private string GetSystemPrompt(Session session)
+    private static string SerializeToolArgumentsForEvent(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+            return "{}";
+
+        try
+        {
+            return JsonSerializer.Serialize(arguments, CoreJsonContext.Default.IDictionaryStringObject);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return "{}";
+        }
+    }
+
+    private string GetSystemPrompt(Session session, string? userMessage = null)
     {
         string systemPrompt;
+        string? blockedRoutes = null;
         lock (_skillGate)
         {
             systemPrompt = _systemPrompt;
+
+            // Per-turn projection resolution: when a user message is available and any
+            // loaded skill has projection contracts, resolve them to patch skill instructions
+            // and build a per-turn skill index. Matches kingcrab MafAgentRuntime behavior.
+            if (!string.IsNullOrWhiteSpace(userMessage))
+            {
+                var hasProjectionSkills = false;
+                foreach (var s in _loadedSkills)
+                {
+                    if (s.ProjectionContracts.Count > 0)
+                    {
+                        hasProjectionSkills = true;
+                        break;
+                    }
+                }
+
+                if (hasProjectionSkills)
+                {
+                    var effectiveSkills = ResolveSkillsForTurn(_loadedSkills, userMessage, out blockedRoutes, out var projectionPatches);
+                    var skillSection = SkillPromptBuilder.BuildIndex(effectiveSkills, _skillsConfig?.InstructionPrompt);
+                    var basePrompt = AgentSystemPromptBuilder.BuildBaseSystemPrompt(_requireToolApproval);
+                    systemPrompt = string.IsNullOrEmpty(skillSection) ? basePrompt : basePrompt + "\n" + skillSection;
+
+                    if (!string.IsNullOrWhiteSpace(projectionPatches))
+                        systemPrompt += "\n\n[Skill Projection Patches]\n" + projectionPatches.Trim();
+                }
+            }
         }
 
         systemPrompt = AgentSystemPromptBuilder.ApplyResponseMode(systemPrompt, session.ResponseMode);
 
-        if (string.IsNullOrWhiteSpace(session.SystemPromptOverride))
-            return systemPrompt;
+        if (!string.IsNullOrWhiteSpace(blockedRoutes))
+            systemPrompt += "\n\n[Blocked Skill Routes]\n" + blockedRoutes.Trim();
 
-        return systemPrompt + "\n\n[Route Instructions]\n" + session.SystemPromptOverride.Trim();
+        if (!string.IsNullOrWhiteSpace(session.SystemPromptOverride))
+            return systemPrompt + "\n\n[Route Instructions]\n" + session.SystemPromptOverride.Trim();
+
+        return systemPrompt;
+    }
+
+    internal static SkillDefinition[] ResolveSkillsForTurn(
+        IReadOnlyList<SkillDefinition> skills,
+        string userMessage,
+        out string blockedRoutes)
+        => ResolveSkillsForTurn(skills, userMessage, out blockedRoutes, out _);
+
+    internal static SkillDefinition[] ResolveSkillsForTurn(
+        IReadOnlyList<SkillDefinition> skills,
+        string userMessage,
+        out string blockedRoutes,
+        out string projectionPatches)
+    {
+        var resolvedSkills = new List<SkillDefinition>(skills.Count);
+        var blocked = new System.Text.StringBuilder();
+        var patches = new System.Text.StringBuilder();
+
+        foreach (var skill in skills)
+        {
+            if (skill.ProjectionContracts.Count == 0)
+            {
+                resolvedSkills.Add(skill);
+                continue;
+            }
+
+            var resolution = OpenClaw.Core.Skills.SkillProjectionResolver.ResolveForRequest(
+                skill, userMessage,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+
+            if (resolution.IsBlocked)
+            {
+                blocked.Append("- ");
+                blocked.Append(skill.Name);
+                blocked.Append(": ");
+                blocked.AppendLine(resolution.BlockReason ?? "Projection contract resolution blocked this skill for the current request.");
+                resolvedSkills.Add(CloneSkill(skill, skill.Instructions, disableModelInvocation: true));
+                continue;
+            }
+
+            var patch = OpenClaw.Core.Skills.SkillProjectionResolver.BuildPromptPatch(resolution);
+            if (string.IsNullOrWhiteSpace(patch))
+            {
+                resolvedSkills.Add(skill);
+                continue;
+            }
+
+            var patchedInstructions = string.Concat(skill.Instructions.TrimEnd(), "\n\n", patch);
+            resolvedSkills.Add(CloneSkill(skill, patchedInstructions, skill.DisableModelInvocation));
+
+            patches.AppendLine($"## {skill.Name}");
+            patches.AppendLine(patch);
+            patches.AppendLine();
+        }
+
+        blockedRoutes = blocked.ToString();
+        projectionPatches = patches.ToString();
+        return [.. resolvedSkills];
+    }
+
+    internal static SkillDefinition CloneSkill(SkillDefinition source, string instructions, bool disableModelInvocation)
+        => new()
+        {
+            Name = source.Name,
+            Description = source.Description,
+            Instructions = instructions,
+            Location = source.Location,
+            Source = source.Source,
+            Metadata = source.Metadata,
+            Kind = source.Kind,
+            Triggers = source.Triggers,
+            MetaPriority = source.MetaPriority,
+            FinalTextMode = source.FinalTextMode,
+            Composition = source.Composition,
+            UserInvocable = source.UserInvocable,
+            DisableModelInvocation = disableModelInvocation,
+            CommandDispatch = source.CommandDispatch,
+            CommandTool = source.CommandTool,
+            CommandArgMode = source.CommandArgMode,
+            Resources = source.Resources,
+            ProjectionContracts = source.ProjectionContracts,
+            ProjectionDiscovery = source.ProjectionDiscovery,
+            ArtifactContract = source.ArtifactContract
+        };
+
+    private async ValueTask<IDisposable> ApplyTurnRoutingAsync(
+        Session session,
+        string userMessage,
+        bool exactLatestToolBatch,
+        JsonElement? responseSchema,
+        CancellationToken ct)
+    {
+        var baseOptions = new ChatOptions
+        {
+            ModelId = session.ModelOverride ?? _config.Model,
+            MaxOutputTokens = _maxTokens,
+            Temperature = _temperature,
+            Tools = _toolExecutor.GetToolDeclarations(session),
+            ResponseFormat = responseSchema.HasValue
+                ? ChatResponseFormat.ForJsonSchema(responseSchema.Value, "response")
+                : null
+        };
+
+        if (!string.IsNullOrWhiteSpace(session.ReasoningEffort))
+        {
+            baseOptions.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+            baseOptions.AdditionalProperties["reasoning_effort"] = session.ReasoningEffort;
+        }
+
+        var decision = await _turnRoutingPolicy.ResolveAsync(new TurnRoutingRequest
+        {
+            Session = session,
+            Messages = BuildMessages(session, exactLatestToolBatch),
+            UserMessage = userMessage,
+            BaseOptions = baseOptions
+        }, ct);
+
+        var metaRoutingSuffix = BuildMetaRoutingSuffix(userMessage);
+
+        var snapshot = new TurnRoutingSnapshot(
+            session.ModelProfileId,
+            session.PreferredModelTags,
+            session.FallbackModelProfileIds,
+            session.SystemPromptOverride,
+            session.RouteAllowedTools,
+            session.RouteToolsDisabled,
+            session.RouteModelTier,
+            session.RouteReason,
+            session.ReasoningEffort,
+            session.ResponseMode);
+
+        if (!string.IsNullOrWhiteSpace(decision.ModelProfileId))
+            session.ModelProfileId = decision.ModelProfileId;
+
+        if (!string.IsNullOrWhiteSpace(decision.DirectModelFallbackProfileId))
+        {
+            var fallback = decision.DirectModelFallbackProfileId!;
+            session.FallbackModelProfileIds =
+            [
+                fallback,
+                .. session.FallbackModelProfileIds.Where(item => !string.Equals(item, fallback, StringComparison.OrdinalIgnoreCase))
+            ];
+        }
+
+        if (decision.PreferredTags.Length > 0)
+            session.PreferredModelTags = decision.PreferredTags;
+        if (!string.IsNullOrWhiteSpace(decision.ReasoningLevel))
+            session.ReasoningEffort = decision.ReasoningLevel;
+        if (!string.IsNullOrWhiteSpace(decision.ResponsePolicy))
+            session.ResponseMode = decision.ResponsePolicy;
+        if (decision.DisableTools)
+        {
+            session.RouteToolsDisabled = true;
+            session.RouteAllowedTools = [];
+        }
+        else if (decision.AllowedTools.Length > 0)
+        {
+            session.RouteToolsDisabled = false;
+            session.RouteAllowedTools = decision.AllowedTools;
+        }
+        session.RouteModelTier = decision.Tier;
+        session.RouteReason = decision.Reason;
+        session.SystemPromptOverride = CombineSystemPromptOverride(
+            snapshot.SystemPromptOverride,
+            CombineSystemPromptSuffixes(decision.SystemPromptSuffix, metaRoutingSuffix));
+
+        return new TurnRoutingRestoreScope(session, snapshot);
+    }
+
+    private static string? CombineSystemPromptOverride(string? original, string? suffix)
+    {
+        if (string.IsNullOrWhiteSpace(suffix))
+            return original;
+
+        if (string.IsNullOrWhiteSpace(original))
+            return suffix.Trim();
+
+        return original.Trim() + "\n" + suffix.Trim();
+    }
+
+    private string? BuildMetaRoutingSuffix(string userMessage)
+    {
+        if (!_metaSkillsEnabled)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(userMessage))
+            return null;
+
+        var skills = LoadedSkills;
+        if (!MetaSkillResolver.TryResolve(skills, userMessage, out var matched) || matched is null)
+            return null;
+
+        return "[Meta Routing Hint]\n"
+            + "A matching meta skill is available. Prefer calling tool `meta_invoke` before other tools.\n"
+            + $"Matched skill: {matched.Name}\n"
+            + "Use arguments JSON: {\"skill\":\"<matched-skill-name>\",\"input\":\"<user-request>\"}.\n"
+            + "If invocation fails, continue with normal tool planning.\n"
+            + "[/Meta Routing Hint]";
+    }
+
+    private async Task<string> ExecuteMetaSkillAsync(Session session, string skillName, string? input, CancellationToken ct)
+    {
+        if (!_metaSkillsEnabled)
+            return "Error: Meta skill invocation is disabled by runtime policy.";
+
+        var metaSkill = LoadedSkills.FirstOrDefault(skill =>
+            skill.Kind == SkillKind.Meta &&
+            !skill.DisableModelInvocation &&
+            string.Equals(skill.Name, skillName, StringComparison.OrdinalIgnoreCase));
+
+        if (metaSkill is null)
+            return $"Error: Meta skill '{skillName}' was not found.";
+
+        var steps = metaSkill.Composition?.Steps;
+        if (steps is null || steps.Count == 0)
+            return $"Error: Meta skill '{metaSkill.Name}' has no executable composition steps.";
+
+        if (!TryValidateMetaPlan(steps, LoadedSkills, out var validationError))
+            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults: [], validationError, preserveCheckpoint: false);
+
+        var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+        var failureBranchTargets = steps
+            .Where(static step => !string.IsNullOrWhiteSpace(step.OnFailure))
+            .Select(static step => step.OnFailure!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var dependentsByStep = BuildDependentsIndex(steps);
+        var pending = new HashSet<string>(stepById.Keys.Where(stepId => !failureBranchTargets.Contains(stepId)), StringComparer.OrdinalIgnoreCase);
+        var blocked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var outputs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var failureAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var stepResults = new List<MetaStepExecutionResult>(steps.Count);
+        var templateRenderer = new MetaTemplateRenderer();
+        var conditionEvaluator = new MetaConditionEvaluator(templateRenderer);
+        var toolArgumentResolver = new MetaToolArgumentResolver(templateRenderer);
+        var clarifyValidator = new MetaClarifyValidator();
+        var routePlanner = new MetaRoutePlanner(conditionEvaluator);
+        var resumedFromCheckpoint = TryRestoreMetaExecutionCheckpoint(
+            session,
+            metaSkill.Name,
+            stepById.Keys,
+            pending,
+            blocked,
+            outputs,
+            failureAliases,
+            stepResults,
+            out var waitingPrompt);
+        if (resumedFromCheckpoint)
+        {
+            var timeoutHandledByFailureBranch = false;
+            var resumedStepId = session.MetaExecutionCheckpoint?.PendingStepId;
+            var resumedStep = string.IsNullOrWhiteSpace(resumedStepId)
+                ? null
+                : steps.FirstOrDefault(step => string.Equals(step.Id, resumedStepId, StringComparison.OrdinalIgnoreCase));
+
+            var resumedSkipClarify = resumedStep?.Clarify is not null
+                && !string.IsNullOrWhiteSpace(resumedStep.Clarify.SkipIf)
+                && conditionEvaluator.Evaluate(resumedStep.Clarify.SkipIf, new MetaExecutionContext(input, outputs));
+
+            if (string.IsNullOrWhiteSpace(input) && resumedStep is not null && IsClarifyInputTimedOut(session, metaSkill.Name, resumedStep))
+            {
+                stepResults.Add(new MetaStepExecutionResult(resumedStep.Id, resumedStep.Kind, ToolResultStatuses.Failed, "user_input_timeout", 0, Continued: false));
+
+                if (TryActivateFailureBranch(resumedStep, stepById, pending, blocked, failureAliases))
+                {
+                    ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+                    timeoutHandledByFailureBranch = true;
+                }
+                else
+                {
+                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{resumedStep.Id}' clarify input timed out.", preserveCheckpoint: false);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(input) && resumedSkipClarify)
+            {
+                timeoutHandledByFailureBranch = true;
+                ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+            }
+
+            if (string.IsNullOrWhiteSpace(input) && !timeoutHandledByFailureBranch && !resumedSkipClarify)
+            {
+                return ReturnMetaExecutionOutput(
+                    session,
+                    metaSkill,
+                    finalText: null,
+                    stepResults,
+                    waitingPrompt ?? "Meta execution is waiting for user input to continue.",
+                    preserveCheckpoint: true);
+            }
+        }
+        var turnCtx = new TurnContext
+        {
+            CorrelationId = ResolveCorrelationId(null),
+            SessionId = session.Id,
+            ChannelId = session.ChannelId
+        };
+
+        var sessionInputs = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["session_id"] = session.Id,
+            ["session_history"] = JsonSerializer.Serialize(session.History, CoreJsonContext.Default.ListChatTurn),
+            ["session_meta_runs"] = JsonSerializer.Serialize(session.MetaRunHistory, CoreJsonContext.Default.ListSessionMetaRunRecord)
+        };
+
+        if (!resumedFromCheckpoint)
+            routePlanner.ApplyInitialRoutingBlocks(steps, blocked, pending);
+
+        while (pending.Count > 0)
+        {
+            var progress = false;
+
+            if (await TryExecuteParallelToolWaveAsync(
+                    session,
+                    metaSkill,
+                    steps,
+                    stepById,
+                    dependentsByStep,
+                    pending,
+                    blocked,
+                    outputs,
+                    failureAliases,
+                    stepResults,
+                    input,
+                    turnCtx,
+                    templateRenderer,
+                    conditionEvaluator,
+                    toolArgumentResolver,
+                    routePlanner,
+                    ct))
+            {
+                continue;
+            }
+
+            if (await MetaFanOutExecutor.TryExecuteFanOutStepAsync(
+                    session,
+                    metaSkill,
+                    steps,
+                    stepById,
+                    dependentsByStep,
+                    pending,
+                    blocked,
+                    outputs,
+                    failureAliases,
+                    stepResults,
+                    input,
+                    turnCtx,
+                    templateRenderer,
+                    conditionEvaluator,
+                    toolArgumentResolver,
+                    routePlanner,
+                    ExecuteFanOutChildAsync,
+                    (msg, ex) => _logger?.LogWarning(ex, "{FanOutMessage}", msg),
+                    ct))
+            {
+                continue;
+            }
+
+            foreach (var step in steps)
+            {
+                if (!pending.Contains(step.Id))
+                    continue;
+
+                if (blocked.Contains(step.Id))
+                {
+                    pending.Remove(step.Id);
+                    progress = true;
+                    continue;
+                }
+
+                var blockedByDependency = false;
+                var waitingForDependency = false;
+                foreach (var dependency in step.DependsOn)
+                {
+                    if (blocked.Contains(dependency))
+                    {
+                        blockedByDependency = true;
+                        break;
+                    }
+
+                    if (!outputs.ContainsKey(dependency))
+                    {
+                        waitingForDependency = true;
+                        break;
+                    }
+                }
+
+                if (blockedByDependency)
+                {
+                    BlockStepAndDependents(step.Id, blocked, pending, dependentsByStep);
+                    progress = true;
+                    continue;
+                }
+
+                if (waitingForDependency)
+                    continue;
+
+                var stepArgs = DeserializeStepArgs(step.WithJson);
+                var metaContext = new MetaExecutionContext(input, outputs, inputs: sessionInputs);
+                var continueOnError = GetOptionalBoolean(stepArgs, "continue_on_error") ?? false;
+
+                if (!string.IsNullOrWhiteSpace(step.When) && !conditionEvaluator.Evaluate(step.When, metaContext))
+                {
+                    BlockStepAndDependents(step.Id, blocked, pending, dependentsByStep);
+                    stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "condition_false", 0, Continued: false));
+                    progress = true;
+                    continue;
+                }
+
+                string stepInput;
+                try
+                {
+                    stepInput = templateRenderer.Render(
+                        GetOptionalString(stepArgs, "input") ?? input ?? string.Empty,
+                        metaContext);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                    if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                    {
+                        progress = true;
+                        continue;
+                    }
+
+                    if (!continueOnError)
+                    {
+                        return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                    }
+
+                    CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                    routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                    progress = true;
+                    continue;
+                }
+
+                switch (NormalizeMetaStepKind(step.Kind))
+                {
+                    case "tool_call":
+                    {
+                        var toolName = step.Tool;
+                        if (string.IsNullOrWhiteSpace(toolName))
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' is 'tool_call' but does not declare a tool.", preserveCheckpoint: false);
+                        }
+
+                        if (step.ToolAllowlist.Count > 0 && !step.ToolAllowlist.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "tool_not_allowlisted", 0, Continued: false));
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' tool '{toolName}' is not allowlisted.", preserveCheckpoint: false);
+                        }
+
+                            if (!IsToolAllowedByMetaCapabilities(metaSkill, toolName))
+                            {
+                                pending.Remove(step.Id);
+                                progress = true;
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Blocked, "metadata_capability_denied", 0, Continued: false));
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' tool '{toolName}' is not permitted by metadata capabilities.", preserveCheckpoint: false);
+                            }
+
+                        string toolArgsJson;
+                        try
+                        {
+                            toolArgsJson = toolArgumentResolver.Resolve(
+                                metaSkill.Composition?.ToolArgsJson,
+                                step.WithJson,
+                                step.ToolArgsJson,
+                                metaContext);
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' declared invalid tool arguments.", preserveCheckpoint: false);
+                        }
+
+                        var stepSw = Stopwatch.StartNew();
+                        var toolResult = await ExecuteMetaToolStepWithPolicyAsync(
+                            metaSkill,
+                            step,
+                            toolName,
+                            toolArgsJson,
+                            session,
+                            turnCtx,
+                            ct);
+                        stepSw.Stop();
+
+                        var completed = string.Equals(toolResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+                        var resultStatus = toolResult.ResultStatus;
+                        var failureCode = toolResult.FailureCode;
+                        if (completed && !TryValidateMetaStepOutput(step, toolResult.ResultText, out failureCode))
+                        {
+                            completed = false;
+                            resultStatus = ToolResultStatuses.Failed;
+                        }
+
+                        stepResults.Add(new MetaStepExecutionResult(
+                            step.Id,
+                            step.Kind,
+                            resultStatus,
+                            failureCode,
+                            stepSw.Elapsed.TotalMilliseconds,
+                            Continued: !completed && continueOnError));
+
+                        if (completed)
+                        {
+                            CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                        {
+                            progress = true;
+                            break;
+                        }
+
+                        if (!continueOnError)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed with status '{toolResult.ResultStatus}'.", preserveCheckpoint: false);
+                        }
+
+                        CompleteMetaStepOutput(step, toolResult.ResultText, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+
+                        break;
+                    }
+
+                    case "skill_exec":
+                    {
+                        var delegatedSkill = !string.IsNullOrWhiteSpace(step.Skill)
+                            ? LoadedSkills.FirstOrDefault(skill =>
+                                string.Equals(skill.Name, step.Skill, StringComparison.OrdinalIgnoreCase))
+                            : null;
+
+                        if (delegatedSkill is null)
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "skill_not_found", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' references missing skill '{step.Skill}'.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var renderedArgs = new List<string>(step.SkillExecArgs.Count);
+                        try
+                        {
+                            var argumentContext = new MetaExecutionContext(input, outputs);
+                            foreach (var argument in step.SkillExecArgs)
+                                renderedArgs.Add(templateRenderer.Render(argument, argumentContext));
+                        }
+                        catch (Exception ex)
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var renderedCwd = step.SkillExecCwd;
+                        if (!string.IsNullOrWhiteSpace(renderedCwd))
+                        {
+                            try
+                            {
+                                renderedCwd = templateRenderer.Render(renderedCwd, new MetaExecutionContext(input, outputs));
+                            }
+                            catch (Exception ex)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+                        }
+
+                        var renderedStdin = step.SkillExecStdin;
+                        if (!string.IsNullOrWhiteSpace(renderedStdin))
+                        {
+                            try
+                            {
+                                renderedStdin = templateRenderer.Render(renderedStdin, new MetaExecutionContext(input, outputs));
+                            }
+                            catch (Exception ex)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "template_render_failed", 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' template render failed: {ex.Message}", preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, ex.Message, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+                        }
+
+                        var stepSw = Stopwatch.StartNew();
+                        var skillExecResult = await ExecuteMetaSkillExecStepWithPolicyAsync(
+                            delegatedSkill,
+                            step,
+                            renderedArgs,
+                            renderedCwd,
+                            renderedStdin,
+                            ct);
+                        stepSw.Stop();
+
+                        var completed = string.Equals(skillExecResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+                        var resultStatus = skillExecResult.ResultStatus;
+                        var failureCode = skillExecResult.FailureCode;
+                        if (completed && !TryValidateMetaStepOutput(step, skillExecResult.ResultText, out failureCode))
+                        {
+                            completed = false;
+                            resultStatus = ToolResultStatuses.Failed;
+                        }
+
+                        stepResults.Add(new MetaStepExecutionResult(
+                            step.Id,
+                            step.Kind,
+                            resultStatus,
+                            failureCode,
+                            stepSw.Elapsed.TotalMilliseconds,
+                            Continued: !completed && continueOnError,
+                            ExecutionEvidence: BuildSkillExecExecutionEvidence(step.SkillExecEntrypoint, renderedArgs, renderedStdin, step.SkillExecParseMode)));
+
+                        if (completed)
+                        {
+                            CompleteMetaStepOutput(step, skillExecResult.ResultText, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                        {
+                            progress = true;
+                            break;
+                        }
+
+                        if (!continueOnError)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, skillExecResult.FailureMessage ?? $"Meta step '{step.Id}' failed with status '{skillExecResult.ResultStatus}'.", preserveCheckpoint: false);
+                        }
+
+                        CompleteMetaStepOutput(step, skillExecResult.ResultText, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+                        break;
+                    }
+
+                    case "agent":
+                    {
+                        var delegatedSkill = !string.IsNullOrWhiteSpace(step.Skill)
+                            ? LoadedSkills.FirstOrDefault(skill =>
+                                !skill.DisableModelInvocation &&
+                                string.Equals(skill.Name, step.Skill, StringComparison.OrdinalIgnoreCase))
+                            : null;
+
+                        var delegatedInstructions = delegatedSkill is null
+                            ? string.Empty
+                            : SkillPromptBuilder.BuildSkillBody(delegatedSkill);
+
+                        var messages = new List<ChatMessage>
+                        {
+                            new(ChatRole.System,
+                                string.IsNullOrWhiteSpace(delegatedInstructions)
+                                    ? "You are executing a meta-skill delegated step. Return only the final useful result for this step."
+                                    : "You are executing a meta-skill delegated step. Follow the delegated skill instructions. Return only the final useful result for this step.\n\n" + delegatedInstructions),
+                            new(ChatRole.User, string.IsNullOrWhiteSpace(stepInput) ? input ?? string.Empty : stepInput)
+                        };
+
+                        var options = new ChatOptions
+                        {
+                            ModelId = session.ModelOverride ?? _config.Model,
+                            MaxOutputTokens = _maxTokens,
+                            Temperature = _temperature
+                        };
+
+                        var stepSw = Stopwatch.StartNew();
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
+                        stepSw.Stop();
+
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var stepOutput = llmResult.ExecutionResult!.Response.Text ?? string.Empty;
+                        if (!TryValidateMetaStepOutput(step, stepOutput, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+                        stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
+                        break;
+                    }
+
+                    case "llm_chat":
+                    {
+                        var llmSystemPrompt = GetOptionalString(stepArgs, "system_prompt")
+                            ?? "You are executing a meta-skill llm_chat step. Return only the final useful result for this step.";
+                        var options = new ChatOptions
+                        {
+                            ModelId = session.ModelOverride ?? _config.Model,
+                            MaxOutputTokens = GetOptionalInt32(stepArgs, "max_tokens") ?? _maxTokens,
+                            Temperature = GetOptionalSingle(stepArgs, "temperature") ?? _temperature
+                        };
+                        var messages = new List<ChatMessage>
+                        {
+                            new(ChatRole.System, llmSystemPrompt),
+                            new(ChatRole.User, stepInput)
+                        };
+
+                        var stepSw = Stopwatch.StartNew();
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
+                        stepSw.Stop();
+
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var stepOutput = llmResult.ExecutionResult!.Response.Text ?? string.Empty;
+                        if (!TryValidateMetaStepOutput(step, stepOutput, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        CompleteMetaStepOutput(step, stepOutput, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+                        stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
+                        break;
+                    }
+
+                    case "llm_classify":
+                    {
+                        if (!TryGetStringArray(stepArgs, "options", out var optionsValues) || optionsValues.Count == 0)
+                        {
+                            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' is 'llm_classify' but does not declare non-empty options.", preserveCheckpoint: false);
+                        }
+
+                        var classifyPrompt = BuildClassificationPrompt(stepInput, optionsValues);
+                        var messages = new List<ChatMessage>
+                        {
+                            new(ChatRole.System, "You are a strict classifier. Return exactly one label from the provided options."),
+                            new(ChatRole.User, classifyPrompt)
+                        };
+                        var options = new ChatOptions
+                        {
+                            ModelId = session.ModelOverride ?? _config.Model,
+                            MaxOutputTokens = GetOptionalInt32(stepArgs, "max_tokens") ?? 32,
+                            Temperature = GetOptionalSingle(stepArgs, "temperature") ?? 0
+                        };
+
+                        var stepSw = Stopwatch.StartNew();
+                        var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                            step,
+                            token => CallLlmWithResilienceAsync(session, messages, options, turnCtx, token),
+                            ct);
+                        stepSw.Stop();
+
+                        if (!llmResult.Completed)
+                        {
+                            var failureMessage = llmResult.FailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, llmResult.FailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, failureMessage, preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, failureMessage, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        var rawLabel = llmResult.ExecutionResult!.Response.Text?.Trim() ?? string.Empty;
+                        if (!TryResolveClassificationLabel(rawLabel, optionsValues, out var selectedLabel))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "invalid_classification", stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' returned classification '{rawLabel}' outside declared options.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, rawLabel, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (!TryValidateMetaStepOutput(step, selectedLabel!, out var outputFailureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, outputFailureCode, stepSw.Elapsed.TotalMilliseconds, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        CompleteMetaStepOutput(step, selectedLabel!, pending, outputs, failureAliases);
+                        progress = true;
+                        stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, stepSw.Elapsed.TotalMilliseconds, Continued: false));
+
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+
+                        if (TryGetRouteMap(stepArgs, out var routeMap))
+                        {
+                            ApplyClassificationRouting(
+                                selectedLabel!,
+                                routeMap,
+                                blocked,
+                                pending,
+                                dependentsByStep,
+                                stepById);
+                        }
+
+                        break;
+                    }
+
+                    case "user_input":
+                    {
+                        var userValue = GetOptionalString(stepArgs, "value")
+                            ?? GetOptionalString(stepArgs, "default")
+                            ?? GetOptionalString(stepArgs, "default_input")
+                            ?? stepInput;
+
+                        var skipClarify = step.Clarify is not null
+                            && !string.IsNullOrWhiteSpace(step.Clarify.SkipIf)
+                            && conditionEvaluator.Evaluate(step.Clarify.SkipIf, new MetaExecutionContext(input, outputs));
+
+                        if (string.IsNullOrWhiteSpace(userValue))
+                        {
+                            if (skipClarify)
+                            {
+                                CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, 0, Continued: false));
+                                break;
+                            }
+
+                            var prompt = GetOptionalString(stepArgs, "prompt")
+                                ?? $"Please provide input for step '{step.Id}'.";
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_required", 0, Continued: continueOnError));
+                            SaveMetaExecutionCheckpoint(
+                                session,
+                                metaSkill.Name,
+                                step.Id,
+                                prompt,
+                                pending,
+                                blocked,
+                                outputs,
+                                failureAliases,
+                                stepResults);
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' requires user input but no value/default is available in the current execution context. Prompt: {prompt}", preserveCheckpoint: true);
+                            }
+
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            progress = true;
+                            break;
+                        }
+
+                        var normalizedUserValue = userValue;
+                        if (IsClarifyInputTimedOut(session, metaSkill.Name, step))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, "user_input_timeout", 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' clarify input timed out.", preserveCheckpoint: false);
+
+                            CompleteMetaStepOutput(step, string.Empty, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        if (step.Clarify is not null)
+                        {
+                            var clarifyResult = clarifyValidator.ValidateAndNormalize(userValue, step.Clarify);
+                            if (!clarifyResult.IsValid)
+                            {
+                                stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, clarifyResult.FailureCode, 0, Continued: continueOnError));
+
+                                if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                                {
+                                    progress = true;
+                                    break;
+                                }
+
+                                if (!continueOnError)
+                                {
+                                    var clarifyFailure = clarifyResult.FailureCode switch
+                                    {
+                                        "user_input_cancelled" => $"Meta step '{step.Id}' clarify input was cancelled.",
+                                        "user_input_timeout" => $"Meta step '{step.Id}' clarify input timed out.",
+                                        _ => $"Meta step '{step.Id}' failed clarify validation."
+                                    };
+                                    return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, clarifyFailure, preserveCheckpoint: false);
+                                }
+
+                                CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                                routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                                progress = true;
+                                break;
+                            }
+
+                            normalizedUserValue = clarifyResult.NormalizedOutput ?? userValue;
+                        }
+
+                        if (!TryValidateMetaStepOutput(step, normalizedUserValue, out var failureCode))
+                        {
+                            stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Failed, failureCode, 0, Continued: continueOnError));
+
+                            if (TryActivateFailureBranch(step, stepById, pending, blocked, failureAliases))
+                            {
+                                progress = true;
+                                break;
+                            }
+
+                            if (!continueOnError)
+                            {
+                                return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' failed output contract validation.", preserveCheckpoint: false);
+                            }
+
+                            CompleteMetaStepOutput(step, userValue, pending, outputs, failureAliases);
+                            routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                            progress = true;
+                            break;
+                        }
+
+                        CompleteMetaStepOutput(step, normalizedUserValue, pending, outputs, failureAliases);
+                        routePlanner.ApplyCompletionRouting(step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+                        progress = true;
+                        stepResults.Add(new MetaStepExecutionResult(step.Id, step.Kind, ToolResultStatuses.Completed, null, 0, Continued: false));
+                        break;
+                    }
+
+                    case "fan_out":
+                    {
+                        // Managed primarily by TryExecuteFanOutStepAsync (called above the loop).
+                        // If a step reaches here its dependencies are still unsatisfied —
+                        // skip and retry next iteration.
+                        break;
+                    }
+
+                    default:
+                        return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta step '{step.Id}' has unsupported kind '{step.Kind}'.", preserveCheckpoint: false);
+                }
+            }
+
+            if (progress)
+                continue;
+
+            var remaining = steps.Where(step => pending.Contains(step.Id) && !blocked.Contains(step.Id)).Select(step => step.Id).ToArray();
+            if (remaining.Length == 0)
+                break;
+
+            return ReturnMetaExecutionOutput(session, metaSkill, finalText: null, stepResults, $"Meta execution graph stalled. Remaining unresolved steps: {string.Join(", ", remaining)}.", preserveCheckpoint: false);
+        }
+
+        var executedStepIds = steps.Where(step => outputs.ContainsKey(step.Id)).Select(static step => step.Id).ToList();
+        var finalText = ResolveMetaFinalText(metaSkill, steps, outputs, executedStepIds);
+
+        return ReturnMetaExecutionOutput(session, metaSkill, finalText, stepResults, error: null, preserveCheckpoint: false);
+    }
+
+    private async Task<bool> TryExecuteParallelToolWaveAsync(
+        Session session,
+        SkillDefinition metaSkill,
+        IReadOnlyList<MetaSkillStepDefinition> steps,
+        IReadOnlyDictionary<string, MetaSkillStepDefinition> stepById,
+        Dictionary<string, List<string>> dependentsByStep,
+        HashSet<string> pending,
+        HashSet<string> blocked,
+        Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases,
+        List<MetaStepExecutionResult> stepResults,
+        string? input,
+        TurnContext turnCtx,
+        MetaTemplateRenderer templateRenderer,
+        MetaConditionEvaluator conditionEvaluator,
+        MetaToolArgumentResolver toolArgumentResolver,
+        MetaRoutePlanner routePlanner,
+        CancellationToken ct)
+    {
+        if (pending.Count < 2)
+            return false;
+
+        var candidates = new List<MetaParallelToolStepCandidate>();
+        foreach (var step in steps)
+        {
+            if (!pending.Contains(step.Id) || blocked.Contains(step.Id))
+                continue;
+
+            var blockedByDependency = false;
+            var waitingForDependency = false;
+            foreach (var dependency in step.DependsOn)
+            {
+                if (blocked.Contains(dependency))
+                {
+                    blockedByDependency = true;
+                    break;
+                }
+
+                if (!outputs.ContainsKey(dependency))
+                {
+                    waitingForDependency = true;
+                    break;
+                }
+            }
+
+            if (blockedByDependency || waitingForDependency)
+                continue;
+
+            if (!string.Equals(NormalizeMetaStepKind(step.Kind), "tool_call", StringComparison.Ordinal))
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(step.OnFailure) || step.Routes.Count > 0)
+                continue;
+
+            var stepArgs = DeserializeStepArgs(step.WithJson);
+            var continueOnError = GetOptionalBoolean(stepArgs, "continue_on_error") ?? false;
+            if (!continueOnError)
+                continue;
+
+            var metaContext = new MetaExecutionContext(input, outputs);
+            if (!string.IsNullOrWhiteSpace(step.When) && !conditionEvaluator.Evaluate(step.When, metaContext))
+                continue;
+
+            var toolName = step.Tool;
+            if (string.IsNullOrWhiteSpace(toolName))
+                continue;
+
+            if (step.ToolAllowlist.Count > 0 && !step.ToolAllowlist.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                continue;
+
+            if (!IsToolAllowedByMetaCapabilities(metaSkill, toolName))
+                continue;
+
+            try
+            {
+                _ = templateRenderer.Render(
+                    GetOptionalString(stepArgs, "input") ?? input ?? string.Empty,
+                    metaContext);
+            }
+            catch (Exception)
+            {
+                continue;
+            }
+
+            string toolArgsJson;
+            try
+            {
+                toolArgsJson = toolArgumentResolver.Resolve(
+                    metaSkill.Composition?.ToolArgsJson,
+                    step.WithJson,
+                    step.ToolArgsJson,
+                    metaContext);
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+
+            candidates.Add(new MetaParallelToolStepCandidate(step, toolName, toolArgsJson));
+        }
+
+        if (candidates.Count < 2)
+            return false;
+
+        var executions = await Task.WhenAll(candidates.Select(async candidate =>
+        {
+            var stepSw = Stopwatch.StartNew();
+            var toolResult = await ExecuteMetaToolStepWithPolicyAsync(
+                metaSkill,
+                candidate.Step,
+                candidate.ToolName,
+                candidate.ToolArgsJson,
+                session,
+                turnCtx,
+                ct);
+            stepSw.Stop();
+            return new MetaParallelToolStepExecution(candidate.Step, toolResult, stepSw.Elapsed.TotalMilliseconds);
+        }));
+
+        foreach (var execution in executions)
+        {
+            var completed = string.Equals(execution.ToolResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+            var resultStatus = execution.ToolResult.ResultStatus;
+            var failureCode = execution.ToolResult.FailureCode;
+            if (completed && !TryValidateMetaStepOutput(execution.Step, execution.ToolResult.ResultText, out failureCode))
+            {
+                completed = false;
+                resultStatus = ToolResultStatuses.Failed;
+            }
+
+            stepResults.Add(new MetaStepExecutionResult(
+                execution.Step.Id,
+                execution.Step.Kind,
+                resultStatus,
+                failureCode,
+                execution.DurationMs,
+                Continued: !completed));
+
+            CompleteMetaStepOutput(execution.Step, execution.ToolResult.ResultText, pending, outputs, failureAliases);
+            routePlanner.ApplyCompletionRouting(execution.Step, new MetaExecutionContext(input, outputs), stepById, blocked, pending, dependentsByStep);
+        }
+
+        return true;
+    }
+
+    private async Task<(string Output, string? FailureCode)> ExecuteFanOutChildAsync(
+        SkillDefinition metaSkill,
+        MetaSkillStepDefinition template,
+        string childId,
+        string childInput,
+        MetaExecutionContext childContext,
+        Session session,
+        TurnContext turnCtx,
+        CancellationToken ct)
+    {
+        switch (NormalizeMetaStepKind(template.Kind))
+        {
+            case "tool_call":
+            {
+                var toolName = template.Tool;
+                if (string.IsNullOrWhiteSpace(toolName))
+                    return ($"Error: fan-out child step '{childId}' is 'tool_call' but does not declare a tool.", "missing_tool");
+
+                if (template.ToolAllowlist.Count > 0 && !template.ToolAllowlist.Contains(toolName, StringComparer.OrdinalIgnoreCase))
+                    return ($"Error: tool '{toolName}' is not allowlisted for fan-out child step '{childId}'.", "tool_not_allowlisted");
+
+                if (!IsToolAllowedByMetaCapabilities(metaSkill, toolName))
+                    return ($"Error: tool '{toolName}' is not permitted by metadata capabilities for fan-out child step '{childId}'.", "metadata_capability_denied");
+
+                string toolArgsJson;
+                try
+                {
+                    toolArgsJson = new MetaToolArgumentResolver(new MetaTemplateRenderer())
+                        .Resolve(null, template.WithJson, template.ToolArgsJson, childContext);
+                }
+                catch (InvalidOperationException)
+                {
+                    return ($"Error: invalid tool arguments for child step '{childId}'.", "invalid_tool_args");
+                }
+
+                var result = await ExecuteMetaToolStepWithPolicyAsync(
+                    metaSkill,
+                    new MetaSkillStepDefinition { Id = childId, Kind = template.Kind, Retry = template.Retry, TimeoutSeconds = template.TimeoutSeconds },
+                    toolName,
+                    toolArgsJson,
+                    session,
+                    turnCtx,
+                    ct);
+
+                var completed = string.Equals(result.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal);
+                var failureCode = result.FailureCode;
+                if (completed && !TryValidateMetaStepOutput(template, result.ResultText, out failureCode))
+                    completed = false;
+                return completed ? (result.ResultText, null) : (result.ResultText, failureCode);
+            }
+
+            case "llm_chat":
+            {
+                var stepArgs = DeserializeStepArgs(template.WithJson);
+                var systemPrompt = GetOptionalString(stepArgs, "system_prompt")
+                    ?? "Return the result for this step.";
+                var chatOptions = new ChatOptions
+                {
+                    ModelId = session.ModelOverride ?? _config.Model,
+                    MaxOutputTokens = GetOptionalInt32(stepArgs, "max_tokens") ?? _maxTokens,
+                    Temperature = GetOptionalSingle(stepArgs, "temperature") ?? _temperature
+                };
+                var messages = new List<ChatMessage>
+                {
+                    new(ChatRole.System, systemPrompt),
+                    new(ChatRole.User, childInput)
+                };
+
+                var llmResult = await ExecuteMetaLlmStepWithPolicyAsync(
+                    new MetaSkillStepDefinition { Id = childId, Kind = template.Kind, Retry = template.Retry, TimeoutSeconds = template.TimeoutSeconds },
+                    token => CallLlmWithResilienceAsync(session, messages, chatOptions, turnCtx, token),
+                    ct);
+
+                if (!llmResult.Completed)
+                    return (llmResult.FailureMessage ?? "", llmResult.FailureCode);
+
+                var output = llmResult.ExecutionResult?.Response.Text ?? "";
+                var failureCode = (string?)null;
+                if (!TryValidateMetaStepOutput(template, output, out failureCode))
+                    return (output, failureCode);
+
+                return (output, null);
+            }
+
+            default:
+                return ($"Error: unsupported fan_out child kind '{template.Kind}'.", "unsupported_child_kind");
+        }
+    }
+
+    private static string ReturnMetaExecutionOutput(
+        Session session,
+        SkillDefinition metaSkill,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error,
+        bool preserveCheckpoint)
+    {
+        AppendMetaRunHistory(session, metaSkill.Name, finalText, stepResults, error, preserveCheckpoint);
+
+        if (!preserveCheckpoint)
+            ClearMetaExecutionCheckpoint(session, metaSkill.Name);
+
+        return BuildMetaExecutionOutput(metaSkill, finalText, stepResults, error);
+    }
+
+    private static void AppendMetaRunHistory(
+        Session session,
+        string skillName,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error,
+        bool preserveCheckpoint)
+    {
+        session.MetaRunHistory.Add(new SessionMetaRunRecord
+        {
+            RunId = $"meta_{Guid.NewGuid():N}",
+            SkillName = skillName,
+            Status = preserveCheckpoint ? "paused" : error is null ? "completed" : "failed",
+            FinalText = finalText,
+            Error = error,
+            ErrorCode = string.IsNullOrWhiteSpace(error) ? null : DeriveMetaErrorCode(error, stepResults),
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            StepResults = stepResults.Select(static result => new SessionMetaStepResult
+            {
+                Id = result.Id,
+                Kind = result.Kind,
+                Status = result.Status,
+                FailureCode = result.FailureCode,
+                DurationMs = result.DurationMs,
+                Continued = result.Continued,
+                ExecutionEvidence = result.ExecutionEvidence
+            }).ToList()
+        });
+    }
+
+    private static string BuildMetaExecutionOutput(
+        SkillDefinition metaSkill,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error)
+    {
+        if (!string.Equals(metaSkill.FinalTextMode, "structured", StringComparison.OrdinalIgnoreCase))
+            return error is null ? finalText ?? string.Empty : $"Error: {error}";
+
+        return BuildStructuredMetaExecutionJson(metaSkill.Name, finalText, stepResults, error);
+    }
+
+    private static string ResolveMetaFinalText(
+        SkillDefinition metaSkill,
+        IReadOnlyList<MetaSkillStepDefinition> steps,
+        IReadOnlyDictionary<string, string> outputs,
+        IReadOnlyList<string> executedStepIds)
+    {
+        var mode = metaSkill.FinalTextMode?.Trim();
+        if (string.IsNullOrWhiteSpace(mode) || mode.Equals("auto", StringComparison.OrdinalIgnoreCase))
+        {
+            if (executedStepIds.Count == 0)
+                return string.Empty;
+
+            return outputs[executedStepIds[^1]];
+        }
+
+        if (mode.Equals("raw", StringComparison.OrdinalIgnoreCase))
+        {
+            if (executedStepIds.Count == 0)
+                return string.Empty;
+
+            return outputs[executedStepIds[^1]];
+        }
+
+        if (mode.StartsWith("step:", StringComparison.OrdinalIgnoreCase))
+        {
+            var finalStepId = mode[5..].Trim();
+            if (!string.IsNullOrWhiteSpace(finalStepId) && outputs.TryGetValue(finalStepId, out var finalStepOutput))
+                return finalStepOutput;
+        }
+
+        if (executedStepIds.Count == 0)
+            return string.Empty;
+
+        return outputs[executedStepIds[^1]];
+    }
+
+    private static bool TryRestoreMetaExecutionCheckpoint(
+        Session session,
+        string skillName,
+        IEnumerable<string> stepIds,
+        HashSet<string> pending,
+        HashSet<string> blocked,
+        Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases,
+        List<MetaStepExecutionResult> stepResults,
+        out string? waitingPrompt)
+    {
+        waitingPrompt = null;
+        var checkpoint = session.MetaExecutionCheckpoint;
+        if (checkpoint is null || !string.Equals(checkpoint.SkillName, skillName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var validStepIds = new HashSet<string>(stepIds, StringComparer.OrdinalIgnoreCase);
+        foreach (var pendingStep in checkpoint.PendingStepIds)
+        {
+            if (!validStepIds.Contains(pendingStep))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var blockedStep in checkpoint.BlockedStepIds)
+        {
+            if (!validStepIds.Contains(blockedStep))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var stepId in checkpoint.Outputs.Keys)
+        {
+            if (!validStepIds.Contains(stepId))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var stepId in checkpoint.FailureAliases.Keys)
+        {
+            if (!validStepIds.Contains(stepId))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var aliasTarget in checkpoint.FailureAliases.Values)
+        {
+            if (!validStepIds.Contains(aliasTarget))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        foreach (var result in checkpoint.StepResults)
+        {
+            if (!validStepIds.Contains(result.Id))
+            {
+                session.MetaExecutionCheckpoint = null;
+                return false;
+            }
+        }
+
+        pending.Clear();
+        foreach (var pendingStep in checkpoint.PendingStepIds)
+            pending.Add(pendingStep);
+
+        blocked.Clear();
+        foreach (var blockedStep in checkpoint.BlockedStepIds)
+            blocked.Add(blockedStep);
+
+        outputs.Clear();
+        foreach (var (key, value) in checkpoint.Outputs)
+            outputs[key] = value;
+
+        failureAliases.Clear();
+        foreach (var (key, value) in checkpoint.FailureAliases)
+            failureAliases[key] = value;
+
+        stepResults.Clear();
+        foreach (var result in checkpoint.StepResults)
+        {
+            stepResults.Add(new MetaStepExecutionResult(
+                result.Id,
+                result.Kind,
+                result.Status,
+                result.FailureCode,
+                result.DurationMs,
+                result.Continued));
+        }
+
+        checkpoint.LastUpdatedAtUtc = DateTimeOffset.UtcNow;
+        waitingPrompt = checkpoint.Prompt;
+        return true;
+    }
+
+    private static void SaveMetaExecutionCheckpoint(
+        Session session,
+        string skillName,
+        string pendingStepId,
+        string prompt,
+        HashSet<string> pending,
+        HashSet<string> blocked,
+        Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases,
+        IReadOnlyList<MetaStepExecutionResult> stepResults)
+    {
+        session.MetaExecutionCheckpoint = new SessionMetaExecutionCheckpoint
+        {
+            SkillName = skillName,
+            PendingStepId = pendingStepId,
+            Prompt = prompt,
+            LastUpdatedAtUtc = DateTimeOffset.UtcNow,
+            PendingStepIds = pending.ToList(),
+            BlockedStepIds = blocked.ToList(),
+            Outputs = new Dictionary<string, string>(outputs, StringComparer.OrdinalIgnoreCase),
+            FailureAliases = new Dictionary<string, string>(failureAliases, StringComparer.OrdinalIgnoreCase),
+            StepResults = stepResults.Select(static result => new SessionMetaStepResult
+            {
+                Id = result.Id,
+                Kind = result.Kind,
+                Status = result.Status,
+                FailureCode = result.FailureCode,
+                DurationMs = result.DurationMs,
+                Continued = result.Continued,
+                ExecutionEvidence = result.ExecutionEvidence
+            }).ToList()
+        };
+    }
+
+    private static SessionMetaStepExecutionEvidence? BuildSkillExecExecutionEvidence(
+        string? entrypoint,
+        IReadOnlyList<string> renderedArgs,
+        string? renderedStdin,
+        string? parseMode)
+    {
+        var hasEntrypoint = !string.IsNullOrWhiteSpace(entrypoint);
+        if (!hasEntrypoint && renderedArgs.Count == 0)
+            return null;
+
+        var commandParts = new List<string>(5);
+        if (hasEntrypoint)
+            commandParts.Add(entrypoint!);
+        commandParts.AddRange(renderedArgs.Take(4));
+        var commandPreview = string.Join(" ", commandParts);
+        var hasStdin = !string.IsNullOrEmpty(renderedStdin);
+        return new SessionMetaStepExecutionEvidence
+        {
+            CommandPreview = commandPreview,
+            InputMode = hasStdin ? "stdin" : "args",
+            StdinBytes = hasStdin ? System.Text.Encoding.UTF8.GetByteCount(renderedStdin!) : 0,
+            ParseMode = string.IsNullOrWhiteSpace(parseMode) ? "text" : parseMode
+        };
+    }
+
+    private static void ClearMetaExecutionCheckpoint(Session session, string skillName)
+    {
+        if (session.MetaExecutionCheckpoint is null)
+            return;
+
+        if (!string.Equals(session.MetaExecutionCheckpoint.SkillName, skillName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        session.MetaExecutionCheckpoint = null;
+    }
+
+    private static string BuildStructuredMetaExecutionJson(
+        string skill,
+        string? finalText,
+        IReadOnlyList<MetaStepExecutionResult> stepResults,
+        string? error)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("skill", skill);
+            writer.WriteString("final_text", finalText ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                writer.WriteString("error", error);
+                var errorCode = DeriveMetaErrorCode(error, stepResults);
+                if (!string.IsNullOrWhiteSpace(errorCode))
+                    writer.WriteString("error_code", errorCode);
+            }
+
+            writer.WriteStartArray("steps");
+            foreach (var step in stepResults)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("id", step.Id);
+                writer.WriteString("kind", step.Kind);
+                writer.WriteString("status", step.Status);
+                writer.WriteNumber("duration_ms", step.DurationMs);
+                writer.WriteBoolean("continued", step.Continued);
+                if (!string.IsNullOrWhiteSpace(step.FailureCode))
+                    writer.WriteString("failure_code", step.FailureCode);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static string DeriveMetaErrorCode(string error, IReadOnlyList<MetaStepExecutionResult> stepResults)
+    {
+        for (var i = stepResults.Count - 1; i >= 0; i--)
+        {
+            var step = stepResults[i];
+            if (!string.IsNullOrWhiteSpace(step.FailureCode))
+                return step.FailureCode!;
+        }
+
+        if (error.Contains("depends on", StringComparison.OrdinalIgnoreCase))
+            return "dependency_not_completed";
+        if (error.Contains("does not declare a tool", StringComparison.OrdinalIgnoreCase))
+            return "invalid_tool_step";
+        if (error.Contains("unsupported kind", StringComparison.OrdinalIgnoreCase))
+            return "unsupported_step_kind";
+        if (error.Contains("failed with status", StringComparison.OrdinalIgnoreCase))
+            return "step_failed";
+        if (error.Contains("missing dependency", StringComparison.OrdinalIgnoreCase))
+            return "invalid_dag";
+        if (error.Contains("dependency cycle", StringComparison.OrdinalIgnoreCase))
+            return "invalid_dag";
+        if (error.Contains("execution graph stalled", StringComparison.OrdinalIgnoreCase))
+            return "invalid_dag";
+        if (error.Contains("requires user input", StringComparison.OrdinalIgnoreCase))
+            return "user_input_required";
+        if (error.Contains("classify", StringComparison.OrdinalIgnoreCase))
+            return "invalid_classification";
+        if (error.Contains("metadata capabilities", StringComparison.OrdinalIgnoreCase))
+            return "metadata_capability_denied";
+
+        return "meta_step_error";
+    }
+
+    private static bool IsToolAllowedByMetaCapabilities(SkillDefinition metaSkill, string toolName)
+    {
+        var capabilities = metaSkill.Metadata.Capabilities;
+        if (capabilities.Length == 0)
+            return true;
+
+        var normalizedTool = toolName.Trim();
+        foreach (var rawCapability in capabilities)
+        {
+            if (string.IsNullOrWhiteSpace(rawCapability))
+                continue;
+
+            var capability = rawCapability.Trim();
+            if (capability.Equals("*", StringComparison.OrdinalIgnoreCase) ||
+                capability.Equals("all-tools", StringComparison.OrdinalIgnoreCase) ||
+                capability.Equals("tools:*", StringComparison.OrdinalIgnoreCase) ||
+                capability.Equals("tool:*", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (capability.Equals(normalizedTool, StringComparison.OrdinalIgnoreCase) ||
+                capability.Equals($"tool:{normalizedTool}", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<ToolExecutionResult> ExecuteMetaToolStepWithPolicyAsync(
+        SkillDefinition metaSkill,
+        MetaSkillStepDefinition step,
+        string toolName,
+        string toolArgsJson,
+        Session session,
+        TurnContext turnCtx,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        ToolExecutionResult? lastResult = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                lastResult = await _toolExecutor.ExecuteAsync(
+                    toolName,
+                    toolArgsJson,
+                    $"meta:{metaSkill?.Name ?? "fan_out"}:{step.Id}:attempt:{attempt}",
+                    session,
+                    turnCtx,
+                    isStreaming: false,
+                    approvalCallback: null,
+                    ct: effectiveCt,
+                    onDelta: null,
+                    toolCallCount: attempt);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                lastResult = CreateMetaStepFailedToolResult(
+                    toolName,
+                    toolArgsJson,
+                    "step_timeout",
+                    $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).");
+            }
+
+            if (string.Equals(lastResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal) || attempt == maxAttempts)
+                return lastResult;
+
+            if (step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return lastResult ?? CreateMetaStepFailedToolResult(toolName, toolArgsJson, "step_failed", $"Meta step '{step.Id}' failed before producing a result.");
+    }
+
+    private async Task<ToolExecutionResult> ExecuteMetaSkillExecStepWithPolicyAsync(
+        SkillDefinition delegatedSkill,
+        MetaSkillStepDefinition step,
+        IReadOnlyList<string> arguments,
+        string? workingDirectory,
+        string? stdin,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        ToolExecutionResult? lastResult = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                lastResult = await _toolExecutor.ExecuteSkillEntrypointAsync(
+                    delegatedSkill,
+                    step.SkillExecEntrypoint!,
+                    arguments,
+                    workingDirectory,
+                    step.SkillExecParseMode ?? "text",
+                    stdin,
+                    effectiveCt);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                lastResult = CreateMetaStepFailedToolResult(
+                    "skill_exec",
+                    "{}",
+                    "step_timeout",
+                    $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).");
+            }
+
+            if (lastResult is not null &&
+                (string.Equals(lastResult.ResultStatus, ToolResultStatuses.Completed, StringComparison.Ordinal) || attempt == maxAttempts))
+            {
+                return lastResult;
+            }
+
+            if (step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return lastResult ?? CreateMetaStepFailedToolResult("skill_exec", "{}", "step_failed", $"Meta step '{step.Id}' failed before producing a result.");
+    }
+
+    private static async Task<MetaLlmStepExecutionResult> ExecuteMetaLlmStepWithPolicyAsync(
+        MetaSkillStepDefinition step,
+        Func<CancellationToken, Task<LlmExecutionResult>> executeAsync,
+        CancellationToken ct)
+    {
+        var maxAttempts = Math.Max(1, step.Retry.MaxAttempts);
+        string? lastFailureCode = null;
+        string? lastFailureMessage = null;
+
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            using var timeoutCts = CreateMetaStepTimeout(step, ct);
+            var effectiveCt = timeoutCts?.Token ?? ct;
+            try
+            {
+                return MetaLlmStepExecutionResult.Succeeded(await executeAsync(effectiveCt));
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                lastFailureCode = "step_timeout";
+                lastFailureMessage = $"Meta step '{step.Id}' timed out after {step.TimeoutSeconds} second(s).";
+            }
+            catch (Exception ex)
+            {
+                lastFailureCode = "llm_failed";
+                lastFailureMessage = $"Meta step '{step.Id}' failed: {ex.Message}";
+            }
+
+            if (attempt == maxAttempts)
+                return MetaLlmStepExecutionResult.Failed(lastFailureCode ?? "llm_failed", lastFailureMessage ?? $"Meta step '{step.Id}' failed before producing a response.");
+
+            if (attempt < maxAttempts && step.Retry.BackoffMs > 0)
+                await Task.Delay(step.Retry.BackoffMs, ct);
+        }
+
+        return MetaLlmStepExecutionResult.Failed("llm_failed", $"Meta step '{step.Id}' failed before producing a response.");
+    }
+
+    private static CancellationTokenSource? CreateMetaStepTimeout(MetaSkillStepDefinition step, CancellationToken ct)
+    {
+        if (step.TimeoutSeconds is not > 0)
+            return null;
+
+        var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(step.TimeoutSeconds.Value));
+        return timeoutCts;
+    }
+
+    private static ToolExecutionResult CreateMetaStepFailedToolResult(
+        string toolName,
+        string arguments,
+        string failureCode,
+        string failureMessage)
+    {
+        return new ToolExecutionResult
+        {
+            Invocation = new ToolInvocation
+            {
+                ToolName = toolName,
+                Arguments = arguments,
+                Result = failureMessage,
+                ResultStatus = ToolResultStatuses.Failed,
+                FailureCode = failureCode,
+                FailureMessage = failureMessage
+            },
+            ResultText = failureMessage,
+            ResultStatus = ToolResultStatuses.Failed,
+            FailureCode = failureCode,
+            FailureMessage = failureMessage
+        };
+    }
+
+    private static void CompleteMetaStepOutput(
+        MetaSkillStepDefinition step,
+        string output,
+        HashSet<string> pending,
+        Dictionary<string, string> outputs,
+        Dictionary<string, string> failureAliases)
+    {
+        outputs[step.Id] = output;
+        if (failureAliases.TryGetValue(step.Id, out var primaryStepId))
+            outputs[primaryStepId] = output;
+
+        pending.Remove(step.Id);
+    }
+
+    private static bool TryActivateFailureBranch(
+        MetaSkillStepDefinition step,
+        IReadOnlyDictionary<string, MetaSkillStepDefinition> stepById,
+        HashSet<string> pending,
+        HashSet<string> blocked,
+        Dictionary<string, string> failureAliases)
+    {
+        if (string.IsNullOrWhiteSpace(step.OnFailure))
+            return false;
+
+        var fallbackStepId = step.OnFailure.Trim();
+        if (!stepById.ContainsKey(fallbackStepId))
+            return false;
+
+        pending.Remove(step.Id);
+        blocked.Remove(fallbackStepId);
+        pending.Add(fallbackStepId);
+        failureAliases[fallbackStepId] = step.Id;
+        return true;
+    }
+
+    private static bool TryValidateMetaStepOutput(
+        MetaSkillStepDefinition step,
+        string output,
+        out string? failureCode)
+    {
+        failureCode = null;
+        if (step.OutputChoices.Count > 0)
+        {
+            var candidate = output.Trim();
+            if (!step.OutputChoices.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+            {
+                failureCode = "invalid_output_choice";
+                return false;
+            }
+        }
+
+        var contract = step.OutputContract;
+        if (contract is null || string.IsNullOrWhiteSpace(contract.Format) || contract.Format.Equals("text", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!contract.Format.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            failureCode = "output_contract_failed";
+            return false;
+        }
+
+        var sanitized = SanitizeJsonOutput(output);
+        try
+        {
+            using var doc = JsonDocument.Parse(sanitized);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                failureCode = "output_contract_failed";
+                return false;
+            }
+
+            foreach (var requiredProperty in contract.RequiredProperties)
+            {
+                if (string.IsNullOrWhiteSpace(requiredProperty))
+                    continue;
+
+                if (!doc.RootElement.TryGetProperty(requiredProperty, out _))
+                {
+                    failureCode = "output_contract_failed";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            failureCode = "output_contract_failed";
+            return false;
+        }
+    }
+
+    private static string SanitizeJsonOutput(string output)
+    {
+        var trimmed = output.Trim();
+        if (trimmed.Length == 0)
+            return trimmed;
+
+        // 1. Strip ```json / ``` fences
+        if (trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            var fenceEnd = trimmed.IndexOf('\n');
+            if (fenceEnd >= 0)
+            {
+                var contentStart = fenceEnd + 1;
+                var closingFence = trimmed.LastIndexOf("```", StringComparison.Ordinal);
+                if (closingFence > contentStart)
+                    trimmed = trimmed[contentStart..closingFence].Trim();
+            }
+        }
+
+        // 2. Extract first { ... } if the output is not already pure JSON
+        if (trimmed.Length > 0 && trimmed[0] != '{')
+        {
+            var openBrace = trimmed.IndexOf('{');
+            if (openBrace >= 0)
+            {
+                var closeBrace = trimmed.LastIndexOf('}');
+                if (closeBrace > openBrace)
+                    trimmed = trimmed[openBrace..(closeBrace + 1)].Trim();
+            }
+        }
+
+        return trimmed;
+    }
+
+    private readonly record struct MetaLlmStepExecutionResult(LlmExecutionResult? ExecutionResult, string? FailureCode, string? FailureMessage)
+    {
+        public bool Completed => ExecutionResult is not null;
+
+        public static MetaLlmStepExecutionResult Succeeded(LlmExecutionResult executionResult)
+            => new(executionResult, null, null);
+
+        public static MetaLlmStepExecutionResult Failed(string failureCode, string failureMessage)
+            => new(null, failureCode, failureMessage);
+    }
+
+    private readonly record struct MetaParallelToolStepCandidate(MetaSkillStepDefinition Step, string ToolName, string ToolArgsJson);
+
+    private readonly record struct MetaParallelToolStepExecution(MetaSkillStepDefinition Step, ToolExecutionResult ToolResult, double DurationMs);
+
+    private static bool IsClarifyInputTimedOut(Session session, string skillName, MetaSkillStepDefinition step)
+    {
+        if (step.Clarify?.TimeoutSeconds is not > 0)
+            return false;
+
+        var checkpoint = session.MetaExecutionCheckpoint;
+        if (checkpoint is null ||
+            !string.Equals(checkpoint.SkillName, skillName, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(checkpoint.PendingStepId, step.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var deadline = checkpoint.CreatedAtUtc + TimeSpan.FromSeconds(step.Clarify.TimeoutSeconds.Value);
+        return DateTimeOffset.UtcNow >= deadline;
+    }
+
+    private static Dictionary<string, object?> DeserializeStepArgs(string? withJson)
+    {
+        if (string.IsNullOrWhiteSpace(withJson))
+            return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            var parsed = JsonSerializer.Deserialize(withJson, CoreJsonContext.Default.DictionaryStringObject);
+            if (parsed is not null)
+                return new Dictionary<string, object?>(parsed, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+        }
+
+        return new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? GetOptionalString(Dictionary<string, object?> args, string key)
+    {
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is string text)
+            return text;
+
+        if (value is JsonElement json && json.ValueKind == JsonValueKind.String)
+            return json.GetString();
+
+        return null;
+    }
+
+    private static bool? GetOptionalBoolean(Dictionary<string, object?> args, string key)
+    {
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is bool b)
+            return b;
+
+        if (value is string s && bool.TryParse(s, out var parsedString))
+            return parsedString;
+
+        if (value is JsonElement json)
+        {
+            if (json.ValueKind == JsonValueKind.True)
+                return true;
+            if (json.ValueKind == JsonValueKind.False)
+                return false;
+            if (json.ValueKind == JsonValueKind.String && bool.TryParse(json.GetString(), out var parsedJsonString))
+                return parsedJsonString;
+        }
+
+        return null;
+    }
+
+    private static int? GetOptionalInt32(Dictionary<string, object?> args, string key)
+    {
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is int i)
+            return i;
+        if (value is long l && l is >= int.MinValue and <= int.MaxValue)
+            return (int)l;
+        if (value is JsonElement json)
+        {
+            if (json.ValueKind == JsonValueKind.Number && json.TryGetInt32(out var parsed))
+                return parsed;
+            if (json.ValueKind == JsonValueKind.String && int.TryParse(json.GetString(), out parsed))
+                return parsed;
+        }
+
+        return null;
+    }
+
+    private static float? GetOptionalSingle(Dictionary<string, object?> args, string key)
+    {
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return null;
+
+        if (value is float f)
+            return f;
+        if (value is double d)
+            return (float)d;
+        if (value is decimal m)
+            return (float)m;
+        if (value is JsonElement json)
+        {
+            if (json.ValueKind == JsonValueKind.Number && json.TryGetDouble(out var parsed))
+                return (float)parsed;
+            if (json.ValueKind == JsonValueKind.String && float.TryParse(json.GetString(), out var parsedFloat))
+                return parsedFloat;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetStringArray(Dictionary<string, object?> args, string key, out List<string> values)
+    {
+        values = [];
+        if (!args.TryGetValue(key, out var value) || value is null)
+            return false;
+
+        if (value is JsonElement json && json.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in json.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                    return false;
+
+                var text = item.GetString();
+                if (string.IsNullOrWhiteSpace(text))
+                    return false;
+
+                values.Add(text.Trim());
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetRouteMap(Dictionary<string, object?> args, out Dictionary<string, List<string>> routeMap)
+    {
+        routeMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (!args.TryGetValue("route", out var routeValue) || routeValue is not JsonElement routeJson || routeJson.ValueKind != JsonValueKind.Object)
+            return false;
+
+        foreach (var property in routeJson.EnumerateObject())
+        {
+            if (property.Value.ValueKind == JsonValueKind.String)
+            {
+                var target = property.Value.GetString();
+                if (!string.IsNullOrWhiteSpace(target))
+                    routeMap[property.Name] = [target.Trim()];
+            }
+            else if (property.Value.ValueKind == JsonValueKind.Array)
+            {
+                var targets = new List<string>();
+                foreach (var item in property.Value.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.String)
+                        continue;
+
+                    var target = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(target))
+                        targets.Add(target.Trim());
+                }
+
+                if (targets.Count > 0)
+                    routeMap[property.Name] = targets;
+            }
+        }
+
+        return routeMap.Count > 0;
+    }
+
+    private static string BuildClassificationPrompt(string input, IReadOnlyList<string> options)
+    {
+        var optionsList = string.Join(", ", options);
+        return $"Classify the following text into exactly one label from [{optionsList}]. Return only the label.\n\nText:\n{input}";
+    }
+
+    private static bool TryResolveClassificationLabel(string raw, IReadOnlyList<string> options, out string? selected)
+    {
+        selected = null;
+        if (string.IsNullOrWhiteSpace(raw))
+            return false;
+
+        var candidate = raw.Trim().Trim('"', '\'', '`');
+        selected = options.FirstOrDefault(option => string.Equals(option, candidate, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(selected))
+            return true;
+
+        foreach (var option in options)
+        {
+            if (candidate.Contains(option, StringComparison.OrdinalIgnoreCase))
+            {
+                selected = option;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string NormalizeMetaStepKind(string kind)
+        => kind.Trim().ToLowerInvariant();
+
+    private static Dictionary<string, List<string>> BuildDependentsIndex(IReadOnlyList<MetaSkillStepDefinition> steps)
+    {
+        var dependents = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var step in steps)
+        {
+            dependents.TryAdd(step.Id, []);
+        }
+
+        foreach (var step in steps)
+        {
+            foreach (var dependency in step.DependsOn)
+            {
+                if (!dependents.TryGetValue(dependency, out var children))
+                    continue;
+
+                children.Add(step.Id);
+            }
+        }
+
+        return dependents;
+    }
+
+    private static void BlockStepAndDependents(
+        string stepId,
+        HashSet<string> blocked,
+        HashSet<string> pending,
+        IReadOnlyDictionary<string, List<string>> dependentsByStep)
+    {
+        var stack = new Stack<string>();
+        stack.Push(stepId);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            if (!blocked.Add(current))
+                continue;
+
+            pending.Remove(current);
+
+            if (!dependentsByStep.TryGetValue(current, out var dependents))
+                continue;
+
+            foreach (var dependent in dependents)
+                stack.Push(dependent);
+        }
+    }
+
+    private static void ApplyClassificationRouting(
+        string selectedLabel,
+        IReadOnlyDictionary<string, List<string>> routeMap,
+        HashSet<string> blocked,
+        HashSet<string> pending,
+        IReadOnlyDictionary<string, List<string>> dependentsByStep,
+        IReadOnlyDictionary<string, MetaSkillStepDefinition> stepById)
+    {
+        var selectedTargets = routeMap.TryGetValue(selectedLabel, out var matchedTargets)
+            ? matchedTargets
+            : [];
+
+        foreach (var (label, targets) in routeMap)
+        {
+            if (string.Equals(label, selectedLabel, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            foreach (var target in targets)
+            {
+                if (!stepById.ContainsKey(target))
+                    continue;
+
+                BlockStepAndDependents(target, blocked, pending, dependentsByStep);
+            }
+        }
+
+        foreach (var target in selectedTargets)
+            blocked.Remove(target);
+    }
+
+    private static bool TryValidateMetaPlan(IReadOnlyList<MetaSkillStepDefinition> steps, IReadOnlyList<SkillDefinition> loadedSkills, out string? error)
+    {
+        error = null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var step in steps)
+        {
+            if (!seen.Add(step.Id))
+            {
+                error = $"Meta execution graph contains duplicate step id '{step.Id}'.";
+                return false;
+            }
+        }
+
+        foreach (var step in steps)
+        {
+            if (!string.IsNullOrWhiteSpace(step.Skill))
+            {
+                var delegatedSkill = loadedSkills.FirstOrDefault(skill =>
+                    string.Equals(skill.Name, step.Skill, StringComparison.OrdinalIgnoreCase));
+
+                if (delegatedSkill is not null && delegatedSkill.Kind == SkillKind.Meta)
+                {
+                    error = $"Meta execution graph cannot compose meta skill '{delegatedSkill.Name}' from step '{step.Id}'.";
+                    return false;
+                }
+            }
+
+            foreach (var dependency in step.DependsOn)
+            {
+                if (!seen.Contains(dependency))
+                {
+                    error = $"Meta execution graph references missing dependency '{dependency}' from step '{step.Id}'.";
+                    return false;
+                }
+
+                if (string.Equals(step.Id, dependency, StringComparison.OrdinalIgnoreCase))
+                {
+                    error = $"Meta execution graph contains self-dependency on step '{step.Id}'.";
+                    return false;
+                }
+            }
+        }
+
+        var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+        var designatedFallbacks = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var fallbackTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var step in steps)
+        {
+            if (string.IsNullOrWhiteSpace(step.OnFailure))
+                continue;
+
+            if (string.Equals(step.Id, step.OnFailure, StringComparison.OrdinalIgnoreCase) ||
+                !stepById.TryGetValue(step.OnFailure, out var substitute))
+            {
+                error = $"Meta execution graph references invalid on_failure target '{step.OnFailure}' from step '{step.Id}'.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(substitute.OnFailure) || substitute.DependsOn.Count > 0)
+            {
+                error = $"Meta execution graph has invalid on_failure substitute '{substitute.Id}' from step '{step.Id}'.";
+                return false;
+            }
+
+            if (designatedFallbacks.TryGetValue(step.OnFailure, out var priorStep))
+            {
+                error = $"Meta execution graph fallback step '{step.OnFailure}' is shared by steps '{priorStep}' and '{step.Id}'.";
+                return false;
+            }
+
+            designatedFallbacks[step.OnFailure] = step.Id;
+            fallbackTargets.Add(step.OnFailure);
+        }
+
+        foreach (var step in steps)
+        {
+            foreach (var dependency in step.DependsOn)
+            {
+                if (!fallbackTargets.Contains(dependency))
+                    continue;
+
+                error = $"Meta execution graph step '{step.Id}' depends directly on fallback-only step '{dependency}'.";
+                return false;
+            }
+        }
+
+        if (HasDependencyCycle(steps))
+        {
+            error = "Meta execution graph contains a dependency cycle.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasDependencyCycle(IReadOnlyList<MetaSkillStepDefinition> steps)
+    {
+        var state = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var stepById = steps.ToDictionary(static step => step.Id, StringComparer.OrdinalIgnoreCase);
+
+        bool Dfs(string stepId)
+        {
+            if (state.TryGetValue(stepId, out var currentState))
+                return currentState == 1;
+
+            state[stepId] = 1;
+            var step = stepById[stepId];
+            foreach (var dependency in step.DependsOn)
+            {
+                if (Dfs(dependency))
+                    return true;
+            }
+
+            state[stepId] = 2;
+            return false;
+        }
+
+        foreach (var step in steps)
+        {
+            if (state.TryGetValue(step.Id, out var currentState) && currentState == 2)
+                continue;
+
+            if (Dfs(step.Id))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string ResolveMetaTemplate(string template, string? rootInput, IReadOnlyDictionary<string, string> outputs)
+    {
+        return Regex.Replace(template, "{{\\s*(?<token>[^{}]+?)\\s*}}", match =>
+        {
+            var token = match.Groups["token"].Value;
+            if (token.Equals("input", StringComparison.OrdinalIgnoreCase) ||
+                token.Equals("inputs.user_message", StringComparison.OrdinalIgnoreCase))
+            {
+                return rootInput ?? string.Empty;
+            }
+
+            const string outputPrefix = "outputs.";
+            if (token.StartsWith(outputPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var key = token[outputPrefix.Length..];
+                if (!string.IsNullOrWhiteSpace(key) && outputs.TryGetValue(key, out var value))
+                    return value;
+            }
+
+            return string.Empty;
+        });
+    }
+
+    private static string RewriteMetaTemplateJson(string withJson, string? rootInput, IReadOnlyDictionary<string, string> outputs)
+    {
+        var resolved = ResolveMetaTemplate(withJson, rootInput, outputs);
+        return IsValidJson(resolved) ? resolved : withJson;
+    }
+
+    private static bool IsValidJson(string value)
+    {
+        try
+        {
+            using var _ = JsonDocument.Parse(value);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string? CombineSystemPromptSuffixes(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+            return second;
+        if (string.IsNullOrWhiteSpace(second))
+            return first;
+        return first.Trim() + "\n" + second.Trim();
+    }
+
+    private readonly record struct TurnRoutingSnapshot(
+        string? ModelProfileId,
+        string[] PreferredModelTags,
+        string[] FallbackModelProfileIds,
+        string? SystemPromptOverride,
+        string[] RouteAllowedTools,
+        bool RouteToolsDisabled,
+        string? RouteModelTier,
+        string? RouteReason,
+        string? ReasoningEffort,
+        string ResponseMode);
+
+    private sealed class TurnRoutingRestoreScope(Session session, TurnRoutingSnapshot snapshot) : IDisposable
+    {
+        public void Dispose()
+        {
+            session.ModelProfileId = snapshot.ModelProfileId;
+            session.PreferredModelTags = snapshot.PreferredModelTags;
+            session.FallbackModelProfileIds = snapshot.FallbackModelProfileIds;
+            session.SystemPromptOverride = snapshot.SystemPromptOverride;
+            session.RouteAllowedTools = snapshot.RouteAllowedTools;
+            session.RouteToolsDisabled = snapshot.RouteToolsDisabled;
+            session.RouteReason = snapshot.RouteReason;
+            session.ReasoningEffort = snapshot.ReasoningEffort;
+            session.ResponseMode = snapshot.ResponseMode;
+        }
     }
 
     private static IList<AIContent> BuildTurnContents(string content)
@@ -1669,9 +4659,9 @@ public sealed class AgentRuntime : IAgentRuntime
             var mediaType = marker.Kind switch
             {
                 MediaMarkerKind.ImageUrl or MediaMarkerKind.ImagePath or MediaMarkerKind.TelegramImageFileId => "image/*",
-                MediaMarkerKind.AudioUrl => "audio/*",
-                MediaMarkerKind.VideoUrl => "video/*",
-                MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath => "application/octet-stream",
+                MediaMarkerKind.AudioUrl or MediaMarkerKind.TelegramAudioFileId => "audio/*",
+                MediaMarkerKind.VideoUrl or MediaMarkerKind.TelegramVideoFileId => "video/*",
+                MediaMarkerKind.DocumentUrl or MediaMarkerKind.FileUrl or MediaMarkerKind.FilePath or MediaMarkerKind.TelegramDocumentFileId => "application/octet-stream",
                 _ => "application/octet-stream"
             };
 
@@ -1700,10 +4690,18 @@ public sealed class AgentRuntime : IAgentRuntime
     {
         lock (_skillGate)
         {
-            var skillSection = SkillPromptBuilder.Build(skills);
+            var promptVisibleSkills = _metaSkillsEnabled
+                ? skills
+                : skills.Where(static skill => skill.Kind != SkillKind.Meta).ToArray();
+
+            // Progressive disclosure: only the metadata index lives in the system prompt.
+            // The full SKILL.md body for any single skill is fetched on demand via the
+            // `load_skill` tool, which reads from LoadedSkills (this same snapshot).
+            var skillSection = SkillPromptBuilder.BuildIndex(promptVisibleSkills, _skillsConfig?.InstructionPrompt);
             var basePrompt = AgentSystemPromptBuilder.BuildBaseSystemPrompt(_requireToolApproval);
             _skillPromptLength = skillSection.Length;
             _systemPrompt = string.IsNullOrEmpty(skillSection) ? basePrompt : basePrompt + "\n" + skillSection;
+            _loadedSkills = skills;
             _loadedSkillNames = skills
                 .Select(skill => skill.Name)
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)

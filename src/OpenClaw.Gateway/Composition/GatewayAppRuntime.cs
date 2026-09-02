@@ -14,6 +14,8 @@ using OpenClaw.Core.Sessions;
 using OpenClaw.Core.Skills;
 using OpenClaw.Gateway;
 using OpenClaw.Gateway.Extensions;
+using OpenClaw.Gateway.Tools;
+using OpenClaw.Payments.Core;
 
 namespace OpenClaw.Gateway.Composition;
 
@@ -36,6 +38,7 @@ internal sealed class GatewayAppRuntime
     public required ApprovalAuditStore ApprovalAuditStore { get; init; }
     public required RuntimeMetrics RuntimeMetrics { get; init; }
     public required ProviderUsageTracker ProviderUsage { get; init; }
+    public required PaymentRuntimeService PaymentRuntime { get; init; }
     public required HeartbeatService Heartbeat { get; init; }
     public required IReadOnlyList<SkillDefinition> LoadedSkills { get; set; }
     public required SkillWatcherService SkillWatcher { get; init; }
@@ -56,6 +59,12 @@ internal sealed class GatewayAppRuntime
     public FirstPartyWhatsAppWorkerHost? WhatsAppWorkerHost { get; init; }
     public required ChannelAuthEventStore ChannelAuthEvents { get; init; }
 
+    /// <summary>Runtime that validates emit_artifact calls against skill artifact contracts.</summary>
+    public required SkillArtifactRuntime ArtifactRuntime { get; init; }
+
     /// <summary>Names of all registered tools (built-in + native plugins + bridge plugins).</summary>
     public required FrozenSet<string> RegisteredToolNames { get; init; }
+
+    /// <summary>Session abort registry for cancelling in-flight agent execution.</summary>
+    public required SessionAbortRegistry AbortRegistry { get; init; }
 }

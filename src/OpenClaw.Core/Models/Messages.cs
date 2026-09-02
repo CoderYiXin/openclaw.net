@@ -25,6 +25,8 @@ public sealed record InboundMessage
     public long? Sequence { get; init; }
     public bool IsSystem { get; init; }
     public string? Subject { get; init; }
+    public string? ModelOverride { get; init; }
+    public bool DeleteAfterRun { get; init; }
     public string? ApprovalId { get; init; }
     public bool? Approved { get; init; }
     public DateTimeOffset ReceivedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -42,6 +44,33 @@ public sealed record InboundMessage
     public string? MediaUrl { get; init; }
     public string? MediaMimeType { get; init; }
     public string? MediaFileName { get; init; }
+
+    // Background execution fields
+    public string? BackgroundRunId { get; init; }
+    public int? BackgroundContinuationSequence { get; init; }
+    /// <summary>
+    /// Verified identity from the channel's authentication layer (e.g. Keycloak JWT <c>sub</c>).
+    /// Only set when the channel has validated an OIDC token; <c>null</c> for anonymous channels.
+    /// </summary>
+    public string? AuthenticatedUserId { get; init; }
+
+    /// <summary>
+    /// Multiple media attachments (e.g. several images in one message).
+    /// When present, each attachment generates its own marker line in the pipeline text.
+    /// </summary>
+    public IReadOnlyList<MediaAttachment>? Attachments { get; init; }
+}
+
+/// <summary>
+/// A single media file attached to an <see cref="InboundMessage"/>.
+/// </summary>
+public sealed record MediaAttachment
+{
+    /// <summary>"image", "video", "audio", "document"</summary>
+    public required string MediaType { get; init; }
+    public string? Url { get; init; }
+    public string? MimeType { get; init; }
+    public string? FileName { get; init; }
 }
 
 /// <summary>
@@ -58,4 +87,13 @@ public sealed record OutboundMessage
     public string? AutomationRunId { get; init; }
     public string? Subject { get; init; }
     public string? ReplyToMessageId { get; init; }
+
+    // Background execution fields
+    public string? BackgroundRunId { get; init; }
+}
+
+public static class BackgroundMessageTypes
+{
+    public const string AutoContinue = "background_auto_continue";
+    public const string AutoResume = "background_auto_resume";
 }

@@ -196,20 +196,35 @@ internal sealed class WhatsAppWebhookHandler
             if (!AllowlistPolicy.IsAllowed(effective.AllowedFrom, payload.From, _allowlistSemantics))
                 return WebhookResult.Unauthorized();
 
-            var text = payload.Text ?? "";
+            var text = BuildBridgeInboundText(payload);
+            if (string.IsNullOrWhiteSpace(text))
+                return WebhookResult.Ok();
+
             if (text.Length > _config.MaxInboundChars)
             {
                 _logger.LogWarning("Truncating WhatsApp Bridge message from {Sender} (exceeds {Max} chars).", payload.From, _config.MaxInboundChars);
                 text = text[.._config.MaxInboundChars];
             }
 
+            var primaryMedia = ResolvePrimaryBridgeMedia(payload);
             var msg = new InboundMessage
             {
                 ChannelId = "whatsapp",
                 SenderId = payload.From,
                 Text = text,
+                AccountId = payload.AccountId,
+                SessionId = payload.SessionId,
                 SenderName = payload.SenderName,
-                MessageId = payload.MessageId
+                MessageId = payload.MessageId,
+                ReplyToMessageId = payload.ReplyToMessageId,
+                IsGroup = payload.IsGroup,
+                GroupId = payload.GroupId,
+                GroupName = payload.GroupName,
+                MentionedIds = payload.MentionedIds,
+                MediaType = primaryMedia.Type,
+                MediaUrl = primaryMedia.Url,
+                MediaMimeType = primaryMedia.MimeType,
+                MediaFileName = primaryMedia.FileName
             };
 
             await enqueue(msg, ct);
@@ -221,6 +236,67 @@ internal sealed class WhatsAppWebhookHandler
             return WebhookResult.BadRequest("Invalid JSON");
         }
     }
+
+    private static string BuildBridgeInboundText(WhatsAppBridgeInboundPayload payload)
+    {
+        var lines = new List<string>();
+        if (payload.Attachments is { Length: > 0 })
+        {
+            lines.AddRange(payload.Attachments
+                .Select(static attachment => BuildMediaMarker(attachment.Type, attachment.Url))
+                .Where(static marker => !string.IsNullOrWhiteSpace(marker))
+                .Select(static marker => marker!));
+        }
+        else
+        {
+            var marker = BuildMediaMarker(payload.MediaType, payload.MediaUrl);
+            if (!string.IsNullOrWhiteSpace(marker))
+                lines.Add(marker);
+        }
+
+        if (!string.IsNullOrWhiteSpace(payload.Text))
+            lines.Add(payload.Text);
+
+        return string.Join('\n', lines);
+    }
+
+    private static string? BuildMediaMarker(string? mediaType, string? mediaUrl)
+    {
+        if (string.IsNullOrWhiteSpace(mediaType) || string.IsNullOrWhiteSpace(mediaUrl))
+            return null;
+
+        return mediaType.Trim().ToLowerInvariant() switch
+        {
+            "image" => $"[IMAGE_URL:{mediaUrl}]",
+            "video" => $"[VIDEO_URL:{mediaUrl}]",
+            "audio" => $"[AUDIO_URL:{mediaUrl}]",
+            "document" => $"[FILE_URL:{mediaUrl}]",
+            "file" => $"[FILE_URL:{mediaUrl}]",
+            "sticker" => $"[STICKER_URL:{mediaUrl}]",
+            _ => $"[FILE_URL:{mediaUrl}]"
+        };
+    }
+
+    private static BridgeMediaInfo ResolvePrimaryBridgeMedia(WhatsAppBridgeInboundPayload payload)
+    {
+        if (!string.IsNullOrWhiteSpace(payload.MediaType) || !string.IsNullOrWhiteSpace(payload.MediaUrl))
+        {
+            return new BridgeMediaInfo(
+                payload.MediaType,
+                payload.MediaUrl,
+                payload.MediaMimeType,
+                payload.MediaFileName);
+        }
+
+        var attachment = payload.Attachments?.FirstOrDefault(static item =>
+            !string.IsNullOrWhiteSpace(item.Type) || !string.IsNullOrWhiteSpace(item.Url));
+
+        return attachment is null
+            ? default
+            : new BridgeMediaInfo(attachment.Type, attachment.Url, attachment.MimeType, attachment.FileName);
+    }
+
+    private readonly record struct BridgeMediaInfo(string? Type, string? Url, string? MimeType, string? FileName);
 
     private static async Task<byte[]?> ReadBodyWithLimitAsync(HttpContext context, int maxBytes, CancellationToken ct)
     {

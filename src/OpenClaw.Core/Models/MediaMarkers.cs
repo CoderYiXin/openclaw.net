@@ -7,6 +7,10 @@ public enum MediaMarkerKind : byte
     FileUrl,
     FilePath,
     TelegramImageFileId,
+    TelegramVideoFileId,
+    TelegramAudioFileId,
+    TelegramDocumentFileId,
+    TelegramStickerFileId,
     VideoUrl,
     AudioUrl,
     DocumentUrl,
@@ -96,16 +100,34 @@ public static class MediaMarkerProtocol
             return true;
         }
 
-        // Telegram inbound marker: [IMAGE:telegram:file_id=<id>]
-        if (line.StartsWith("[IMAGE:telegram:file_id=", StringComparison.Ordinal) && line.EndsWith(']'))
+        if (TryParseTelegramFileId(line, "IMAGE", out var imageFileId))
         {
-            var start = "[IMAGE:telegram:file_id=".Length;
-            var value = line.Substring(start, line.Length - start - 1).Trim();
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                marker = new MediaMarker(MediaMarkerKind.TelegramImageFileId, value);
-                return true;
-            }
+            marker = new MediaMarker(MediaMarkerKind.TelegramImageFileId, imageFileId);
+            return true;
+        }
+
+        if (TryParseTelegramFileId(line, "VIDEO", out var videoFileId))
+        {
+            marker = new MediaMarker(MediaMarkerKind.TelegramVideoFileId, videoFileId);
+            return true;
+        }
+
+        if (TryParseTelegramFileId(line, "AUDIO", out var audioFileId))
+        {
+            marker = new MediaMarker(MediaMarkerKind.TelegramAudioFileId, audioFileId);
+            return true;
+        }
+
+        if (TryParseTelegramFileId(line, "DOCUMENT", out var documentFileId))
+        {
+            marker = new MediaMarker(MediaMarkerKind.TelegramDocumentFileId, documentFileId);
+            return true;
+        }
+
+        if (TryParseTelegramFileId(line, "STICKER", out var stickerFileId))
+        {
+            marker = new MediaMarker(MediaMarkerKind.TelegramStickerFileId, stickerFileId);
+            return true;
         }
 
         return false;
@@ -127,5 +149,15 @@ public static class MediaMarkerProtocol
         value = inner[prefix.Length..].Trim();
         return !string.IsNullOrWhiteSpace(value);
     }
-}
 
+    private static bool TryParseTelegramFileId(string line, string mediaType, out string value)
+    {
+        value = "";
+        var prefix = $"[{mediaType}:telegram:file_id=";
+        if (!line.StartsWith(prefix, StringComparison.Ordinal) || !line.EndsWith(']'))
+            return false;
+
+        value = line.Substring(prefix.Length, line.Length - prefix.Length - 1).Trim();
+        return !string.IsNullOrWhiteSpace(value);
+    }
+}

@@ -8,6 +8,19 @@ public sealed record WsClientEnvelope
 {
     public required string Type { get; init; }
     public string? RequestId { get; init; }
+    public string? ProtocolVersion { get; init; }
+    public string? Operation { get; init; }
+    public string? CatalogId { get; init; }
+    public string[]? SupportedCatalogIds { get; init; }
+    public string[]? Components { get; init; }
+    public string? DataModelJson { get; init; }
+    public string? SurfaceTitle { get; init; }
+    public string? SurfaceKind { get; init; }
+    public string? ParentSurfaceId { get; init; }
+    public string? Action { get; init; }
+    public string? ParametersJson { get; init; }
+    public string? SyncMode { get; init; }
+    public string? DiagnosticCode { get; init; }
     public string? Text { get; init; }
     public string? Content { get; init; }
     public string? SessionId { get; init; }
@@ -41,6 +54,19 @@ public sealed record WsServerEnvelope
 {
     public required string Type { get; init; }
     public string? RequestId { get; init; }
+    public string? ProtocolVersion { get; init; }
+    public string? Operation { get; init; }
+    public string? CatalogId { get; init; }
+    public string[]? SupportedCatalogIds { get; init; }
+    public string[]? Components { get; init; }
+    public string? DataModelJson { get; init; }
+    public string? SurfaceTitle { get; init; }
+    public string? SurfaceKind { get; init; }
+    public string? ParentSurfaceId { get; init; }
+    public string? Action { get; init; }
+    public string? ParametersJson { get; init; }
+    public string? SyncMode { get; init; }
+    public string? DiagnosticCode { get; init; }
     public string? Text { get; init; }
     public string? InReplyToMessageId { get; init; }
     public string? SessionId { get; init; }
@@ -69,4 +95,36 @@ public sealed record WsServerEnvelope
     public string? FailureCode { get; init; }
     public string? FailureMessage { get; init; }
     public string? NextStep { get; init; }
+
+    // Artifact / stage-gate envelope payloads
+    /// <summary>Optional semantic type for artifact deliveries emitted by the emit_artifact tool.</summary>
+    public string? ArtifactType { get; init; }
+
+    /// <summary>Unified artifact payload (type = "artifact"). Carries the full <see cref="SkillArtifact"/>.</summary>
+    public SkillArtifact? Artifact { get; init; }
+
+    /// <summary>Stage gate transition event (type = "skill_stage_gate") emitted after a terminal artifact.</summary>
+    public SkillStageGateEvent? StageGate { get; init; }
+
+    // File attachment envelope payloads (type = "file_attachment").
+    /// <summary>Relative URL to download the file (e.g. "/media/{id}").</summary>
+    public string? FileUrl { get; init; }
+
+    /// <summary>Original file name for the attachment.</summary>
+    public string? FileName { get; init; }
+
+    /// <summary>MIME type of the attachment.</summary>
+    public string? MimeType { get; init; }
+
+    /// <summary>File size in bytes.</summary>
+    public long? FileSizeBytes { get; init; }
+}
+
+public sealed record SkillStageGateEvent
+{
+    public required string SkillName { get; init; }
+    public required string CompletedStage { get; init; }
+    public required string NextStage { get; init; }
+    public required bool CanProceed { get; init; }
+    public string? BlockedReason { get; init; }
 }

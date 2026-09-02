@@ -1,9 +1,12 @@
 using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.FileProviders;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Middleware;
+using OpenClaw.Core.Pipeline;
 using OpenClaw.Gateway;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Composition;
@@ -13,6 +16,9 @@ namespace OpenClaw.Gateway.Pipeline;
 
 internal static class PipelineExtensions
 {
+    internal static string CorsAllowHeaders
+        => "Authorization, Content-Type, X-CSRF-Token, mcp-protocol-version, Mcp-Session-Id";
+
     public static void UseOpenClawPipeline(
         this WebApplication app,
         GatewayStartupContext startup,
@@ -25,6 +31,53 @@ internal static class PipelineExtensions
         ConfigureCors(app, runtime);
 
         app.UseStaticFiles();
+
+        var dashboardPhysicalPath = Path.Combine(AppContext.BaseDirectory, "wwwroot", "dashboard");
+        if (Directory.Exists(dashboardPhysicalPath))
+        {
+            var contentTypeProvider = new FileExtensionContentTypeProvider();
+            var dashboardRoot = Path.GetFullPath(dashboardPhysicalPath);
+            if (!dashboardRoot.EndsWith(Path.DirectorySeparatorChar))
+                dashboardRoot += Path.DirectorySeparatorChar;
+
+            app.Map("/dashboard", dashboardApp =>
+            {
+                dashboardApp.UseStaticFiles(new StaticFileOptions
+                {
+                    FileProvider = new PhysicalFileProvider(dashboardPhysicalPath),
+                    ContentTypeProvider = contentTypeProvider
+                });
+
+                dashboardApp.Run(async context =>
+                {
+                    if (context.Request.Path.HasValue && Path.HasExtension(context.Request.Path.Value))
+                    {
+                        var relativePath = context.Request.Path.Value.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+                        var filePath = Path.GetFullPath(Path.Combine(dashboardPhysicalPath, relativePath));
+                        if (filePath.StartsWith(dashboardRoot, StringComparison.OrdinalIgnoreCase) && File.Exists(filePath))
+                        {
+                            if (contentTypeProvider.TryGetContentType(filePath, out var contentType))
+                                context.Response.ContentType = contentType;
+                            await context.Response.SendFileAsync(filePath);
+                            return;
+                        }
+
+                        context.Response.StatusCode = StatusCodes.Status404NotFound;
+                        return;
+                    }
+
+                    var htmlPath = Path.Combine(dashboardPhysicalPath, "index.html");
+                    if (File.Exists(htmlPath))
+                    {
+                        context.Response.ContentType = "text/html";
+                        await context.Response.SendFileAsync(htmlPath);
+                        return;
+                    }
+
+                    context.Response.StatusCode = StatusCodes.Status404NotFound;
+                });
+            });
+        }
 
         app.UseWebSockets(new WebSocketOptions
         {
@@ -69,8 +122,8 @@ internal static class PipelineExtensions
                 if (runtime.AllowedOriginsSet.Contains(originStr))
                 {
                     ctx.Response.Headers["Access-Control-Allow-Origin"] = originStr;
-                    ctx.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-                    ctx.Response.Headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
+                    ctx.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS";
+                    ctx.Response.Headers["Access-Control-Allow-Headers"] = CorsAllowHeaders;
                     ctx.Response.Headers["Access-Control-Max-Age"] = "3600";
                     ctx.Response.Headers.Vary = "Origin";
                 }
@@ -89,7 +142,11 @@ internal static class PipelineExtensions
     private static void StartWorkers(WebApplication app, GatewayStartupContext startup, GatewayAppRuntime runtime)
     {
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Gateway");
-        var workerCount = Math.Max(1, Math.Min(Environment.ProcessorCount, 4));
+        // Minimum 2 workers so one can process /stop (or /cancel, /abort) while another
+        // is blocked on an LLM call. In 500?MB containers with 1 CPU, 2 async workers
+        // add negligible memory (stack-not-committed until blocked) while keeping the
+        // abort path responsive. Upper bound 4 workers to cap concurrent LLM pressure.
+        var workerCount = Math.Max(2, Math.Min(Environment.ProcessorCount, 4));
 
         GatewayWorkers.Start(
             app.Lifetime,
@@ -116,7 +173,11 @@ internal static class PipelineExtensions
             app.Services.GetService<LearningService>(),
             app.Services.GetService<GatewayAutomationService>(),
             app.Services.GetService<ContractGovernanceService>(),
-            app.Services.GetService<AudioTranscriptionService>());
+            FeatureFallbackServices.ResolveGovernanceLedgerService(startup, app.Services),
+            app.Services.GetService<AudioTranscriptionService>(),
+            app.Services.GetService<Background.BackgroundExecutionLimiter>(),        
+            app.Services.GetService<MediaCacheStore>(),
+            runtime.AbortRegistry);
     }
 
     private static void StartChannels(WebApplication app, GatewayAppRuntime runtime)

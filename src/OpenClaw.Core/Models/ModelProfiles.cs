@@ -14,6 +14,9 @@ public sealed class ModelProfileConfig
     public string Model { get; set; } = "";
     public string? BaseUrl { get; set; }
     public string? ApiKey { get; set; }
+    public string? AuthMode { get; set; }
+    public bool? SendRequestMetadata { get; set; }
+    public string? CorrelationIdHeader { get; set; }
     public string[] Tags { get; set; } = [];
     public string[] FallbackProfileIds { get; set; } = [];
     public string[] FallbackModels { get; set; } = [];
@@ -32,6 +35,7 @@ public sealed class ModelCapabilities
     public bool SupportsReasoningEffort { get; set; }
     public bool SupportsSystemMessages { get; set; } = true;
     public bool SupportsImageInput { get; set; }
+    public bool SupportsVideoInput { get; set; }
     public bool SupportsAudioInput { get; set; }
     public bool SupportsPromptCaching { get; set; }
     public bool SupportsExplicitCacheRetention { get; set; }
@@ -52,6 +56,7 @@ public sealed class ModelSelectionRequirements
     public bool? SupportsReasoningEffort { get; set; }
     public bool? SupportsSystemMessages { get; set; }
     public bool? SupportsImageInput { get; set; }
+    public bool? SupportsVideoInput { get; set; }
     public bool? SupportsAudioInput { get; set; }
     public int? MinContextTokens { get; set; }
     public int? MinOutputTokens { get; set; }
@@ -65,6 +70,9 @@ public sealed class ModelProfile
     public required string ModelId { get; init; }
     public string? BaseUrl { get; init; }
     public string? ApiKey { get; init; }
+    public string AuthMode { get; init; } = "bearer";
+    public bool SendRequestMetadata { get; init; }
+    public string CorrelationIdHeader { get; init; } = "X-OpenClaw-Correlation-Id";
     public string[] Tags { get; init; } = [];
     public string[] FallbackProfileIds { get; init; } = [];
     public string[] FallbackModels { get; init; } = [];
@@ -82,6 +90,10 @@ public sealed class ModelProfileStatus
     public bool IsDefault { get; init; }
     public bool IsImplicit { get; init; }
     public bool IsAvailable { get; init; }
+    public string? ProviderGateway { get; init; }
+    public string AuthMode { get; init; } = "bearer";
+    public bool SendRequestMetadata { get; init; }
+    public string CorrelationIdHeader { get; init; } = "X-OpenClaw-Correlation-Id";
     public string[] Tags { get; init; } = [];
     public required ModelCapabilities Capabilities { get; init; }
     public PromptCachingConfig PromptCaching { get; init; } = new();

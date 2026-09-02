@@ -56,7 +56,7 @@ public sealed class AutomationRetryPolicy
 
 public sealed class AutomationDefinition
 {
-    public required string Id { get; init; }
+    public string Id { get; init; } = "";
     public string Name { get; init; } = "";
     public bool Enabled { get; init; } = true;
     public string Schedule { get; init; } = "@hourly";
@@ -73,6 +73,7 @@ public sealed class AutomationDefinition
     public bool IsDraft { get; init; }
     public string Source { get; init; } = "managed";
     public string? TemplateKey { get; init; }
+    public string? CreatedByLearningProposalId { get; init; }
     public VerificationPolicy? Verification { get; init; }
     public AutomationRetryPolicy RetryPolicy { get; init; } = new();
     public DateTimeOffset CreatedAtUtc { get; init; } = DateTimeOffset.UtcNow;

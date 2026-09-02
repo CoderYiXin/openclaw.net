@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Security;
 
 namespace OpenClaw.Core.Memory;
 
@@ -28,7 +29,7 @@ public sealed class MemoryStoreCorruptionException : IOException
 /// Sessions and notes are stored as JSON files with URL-safe base64 encoded filenames
 /// to prevent path traversal attacks. Includes in-memory LRU cache for sessions.
 /// </summary>
-public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNoteCatalog, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore, IAsyncDisposable, IDisposable
+public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNoteCatalog, IMemoryRetentionStore, ISessionAdminStore, ISessionSearchStore, IBackgroundSessionStore, IAsyncDisposable, IDisposable
 {
     private const int SessionLoadStripeCount = 64;
 
@@ -42,13 +43,20 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
     private readonly ConcurrentDictionary<string, NoteIndexEntry> _noteIndex = new(StringComparer.Ordinal);
     private readonly ILogger<FileMemoryStore>? _logger;
     private readonly RuntimeMetrics? _metrics;
+    private readonly IRedactionPipeline? _redaction;
     private int _noteIndexInitialized;
 
-    public FileMemoryStore(string basePath, int maxCachedSessions = 100, ILogger<FileMemoryStore>? logger = null, RuntimeMetrics? metrics = null)
+    public FileMemoryStore(
+        string basePath,
+        int maxCachedSessions = 100,
+        ILogger<FileMemoryStore>? logger = null,
+        RuntimeMetrics? metrics = null,
+        IRedactionPipeline? redaction = null)
     {
         _basePath = basePath ?? throw new ArgumentNullException(nameof(basePath));
         _logger = logger;
         _metrics = metrics;
+        _redaction = redaction;
         
         _sessionsPath = Path.Combine(_basePath, "sessions");
         _notesPath = Path.Combine(_basePath, "notes");
@@ -129,6 +137,54 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         }
     }
 
+    public async ValueTask<IReadOnlyList<Session>> ListBackgroundRunnableSessionsAsync(int limit, CancellationToken ct)
+    {
+        limit = Math.Clamp(limit, 1, 500);
+        if (!Directory.Exists(_sessionsPath))
+            return [];
+
+        var sessions = new List<Session>();
+        foreach (var file in Directory.EnumerateFiles(_sessionsPath, "*.json"))
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                await using var stream = new FileStream(file, new FileStreamOptions
+                {
+                    Mode = FileMode.Open,
+                    Access = FileAccess.Read,
+                    Share = FileShare.Read,
+                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan
+                });
+
+                var session = await JsonSerializer.DeserializeAsync(stream, CoreJsonContext.Default.Session, ct);
+                if (session is { BackgroundRun: not null, RunState: SessionRunState.Running or SessionRunState.Continuing })
+                    sessions.Add(session);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (IOException ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session file during background scan: {Path}", file);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session file during background scan: {Path}", file);
+            }
+            catch (JsonException ex)
+            {
+                _logger?.LogWarning(ex, "Skipping corrupt session file during background scan: {Path}", file);
+            }
+        }
+
+        return sessions
+            .OrderBy(static s => s.BackgroundRun?.LastContinuedAtUtc ?? s.LastActiveAt)
+            .Take(limit)
+            .ToArray();
+    }
+
     public ValueTask DisposeAsync()
     {
         foreach (var stripe in _sessionLoadStripes)
@@ -187,6 +243,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (session is null)
             throw new ArgumentNullException(nameof(session));
 
+        var persistedSession = _redaction?.RedactSession(session) ?? session;
         var encodedId = EncodeKey(session.Id);
         var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -202,7 +259,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, session, CoreJsonContext.Default.Session, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedSession, CoreJsonContext.Default.Session, ct);
                 await stream.FlushAsync(ct);
             }
 
@@ -210,13 +267,34 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
             File.Move(tempPath, filePath, overwrite: true);
 
             // Update cache
-            await AddToCacheAsync(session.Id, session);
+            await AddToCacheAsync(session.Id, persistedSession);
         }
         catch
         {
             // Clean up temp file on failure
             try { File.Delete(tempPath); } catch { /* ignore */ }
             throw;
+        }
+    }
+    public async ValueTask DeleteSessionAsync(string sessionId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        var loadGate = ResolveSessionLoadStripe(sessionId);
+        await loadGate.WaitAsync(ct);
+        try
+        {
+            _sessionCache.Remove(sessionId);
+
+            var encodedId = EncodeKey(sessionId);
+            var filePath = Path.Combine(_sessionsPath, $"{encodedId}.json");
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+        finally
+        {
+            loadGate.Release();
         }
     }
 
@@ -255,10 +333,11 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
 
         try
         {
-            await File.WriteAllTextAsync(tempPath, content, ct);
+            var safeContent = _redaction?.Redact(content) ?? content;
+            await File.WriteAllTextAsync(tempPath, safeContent, ct);
             File.Move(tempPath, filePath, overwrite: true);
             await PersistOriginalNoteKeyAsync(key, keyPath, keyTempPath, ct);
-            UpsertNoteIndexEntry(key, content, nowUtc);
+            UpsertNoteIndexEntry(key, safeContent, nowUtc);
         }
         catch
         {
@@ -403,6 +482,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
         if (branch is null)
             throw new ArgumentNullException(nameof(branch));
 
+        var persistedBranch = _redaction?.RedactBranch(branch) ?? branch;
         var encodedId = EncodeKey(branch.BranchId);
         var filePath = Path.Combine(_branchesPath, $"{encodedId}.json");
         var tempPath = $"{filePath}.tmp";
@@ -417,7 +497,7 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                 Options = FileOptions.Asynchronous
             }))
             {
-                await JsonSerializer.SerializeAsync(stream, branch, CoreJsonContext.Default.SessionBranch, ct);
+                await JsonSerializer.SerializeAsync(stream, persistedBranch, CoreJsonContext.Default.SessionBranch, ct);
                 await stream.FlushAsync(ct);
             }
 
@@ -1078,6 +1158,11 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryNo
                     HistoryTurns = session.History.Count,
                     TotalInputTokens = session.TotalInputTokens,
                     TotalOutputTokens = session.TotalOutputTokens,
+                    TotalCacheReadTokens = session.TotalCacheReadTokens,
+                    TotalCacheWriteTokens = session.TotalCacheWriteTokens,
+                    RunState = session.RunState,
+                    BackgroundRunObjective = session.BackgroundRun?.Objective,
+                    BackgroundContinuationCount = session.BackgroundRun?.ContinuationCount ?? 0,
                     IsActive = false
                 });
             }

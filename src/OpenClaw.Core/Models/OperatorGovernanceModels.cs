@@ -32,6 +32,8 @@ public static class OrganizationAuthModeNames
     public const string BootstrapToken = "bootstrap_token";
     public const string BrowserSession = "browser_session";
     public const string AccountToken = "account_token";
+    /// <summary>OIDC / Keycloak JWT Bearer authentication.</summary>
+    public const string OidcJwt = "oidc_jwt";
 }
 
 public sealed class OperatorIdentitySnapshot
@@ -182,6 +184,8 @@ public static class ToolFailureCodes
     public const string PresetBlocked = "preset_blocked";
     public const string OperatorAuthRequired = "operator_auth_required";
     public const string ApprovalRequired = "approval_required";
+    public const string GovernanceDenied = "governance_denied";
+    public const string GovernanceUnavailable = "governance_unavailable";
     public const string RuntimeCapabilityUnavailable = "runtime_capability_unavailable";
     public const string BrowserBackendMissing = "browser_backend_missing";
     public const string Timeout = "timeout";
@@ -195,6 +199,19 @@ public sealed class BrowserToolCapabilitySummary
     public bool ExecutionBackendConfigured { get; init; }
     public bool Registered { get; init; }
     public string Reason { get; init; } = "";
+}
+
+public sealed class TailscaleServeStatusResponse
+{
+    public string Mode { get; init; } = "off";
+    public string LocalGatewayUrl { get; init; } = "http://127.0.0.1:18789";
+    public string SuggestedServeCommand { get; init; } = "tailscale serve --bg http://127.0.0.1:18789";
+    public string ServeDetected { get; init; } = "unknown";
+    public bool TailscaleCliDetected { get; init; }
+    public string TailnetReachability { get; init; } = "unknown";
+    public bool IdentityHeadersPresent { get; init; }
+    public bool PublicBind { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
 public sealed class SetupStatusResponse
@@ -229,6 +246,7 @@ public sealed class SetupStatusResponse
     public IReadOnlyList<ChannelReadinessDto> ChannelReadiness { get; init; } = [];
     public IReadOnlyList<SetupArtifactStatusItem> Artifacts { get; init; } = [];
     public IReadOnlyList<string> Warnings { get; init; } = [];
+    public TailscaleServeStatusResponse? TailscaleServe { get; init; }
     public ReliabilitySnapshot Reliability { get; init; } = new();
 }
 
@@ -452,6 +470,8 @@ public sealed class TrajectoryExportRecord
     public string? ResultStatus { get; init; }
     public string? FailureCode { get; init; }
     public string? FailureMessage { get; init; }
+    public EvidenceBundle? EvidenceBundle { get; init; }
+    public GovernanceLedgerEntry? GovernanceLedgerEntry { get; init; }
     public bool Anonymized { get; init; }
 }
 

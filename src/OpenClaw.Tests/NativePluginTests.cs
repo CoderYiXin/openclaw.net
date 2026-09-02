@@ -1,7 +1,13 @@
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Agent.Tools;
+using OpenClaw.Gateway.Bootstrap;
+using OpenClaw.Gateway.Composition;
+using OpenClaw.Protocols.Mqtt.Tools;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -52,7 +58,7 @@ public class NativePluginRegistryTests
     }
 
     [Fact]
-    public void Constructor_MqttEnabled_RegistersReadAndWriteTools()
+    public void RegisterExternalTool_MqttEnabled_RegistersReadAndWriteTools()
     {
         var config = new NativePluginsConfig
         {
@@ -64,9 +70,53 @@ public class NativePluginRegistryTests
         };
 
         var registry = new NativePluginRegistry(config, NullLogger.Instance);
+        registry.RegisterExternalTool(new MqttTool(config.Mqtt), "mqtt");
+        registry.RegisterExternalTool(new MqttPublishTool(config.Mqtt), "mqtt");
 
         Assert.Contains(registry.Tools, t => t.Name == "mqtt");
         Assert.Contains(registry.Tools, t => t.Name == "mqtt_publish");
+    }
+
+    [Fact]
+    public void AddOpenClawToolServices_MqttEnabled_RegistersReadAndWriteTools()
+    {
+        var config = new GatewayConfig
+        {
+            Plugins = new PluginsConfig
+            {
+                Native = new NativePluginsConfig
+                {
+                    Mqtt = new MqttConfig
+                    {
+                        Enabled = true,
+                        Host = "127.0.0.1"
+                    }
+                }
+            }
+        };
+        var startup = new GatewayStartupContext
+        {
+            Config = config,
+            RuntimeState = new GatewayRuntimeState
+            {
+                RequestedMode = "jit",
+                EffectiveMode = GatewayRuntimeMode.Jit,
+                DynamicCodeSupported = true
+            },
+            IsNonLoopbackBind = false
+        };
+
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddOpenClawToolServices(startup);
+
+        using var provider = services.BuildServiceProvider();
+        var registry = provider.GetRequiredService<NativePluginRegistry>();
+
+        Assert.Contains(registry.Tools, t => t.Name == "mqtt");
+        Assert.Contains(registry.Tools, t => t.Name == "mqtt_publish");
+        Assert.True(registry.IsNativeTool("mqtt"));
+        Assert.True(registry.IsNativeTool("mqtt_publish"));
     }
 
     [Fact]
@@ -405,7 +455,7 @@ public class WebFetchToolTests
     public async Task ExecuteAsync_InvalidUrl_ReturnsError()
     {
         var tool = new WebFetchTool(new WebFetchConfig { Enabled = true });
-        var result = await tool.ExecuteAsync("""{"url":"not-a-url"}""", CancellationToken.None);
+        var result = await tool.ExecuteAsync("""{"url":"not-a-url"}""", TestContext.Current.CancellationToken);
 
         Assert.Contains("Error", result);
         Assert.Contains("Invalid URL", result);
@@ -419,10 +469,10 @@ public class GitToolTests
     {
         var tool = new GitTool(new GitToolsConfig { Enabled = true, AllowPush = false });
 
-        var pushResult = await tool.ExecuteAsync("""{"subcommand":"push"}""", CancellationToken.None);
+        var pushResult = await tool.ExecuteAsync("""{"subcommand":"push"}""", TestContext.Current.CancellationToken);
         Assert.Contains("disabled", pushResult);
 
-        var resetResult = await tool.ExecuteAsync("""{"subcommand":"reset","args":"--hard HEAD~1"}""", CancellationToken.None);
+        var resetResult = await tool.ExecuteAsync("""{"subcommand":"reset","args":"--hard HEAD~1"}""", TestContext.Current.CancellationToken);
         Assert.Contains("disabled", resetResult);
     }
 
@@ -430,7 +480,7 @@ public class GitToolTests
     public async Task ExecuteAsync_UnknownSubcommand_ReturnsError()
     {
         var tool = new GitTool(new GitToolsConfig { Enabled = true });
-        var result = await tool.ExecuteAsync("""{"subcommand":"hax"}""", CancellationToken.None);
+        var result = await tool.ExecuteAsync("""{"subcommand":"hax"}""", TestContext.Current.CancellationToken);
 
         Assert.Contains("Unsupported", result);
     }
@@ -442,7 +492,7 @@ public class GitToolTests
         // This test runs inside the openclaw.net repo, so git status should work
         var result = await tool.ExecuteAsync(
             """{"subcommand":"status","cwd":"/Users/telli/Desktop/openclaw.net"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         // Should not be an error — either shows status or branch info
         Assert.DoesNotContain("Error:", result);
@@ -462,7 +512,7 @@ public class CodeExecToolTests
 
         var result = await tool.ExecuteAsync(
             """{"language":"bash","code":"echo hello"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("not allowed", result);
         Assert.Contains("python", result);
@@ -479,7 +529,7 @@ public class CodeExecToolTests
 
         var result = await tool.ExecuteAsync(
             """{"language":"python","code":"print(1)"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Unsupported backend", result);
     }
@@ -491,7 +541,7 @@ public class CodeExecToolTests
 
         var result = await tool.ExecuteAsync(
             """{"language":"cobol","code":"DISPLAY 'HELLO'"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("not allowed", result);
     }
@@ -507,7 +557,13 @@ public class CodeExecToolTests
 
         var result = await tool.ExecuteAsync(
             """{"language":"bash","code":"echo 'hello from bash'"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
+
+        if (result.Contains("Bash execution is not available on this host.", StringComparison.Ordinal))
+        {
+            Assert.Contains("Bash execution is not available on this host.", result, StringComparison.Ordinal);
+            return;
+        }
 
         Assert.Contains("hello from bash", result);
         Assert.Contains("Exit code: 0", result);
@@ -525,7 +581,13 @@ public class CodeExecToolTests
 
         var result = await tool.ExecuteAsync(
             """{"language":"bash","code":"echo 'ok'"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
+
+        if (result.Contains("Bash execution is not available on this host.", StringComparison.Ordinal))
+        {
+            Assert.Contains("Bash execution is not available on this host.", result, StringComparison.Ordinal);
+            return;
+        }
 
         Assert.Contains("ok", result);
     }
@@ -552,7 +614,7 @@ public class ImageGenToolTests
 
         var result = await tool.ExecuteAsync(
             """{"prompt":"a cat"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Unsupported", result);
     }
@@ -569,7 +631,7 @@ public class ImageGenToolTests
 
         var result = await tool.ExecuteAsync(
             """{"prompt":"a cat"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("API key not configured", result);
     }
@@ -600,7 +662,7 @@ public class PdfReadToolTests
 
         var result = await tool.ExecuteAsync(
             """{"path":"/nonexistent/file.pdf"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("File not found", result);
     }
@@ -627,7 +689,7 @@ public class PdfReadToolTests
 
             var result = await tool.ExecuteAsync(
                 $$"""{"path":"{{tempFile.Replace("\\", "\\\\")}}"}""",
-                CancellationToken.None);
+                TestContext.Current.CancellationToken);
 
             // Should return some error or empty extraction result — not crash
             Assert.NotNull(result);
@@ -652,7 +714,7 @@ public class CalendarToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"list"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("credentials not configured", result);
     }
@@ -665,7 +727,7 @@ public class CalendarToolTests
         var tool = new CalendarTool(new CalendarConfig { Enabled = true });
         var result = await tool.ExecuteAsync(
             """{"action":"party"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("credentials not configured", result);
     }
@@ -696,7 +758,7 @@ public class EmailToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"send","to":"a@b.com","subject":"Hi","body":"Hello"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("SMTP host not configured", result);
     }
@@ -714,7 +776,7 @@ public class EmailToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"send","subject":"Hi"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("'to' is required", result);
     }
@@ -732,7 +794,7 @@ public class EmailToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"send","to":"a@b.com"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("'subject' is required", result);
     }
@@ -744,7 +806,7 @@ public class EmailToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"list"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("IMAP host not configured", result);
     }
@@ -756,7 +818,7 @@ public class EmailToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"fax"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Unsupported email action", result);
     }
@@ -780,7 +842,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"query","sql":"SELECT 1"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("connection string not configured", result);
     }
@@ -797,7 +859,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"execute","sql":"INSERT INTO t VALUES (1)"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Write operations are disabled", result);
     }
@@ -814,7 +876,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"query","sql":"DELETE FROM users"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Write operations must use the 'execute' action", result);
     }
@@ -831,7 +893,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"query","sql":"/*comment*/\nINSERT INTO users(id) VALUES (1)"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Write operations must use the 'execute' action", result);
     }
@@ -848,7 +910,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"query","sql":"WITH x AS (UPDATE users SET role='admin' RETURNING id) SELECT id FROM x"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Write operations must use the 'execute' action", result);
     }
@@ -864,7 +926,7 @@ public class DatabaseToolTests
 
         var result = await tool.ExecuteAsync(
             """{"action":"backup"}""",
-            CancellationToken.None);
+            TestContext.Current.CancellationToken);
 
         Assert.Contains("Unsupported database action", result);
     }

@@ -27,10 +27,11 @@ public sealed class SetupCommandTests
         var root = CreateTempRoot();
         try
         {
-            var configPath = Path.Combine(root, "config", "openclaw.settings.json");
+            var configPath = Path.Join(root, "config", "openclaw.settings.json");
             var workspace = Path.Combine(root, "workspace");
             using var output = new StringWriter();
             using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
 
             var exitCode = await SetupCommand.RunAsync(
                 [
@@ -42,7 +43,7 @@ public sealed class SetupCommandTests
                     "--model", "gpt-4o",
                     "--api-key", "env:OPENAI_API_KEY"
                 ],
-                new StringReader(string.Empty),
+                input,
                 output,
                 error,
                 root,
@@ -60,6 +61,7 @@ public sealed class SetupCommandTests
             var tooling = openClaw.GetProperty("tooling");
             Assert.True(tooling.GetProperty("workspaceOnly").GetBoolean());
             Assert.True(tooling.GetProperty("allowShell").GetBoolean());
+            Assert.False(tooling.GetProperty("enableBrowserTool").GetBoolean());
             Assert.Equal(workspace, tooling.GetProperty("workspaceRoot").GetString());
             Assert.Equal(workspace, tooling.GetProperty("allowedReadRoots")[0].GetString());
             Assert.Equal(workspace, tooling.GetProperty("allowedWriteRoots")[0].GetString());
@@ -67,7 +69,7 @@ public sealed class SetupCommandTests
             var memory = openClaw.GetProperty("memory");
             Assert.Equal(Path.Combine(root, "config", "memory"), memory.GetProperty("storagePath").GetString());
 
-            var envExample = await File.ReadAllTextAsync(Path.Combine(root, "config", "openclaw.settings.env.example"));
+            var envExample = await File.ReadAllTextAsync(Path.Join(root, "config", "openclaw.settings.env.example"));
             Assert.Contains("OPENAI_API_KEY=replace-me", envExample, StringComparison.Ordinal);
             Assert.Contains($"OPENCLAW_WORKSPACE={workspace}", envExample, StringComparison.Ordinal);
 
@@ -93,6 +95,7 @@ public sealed class SetupCommandTests
             var workspace = Path.Combine(root, "workspace");
             using var output = new StringWriter();
             using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
 
             var exitCode = await SetupCommand.RunAsync(
                 [
@@ -104,7 +107,7 @@ public sealed class SetupCommandTests
                     "--model", "gpt-4o",
                     "--api-key", "env:OPENAI_API_KEY"
                 ],
-                new StringReader(string.Empty),
+                input,
                 output,
                 error,
                 root,
@@ -119,6 +122,7 @@ public sealed class SetupCommandTests
 
             var tooling = openClaw.GetProperty("tooling");
             Assert.False(tooling.GetProperty("allowShell").GetBoolean());
+            Assert.False(tooling.GetProperty("enableBrowserTool").GetBoolean());
             Assert.True(tooling.GetProperty("requireToolApproval").GetBoolean());
 
             var security = openClaw.GetProperty("security");
@@ -184,6 +188,177 @@ public sealed class SetupCommandTests
             var envExample = await File.ReadAllTextAsync(Path.Combine(root, "config", "openclaw.ollama.env.example"));
             Assert.DoesNotContain("MODEL_PROVIDER_KEY=replace-me", envExample, StringComparison.Ordinal);
             Assert.Contains($"OPENCLAW_WORKSPACE={workspace}", envExample, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonInteractiveDeepSeekProvider_WritesNamedOpenAiCompatibleProfile()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.deepseek.json");
+            var workspace = Path.Combine(root, "workspace");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "deepseek"
+                ],
+                new StringReader(string.Empty),
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            var llm = openClaw.GetProperty("llm");
+            Assert.Equal("deepseek", llm.GetProperty("provider").GetString());
+            Assert.Equal("deepseek-v4-flash", llm.GetProperty("model").GetString());
+            Assert.Equal("https://api.deepseek.com", llm.GetProperty("endpoint").GetString());
+            Assert.Equal("env:DEEPSEEK_API_KEY", llm.GetProperty("apiKey").GetString());
+
+            var models = openClaw.GetProperty("models");
+            Assert.Equal("deepseek-default", models.GetProperty("defaultProfile").GetString());
+            var profile = Assert.Single(models.GetProperty("profiles").EnumerateArray());
+            Assert.Equal("deepseek-default", profile.GetProperty("id").GetString());
+            Assert.Equal("deepseek", profile.GetProperty("provider").GetString());
+            Assert.Equal("deepseek-v4-flash", profile.GetProperty("model").GetString());
+            Assert.Equal("https://api.deepseek.com", profile.GetProperty("baseUrl").GetString());
+            Assert.True(profile.GetProperty("capabilities").GetProperty("supportsTools").GetBoolean());
+            Assert.True(profile.GetProperty("capabilities").GetProperty("supportsReasoningEffort").GetBoolean());
+
+            var envExample = await File.ReadAllTextAsync(Path.Combine(root, "config", "openclaw.deepseek.env.example"));
+            Assert.Contains("DEEPSEEK_API_KEY=replace-me", envExample, StringComparison.Ordinal);
+            Assert.DoesNotContain("MODEL_PROVIDER_KEY=replace-me", envExample, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonInteractiveEmbeddedPreset_WritesKeylessLocalInferenceProfile()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.embedded.json");
+            var workspace = Path.Combine(root, "workspace");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "embedded"
+                ],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            var llm = openClaw.GetProperty("llm");
+            Assert.Equal("embedded", llm.GetProperty("provider").GetString());
+            Assert.Equal("gemma-local-small-q4", llm.GetProperty("model").GetString());
+            Assert.False(llm.TryGetProperty("apiKey", out var apiKey) && apiKey.ValueKind == JsonValueKind.String);
+
+            var localInference = openClaw.GetProperty("localInference");
+            Assert.True(localInference.GetProperty("enabled").GetBoolean());
+            Assert.True(localInference.GetProperty("autoStart").GetBoolean());
+            Assert.Equal("llama.cpp", localInference.GetProperty("backend").GetString());
+
+            var models = openClaw.GetProperty("models");
+            Assert.Equal("embedded-local", models.GetProperty("defaultProfile").GetString());
+            var profile = Assert.Single(models.GetProperty("profiles").EnumerateArray());
+            Assert.Equal("embedded-local", profile.GetProperty("id").GetString());
+            Assert.Equal("embedded", profile.GetProperty("provider").GetString());
+            Assert.Equal("embedded-gemma-small-q4", profile.GetProperty("presetId").GetString());
+            Assert.False(profile.GetProperty("capabilities").GetProperty("supportsTools").GetBoolean());
+            Assert.True(profile.GetProperty("capabilities").GetProperty("supportsStreaming").GetBoolean());
+
+            var envExample = await File.ReadAllTextAsync(Path.Combine(root, "config", "openclaw.embedded.env.example"));
+            Assert.DoesNotContain("MODEL_PROVIDER_KEY=replace-me", envExample, StringComparison.Ordinal);
+            Assert.Contains($"OPENCLAW_WORKSPACE={workspace}", envExample, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonInteractiveEmbeddedGemma4Preset_WritesPackageCapabilitiesAndContext()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Combine(root, "config", "openclaw.embedded-gemma4.json");
+            var workspace = Path.Combine(root, "workspace");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "local",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "embedded",
+                    "--model", "gemma-4-e4b",
+                    "--model-preset", "embedded-gemma-4-e4b"
+                ],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            var localInference = openClaw.GetProperty("localInference");
+            Assert.Equal(128000, localInference.GetProperty("contextSize").GetInt32());
+            Assert.True(localInference.GetProperty("enableJinja").GetBoolean());
+            Assert.Equal("gemma", localInference.GetProperty("chatTemplate").GetString());
+
+            var profile = Assert.Single(openClaw.GetProperty("models").GetProperty("profiles").EnumerateArray());
+            Assert.Equal("embedded-gemma-4-e4b", profile.GetProperty("presetId").GetString());
+            Assert.Equal("gemma-4-e4b", profile.GetProperty("model").GetString());
+            var capabilities = profile.GetProperty("capabilities");
+            Assert.True(capabilities.GetProperty("supportsTools").GetBoolean());
+            Assert.True(capabilities.GetProperty("supportsVision").GetBoolean());
+            Assert.True(capabilities.GetProperty("supportsImageInput").GetBoolean());
+            Assert.True(capabilities.GetProperty("supportsVideoInput").GetBoolean());
+            Assert.True(capabilities.GetProperty("supportsAudioInput").GetBoolean());
+            Assert.Equal(128000, capabilities.GetProperty("maxContextTokens").GetInt32());
         }
         finally
         {
@@ -280,7 +455,7 @@ public sealed class SetupCommandTests
         var root = CreateTempRoot();
         try
         {
-            var configPath = Path.Combine(root, "config", "openclaw.settings.json");
+            var configPath = Path.Join(root, "config", "openclaw.settings.json");
             var workspace = Path.Combine(root, "workspace");
             using var setupOutput = new StringWriter();
             using var setupError = new StringWriter();
@@ -351,7 +526,7 @@ public sealed class SetupCommandTests
         var root = CreateTempRoot();
         try
         {
-            var configPath = Path.Combine(root, "config", "openclaw.settings.json");
+            var configPath = Path.Join(root, "config", "openclaw.settings.json");
             var workspace = Path.Combine(root, "workspace");
             using var setupOutput = new StringWriter();
             using var setupError = new StringWriter();
@@ -388,6 +563,133 @@ public sealed class SetupCommandTests
             Assert.Equal(string.Empty, verifyError.ToString());
             Assert.Contains("Setup verification:", verifyOutput.ToString(), StringComparison.Ordinal);
             Assert.Contains("Provider smoke skipped because offline mode is enabled.", verifyOutput.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_TailscaleServeSetup_PrintsGuidedPrivateAccessInstructions()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "tailscale",
+                    "serve",
+                    "--non-interactive",
+                    "--local-url", "http://127.0.0.1:18789"
+                ],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            var stdout = output.ToString();
+            Assert.Contains("Tailscale Serve setup for OpenClaw.NET", stdout, StringComparison.Ordinal);
+            Assert.Contains("tailscale serve --bg http://127.0.0.1:18789", stdout, StringComparison.Ordinal);
+            Assert.Contains("- Chat: /chat", stdout, StringComparison.Ordinal);
+            Assert.Contains("- Admin: /admin", stdout, StringComparison.Ordinal);
+            Assert.Contains("- MCP: /mcp", stdout, StringComparison.Ordinal);
+            Assert.Contains("- Integration API: /api/integration/status", stdout, StringComparison.Ordinal);
+            Assert.Contains("- WebSocket: /ws", stdout, StringComparison.Ordinal);
+            Assert.Contains("- Doctor: /doctor/text", stdout, StringComparison.Ordinal);
+            Assert.Contains("Do not use Funnel for /admin", stdout, StringComparison.Ordinal);
+            Assert.Contains("openclaw setup status --config", stdout, StringComparison.Ordinal);
+            Assert.Contains("openclaw admin posture", stdout, StringComparison.Ordinal);
+            Assert.Contains("http://127.0.0.1:18789/health/ready", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_TailscaleServeSetup_HelpAfterServePrintsUsage()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                ["tailscale", "serve", "--help"],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.Contains("Usage: openclaw setup tailscale serve", output.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_NonInteractiveTailscaleServeProfile_WritesLoopbackDeploymentMetadata()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Join(root, "config", "openclaw.tailscale.json");
+            var workspace = Path.Join(root, "workspace");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "--non-interactive",
+                    "--profile", "tailscale-serve",
+                    "--config", configPath,
+                    "--workspace", workspace,
+                    "--provider", "openai",
+                    "--model", "gpt-4o",
+                    "--api-key", "env:OPENAI_API_KEY"
+                ],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            Assert.Equal("127.0.0.1", openClaw.GetProperty("bindAddress").GetString());
+            Assert.Equal("openai", openClaw.GetProperty("llm").GetProperty("provider").GetString());
+            Assert.Equal("gpt-4o", openClaw.GetProperty("llm").GetProperty("model").GetString());
+            Assert.False(openClaw.GetProperty("tailscale").GetProperty("enabled").GetBoolean());
+
+            var deployment = openClaw.GetProperty("deployment");
+            Assert.Equal("tailscale-serve", deployment.GetProperty("mode").GetString());
+            Assert.False(deployment.GetProperty("publicExposure").GetBoolean());
+            Assert.Equal("tailscale-serve", deployment.GetProperty("reverseProxy").GetString());
+            Assert.Equal("http://127.0.0.1:18789", deployment.GetProperty("expectedLocalUrl").GetString());
+
+            var tooling = openClaw.GetProperty("tooling");
+            Assert.False(tooling.GetProperty("enableBrowserTool").GetBoolean());
         }
         finally
         {
@@ -503,6 +805,59 @@ public sealed class SetupCommandTests
             var plist = await File.ReadAllTextAsync(plistPath);
             Assert.Contains("<string>--config</string>", plist, StringComparison.Ordinal);
             Assert.Contains($"<string>{System.Security.SecurityElement.Escape(configPath)}</string>", plist, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_SetupProviderAperture_WritesTailnetIdentityProfile()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var configPath = Path.Join(root, "config", "openclaw.settings.json");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+            using var input = new StringReader(string.Empty);
+
+            var exitCode = await SetupCommand.RunAsync(
+                [
+                    "provider",
+                    "Aperture",
+                    "--non-interactive",
+                    "--config", configPath,
+                    "--profile-id", "aperture",
+                    "--endpoint", "https://aperture.example.test/v1",
+                    "--model", "team/default",
+                    "--auth-mode", "tailnet-identity",
+                    "--send-request-metadata", "true"
+                ],
+                input,
+                output,
+                error,
+                root,
+                canPrompt: false);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+
+            using var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath));
+            var openClaw = document.RootElement.GetProperty("OpenClaw");
+            var profile = Assert.Single(openClaw.GetProperty("models").GetProperty("profiles").EnumerateArray());
+            Assert.Equal("aperture", profile.GetProperty("id").GetString());
+            Assert.Equal("aperture", profile.GetProperty("provider").GetString());
+            Assert.Equal("team/default", profile.GetProperty("model").GetString());
+            Assert.Equal("https://aperture.example.test/v1", profile.GetProperty("baseUrl").GetString());
+            Assert.Equal("tailnet-identity", profile.GetProperty("authMode").GetString());
+            Assert.True(profile.GetProperty("sendRequestMetadata").GetBoolean());
+            Assert.False(profile.TryGetProperty("apiKey", out _));
+
+            var envExample = await File.ReadAllTextAsync(Path.Join(root, "config", "openclaw.settings.env.example"));
+            Assert.DoesNotContain("OPENCLAW_APERTURE_TOKEN", envExample, StringComparison.Ordinal);
+            Assert.Contains("OPENCLAW_AUTH_TOKEN=", envExample, StringComparison.Ordinal);
         }
         finally
         {

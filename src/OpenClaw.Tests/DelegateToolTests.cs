@@ -7,6 +7,7 @@ using OpenClaw.Core.Abstractions;
 using OpenClaw.Core.Memory;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
+using OpenClaw.Core.Skills;
 using Xunit;
 
 namespace OpenClaw.Tests;
@@ -64,7 +65,7 @@ public sealed class DelegateToolTests
 
             var result = await tool.ExecuteAsync("""
                 {"profile":"reviewer","task":"Inspect the change"}
-                """, CancellationToken.None);
+                """, TestContext.Current.CancellationToken);
 
             Assert.Equal("delegated-result", result);
             Assert.True(wasCalled);
@@ -154,7 +155,7 @@ public sealed class DelegateToolTests
 
             var result = await tool.ExecuteAsync("""
                 {"profile":"reviewer","task":"Inspect the change"}
-                """, context, CancellationToken.None);
+                """, context, TestContext.Current.CancellationToken);
 
             Assert.Equal("delegated-result", result);
             var parentSummary = Assert.Single(parentSession.DelegatedSessions);
@@ -162,7 +163,7 @@ public sealed class DelegateToolTests
             Assert.Equal("completed", parentSummary.Status);
             Assert.Contains(parentSummary.ToolUsage, item => item.ToolName == "shell");
 
-            var persisted = await memoryStore.GetSessionAsync(parentSummary.SessionId, CancellationToken.None);
+            var persisted = await memoryStore.GetSessionAsync(parentSummary.SessionId, TestContext.Current.CancellationToken);
             Assert.NotNull(persisted);
             Assert.Equal("delegation", persisted!.ChannelId);
             Assert.NotNull(persisted.Delegation);
@@ -199,12 +200,15 @@ public sealed class DelegateToolTests
 
         public IReadOnlyList<string> LoadedSkillNames => [];
 
+        public IReadOnlyList<SkillDefinition> LoadedSkills => [];
+
         public Task<string> RunAsync(
             Session session,
             string userMessage,
             CancellationToken ct,
             ToolApprovalCallback? approvalCallback = null,
-            JsonElement? responseSchema = null)
+            JsonElement? responseSchema = null,
+            string? correlationId = null)
         {
             _ = userMessage;
             _ = ct;
@@ -212,6 +216,22 @@ public sealed class DelegateToolTests
             _ = responseSchema;
             mutateSession?.Invoke(session);
             return Task.FromResult(response);
+        }
+
+        public Task<AgentTurnResult> RunTurnAsync(
+            Session session,
+            string userMessage,
+            CancellationToken ct,
+            ToolApprovalCallback? approvalCallback = null,
+            JsonElement? responseSchema = null,
+            string? correlationId = null)
+        {
+            _ = userMessage;
+            _ = ct;
+            _ = approvalCallback;
+            _ = responseSchema;
+            mutateSession?.Invoke(session);
+            return Task.FromResult(AgentTurnResult.Completed(response));
         }
 
         public Task<IReadOnlyList<string>> ReloadSkillsAsync(CancellationToken ct = default)
@@ -224,7 +244,8 @@ public sealed class DelegateToolTests
             Session session,
             string userMessage,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct,
-            ToolApprovalCallback? approvalCallback = null)
+            ToolApprovalCallback? approvalCallback = null,
+            string? correlationId = null)
         {
             _ = session;
             _ = userMessage;

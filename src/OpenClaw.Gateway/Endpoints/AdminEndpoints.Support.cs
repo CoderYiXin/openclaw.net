@@ -10,6 +10,8 @@ using OpenClaw.Agent.Execution;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Channels;
 using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.ExternalCli;
+using OpenClaw.Core.Features;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Observability;
 using OpenClaw.Core.Pipeline;
@@ -28,6 +30,12 @@ namespace OpenClaw.Gateway.Endpoints;
 internal static partial class AdminEndpoints
 {
     private const int MaxAdminJsonBodyBytes = 256 * 1024;
+    private const int MaxAgentBundleJsonBodyBytes = 4 * 1024 * 1024;
+
+    private static bool HasTailscaleIdentityHeaders(IHeaderDictionary headers)
+        => headers.Keys.Any(static key =>
+            key.StartsWith("Tailscale-User-", StringComparison.OrdinalIgnoreCase) ||
+            key.StartsWith("X-Tailscale-", StringComparison.OrdinalIgnoreCase));
 
     private sealed class AdminEndpointServices
     {
@@ -39,13 +47,21 @@ internal static partial class AdminEndpoints
         public AdminSettingsService AdminSettings { get; init; } = null!;
         public PluginAdminSettingsService PluginAdminSettings { get; init; } = null!;
         public HeartbeatService Heartbeat { get; init; } = null!;
+        public RuntimePulseService Pulse { get; init; } = null!;
         public IMemoryStore MemoryStore { get; init; } = null!;
         public IMemoryNoteSearch? MemorySearch { get; init; }
         public IMemoryNoteCatalog? MemoryCatalog { get; init; }
+        public IStructuredMemoryProvider? StructuredMemoryProvider { get; init; }
         public IUserProfileStore ProfileStore { get; init; } = null!;
         public ILearningProposalStore ProposalStore { get; init; } = null!;
         public GatewayAutomationService AutomationService { get; init; } = null!;
         public LearningService LearningService { get; init; } = null!;
+        public HarnessContractService HarnessContracts { get; init; } = null!;
+        public EvidenceBundleService EvidenceBundles { get; init; } = null!;
+        public GovernanceLedgerService GovernanceLedger { get; init; } = null!;
+        public SharedHarnessStateService SharedHarnessState { get; init; } = null!;
+        public CodebaseHarnessMapService CodebaseMap { get; init; } = null!;
+        public PlanExecuteVerifyService PlanExecuteVerify { get; init; } = null!;
         public IntegrationApiFacade Facade { get; init; } = null!;
         public ToolPresetResolver ToolPresetResolver { get; init; } = null!;
         public AdminObservabilityService Observability { get; init; } = null!;
@@ -56,12 +72,16 @@ internal static partial class AdminEndpoints
         public SetupVerificationSnapshotStore SetupVerificationSnapshots { get; init; } = null!;
         public IModelProfileRegistry ModelProfiles { get; init; } = null!;
         public ModelEvaluationRunner ModelEvaluationRunner { get; init; } = null!;
+        public IExternalCliConnectorRegistry ExternalCliRegistry { get; init; } = null!;
+        public IExternalCliRunner ExternalCliRunner { get; init; } = null!;
+        public IExternalCliAuditSink ExternalCliAudit { get; init; } = null!;
+        public IExternalCliEventSink ExternalCliEvents { get; init; } = null!;
     }
 
-    private static async Task<JsonBodyReadResult<T>> ReadJsonBodyAsync<T>(HttpContext ctx, JsonTypeInfo<T> typeInfo)
+    private static async Task<JsonBodyReadResult<T>> ReadJsonBodyAsync<T>(HttpContext ctx, JsonTypeInfo<T> typeInfo, int maxBytes = MaxAdminJsonBodyBytes)
         where T : class
     {
-        if (ctx.Request.ContentLength is > MaxAdminJsonBodyBytes)
+        if (ctx.Request.ContentLength.HasValue && ctx.Request.ContentLength.Value > maxBytes)
             return new(default, Results.StatusCode(StatusCodes.Status413PayloadTooLarge));
 
         if (ctx.Request.ContentLength is 0)
@@ -77,7 +97,7 @@ internal static partial class AdminEndpoints
                 if (read == 0)
                     break;
 
-                if (payload.Length + read > MaxAdminJsonBodyBytes)
+                if (payload.Length + read > maxBytes)
                     return new(default, Results.StatusCode(StatusCodes.Status413PayloadTooLarge));
 
                 await payload.WriteAsync(buffer.AsMemory(0, read), ctx.RequestAborted);
@@ -268,7 +288,8 @@ internal static partial class AdminEndpoints
         SetupVerificationSnapshotStore setupVerificationSnapshots,
         GatewayMaintenanceRuntimeService maintenance,
         bool includeReliability,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool tailscaleIdentityHeadersPresent = false)
     {
         var policy = organizationPolicy.GetSnapshot();
         var publicBind = startup.IsNonLoopbackBind;
@@ -286,10 +307,18 @@ internal static partial class AdminEndpoints
             warnings.Add("Reverse proxy and TLS are recommended for public bind deployments.");
         if (string.IsNullOrWhiteSpace(startup.Config.AuthToken))
             warnings.Add("No auth token is configured.");
+        var tailscaleServe = await TailscaleServeAdvisor.BuildStatusAsync(
+            startup.Config,
+            new TailscaleServeProbeOptions
+            {
+                IdentityHeadersPresent = tailscaleIdentityHeadersPresent,
+                CheckCli = false
+            },
+            ct);
 
         var status = new SetupStatusResponse
         {
-            Profile = publicBind ? "public" : "local",
+            Profile = TailscaleServeAdvisor.IsTailscaleServeConfigured(startup.Config) ? "tailscale-serve" : publicBind ? "public" : "local",
             BindAddress = startup.Config.BindAddress,
             Port = startup.Config.Port,
             PublicBind = publicBind,
@@ -325,7 +354,8 @@ internal static partial class AdminEndpoints
                 providerSmokeRegistry),
             ChannelReadiness = MapChannelReadiness(ChannelReadinessEvaluator.Evaluate(startup.Config, startup.IsNonLoopbackBind)),
             Artifacts = BuildSetupArtifacts(deployDirectory),
-            Warnings = warnings
+            Warnings = warnings,
+            TailscaleServe = tailscaleServe
         };
 
         if (!includeReliability)
@@ -364,6 +394,7 @@ internal static partial class AdminEndpoints
             ChannelReadiness = status.ChannelReadiness,
             Artifacts = status.Artifacts,
             Warnings = status.Warnings,
+            TailscaleServe = status.TailscaleServe,
             Reliability = maintenanceReport.Reliability
         };
     }
@@ -920,12 +951,14 @@ internal static partial class AdminEndpoints
     private static string TrimToMaxLength(string value, int maxLength)
         => value.Length <= maxLength ? value : value[..maxLength];
 
-    private static string GetManagedSkillRoot()
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".openclaw", "skills");
+    private static string GetManagedSkillRoot(GatewayConfig config)
+        => string.IsNullOrWhiteSpace(config.Skills.Load.ManagedRoot)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".openclaw", "skills")
+            : config.Skills.Load.ManagedRoot;
 
-    private static async Task<IReadOnlyList<ManagedSkillBundleItem>> ListManagedSkillBundleItemsAsync(CancellationToken ct)
+    private static async Task<IReadOnlyList<ManagedSkillBundleItem>> ListManagedSkillBundleItemsAsync(GatewayConfig config, CancellationToken ct)
     {
-        var root = GetManagedSkillRoot();
+        var root = GetManagedSkillRoot(config);
         if (!Directory.Exists(root))
             return [];
 
@@ -956,10 +989,10 @@ internal static partial class AdminEndpoints
             .ToArray();
     }
 
-    private static async Task SaveManagedSkillBundleItemAsync(ManagedSkillBundleItem item, CancellationToken ct)
+    private static async Task SaveManagedSkillBundleItemAsync(GatewayConfig config, ManagedSkillBundleItem item, CancellationToken ct)
     {
         var slug = SlugifySkillName(item.Slug, item.Name);
-        var root = Path.Combine(GetManagedSkillRoot(), slug);
+        var root = Path.Combine(GetManagedSkillRoot(config), slug);
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "SKILL.md"), item.Content, ct);
     }
@@ -1020,20 +1053,35 @@ internal static partial class AdminEndpoints
         GatewayStartupContext startup,
         GatewayAppRuntime runtime)
     {
-        var pluginSkillDirs = runtime.LoadedSkills
+        // Use the live agent runtime's skill list — it is updated by ReloadSkillsAsync on every
+        // install/delete, so plugin-dir discovery is always based on fresh data.
+        var liveSkills = runtime.AgentRuntime.LoadedSkills;
+
+        var pluginSkillDirs = liveSkills
             .Where(static skill => skill.Source == SkillSource.Plugin && !string.IsNullOrWhiteSpace(skill.Location))
             .Select(static skill => skill.Location)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+        // Resolve workspace path: fall back to the config-based WorkspaceRoot reference so
+        // the disk scan includes workspace skills even when OPENCLAW_WORKSPACE env var is not set.
+        var workspacePath = startup.WorkspacePath
+            ?? SecretResolver.Resolve(startup.Config.Tooling.WorkspaceRoot);
+
         var loaded = SkillLoader.LoadAll(
             startup.Config.Skills,
-            startup.WorkspacePath,
+            workspacePath,
             NullLogger.Instance,
             pluginSkillDirs);
 
         var byName = loaded.ToDictionary(static skill => skill.Name, StringComparer.OrdinalIgnoreCase);
-        foreach (var skill in runtime.LoadedSkills)
+
+        // Supplement the disk scan with any skills the live runtime has that are not
+        // on disk in the standard locations (e.g. plugin-packaged skills loaded from
+        // non-standard directories).  Using liveSkills (AgentRuntime.LoadedSkills) instead
+        // of the stale GatewayAppRuntime.LoadedSkills ensures that a skill deleted via
+        // DELETE /admin/skills/{name} (which calls ReloadSkillsAsync) does not reappear here.
+        foreach (var skill in liveSkills)
         {
             if (!byName.ContainsKey(skill.Name))
                 byName[skill.Name] = skill;

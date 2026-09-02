@@ -1,0 +1,135 @@
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Security.Claims;
+using OpenClaw.Core.Models;
+using OpenClaw.Gateway;
+using OpenClaw.Gateway.Bootstrap;
+using OpenClaw.Gateway.Endpoints;
+using Xunit;
+
+namespace OpenClaw.Tests;
+
+public sealed class WebSocketEndpointsTests
+{
+    [Fact]
+    public void TryResolveAuthorizedUserIdForWebSocket_PrefersAuthenticatedPrincipalClaim()
+    {
+        var config = new GatewayConfig
+        {
+            AuthToken = "bootstrap-token"
+        };
+        var startup = new GatewayStartupContext
+        {
+            Config = config,
+            RuntimeState = RuntimeModeResolver.Resolve(config.Runtime, dynamicCodeSupported: true),
+            IsNonLoopbackBind = true
+        };
+
+        var services = new ServiceCollection();
+        services.AddSingleton(new BrowserSessionAuthService(config));
+
+        var ctx = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider(),
+            User = new ClaimsPrincipal(new ClaimsIdentity(
+            [
+                new Claim(ClaimTypes.NameIdentifier, "oidc-user-1")
+            ],
+            authenticationType: "oidc"))
+        };
+
+        var ok = WebSocketEndpoints.TryResolveAuthorizedUserIdForWebSocket(ctx, startup, out var authenticatedUserId);
+
+        Assert.True(ok);
+        Assert.Equal("oidc-user-1", authenticatedUserId);
+    }
+
+    [Fact]
+    public void TryResolveAuthorizedUserIdForWebSocket_AcceptsBrowserSessionAccountId()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-websocket-endpoint-tests", Guid.NewGuid().ToString("N"));
+        var config = new GatewayConfig
+        {
+            AuthToken = "bootstrap-token"
+        };
+        var startup = new GatewayStartupContext
+        {
+            Config = config,
+            RuntimeState = RuntimeModeResolver.Resolve(config.Runtime, dynamicCodeSupported: true),
+            IsNonLoopbackBind = true
+        };
+
+        var browserSessions = new BrowserSessionAuthService(config);
+        var ticket = browserSessions.Create(remember: false, new OperatorIdentitySnapshot
+        {
+            AuthMode = OrganizationAuthModeNames.BrowserSession,
+            Role = OperatorRoleNames.Admin,
+            AccountId = "acct-browser",
+            Username = "browser-user",
+            DisplayName = "Browser User"
+        });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(browserSessions);
+        services.AddSingleton(new OperatorAccountService(storagePath, NullLogger<OperatorAccountService>.Instance));
+        services.AddSingleton(new OrganizationPolicyService(storagePath, NullLogger<OrganizationPolicyService>.Instance));
+
+        var ctx = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider()
+        };
+        ctx.Request.Headers.Cookie = $"{BrowserSessionAuthService.CookieName}={ticket.SessionId}";
+
+        var ok = WebSocketEndpoints.TryResolveAuthorizedUserIdForWebSocket(ctx, startup, out var authenticatedUserId);
+
+        Assert.True(ok);
+        Assert.Equal("acct-browser", authenticatedUserId);
+    }
+
+    [Fact]
+    public void TryResolveAuthorizedUserIdForWebSocket_AcceptsAccountTokenAccountId()
+    {
+        var storagePath = Path.Combine(Path.GetTempPath(), "openclaw-websocket-endpoint-tests", Guid.NewGuid().ToString("N"));
+        var config = new GatewayConfig
+        {
+            AuthToken = "bootstrap-token"
+        };
+        var startup = new GatewayStartupContext
+        {
+            Config = config,
+            RuntimeState = RuntimeModeResolver.Resolve(config.Runtime, dynamicCodeSupported: true),
+            IsNonLoopbackBind = true
+        };
+
+        var operatorAccounts = new OperatorAccountService(storagePath, NullLogger<OperatorAccountService>.Instance);
+        var created = operatorAccounts.Create(new OperatorAccountCreateRequest
+        {
+            Username = "token-user",
+            Password = "P@ssw0rd123!",
+            DisplayName = "Token User",
+            Role = OperatorRoleNames.Admin,
+            Enabled = true
+        });
+        var token = operatorAccounts.CreateToken(created.Id, new OperatorAccountTokenCreateRequest
+        {
+            Label = "ws-test"
+        });
+
+        var services = new ServiceCollection();
+        services.AddSingleton(new BrowserSessionAuthService(config));
+        services.AddSingleton(operatorAccounts);
+        services.AddSingleton(new OrganizationPolicyService(storagePath, NullLogger<OrganizationPolicyService>.Instance));
+
+        var ctx = new DefaultHttpContext
+        {
+            RequestServices = services.BuildServiceProvider()
+        };
+        ctx.Request.Headers.Authorization = $"Bearer {token!.Token}";
+
+        var ok = WebSocketEndpoints.TryResolveAuthorizedUserIdForWebSocket(ctx, startup, out var authenticatedUserId);
+
+        Assert.True(ok);
+        Assert.Equal(created.Id, authenticatedUserId);
+    }
+}

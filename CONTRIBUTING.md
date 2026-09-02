@@ -1,6 +1,8 @@
 # Contributing to OpenClaw.NET
 
-Thank you for your interest in contributing! This guide covers the contributor workflow. For the project shape, repository map, and how the runtime fits together, start with [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). For a first local run, follow [docs/QUICKSTART.md](docs/QUICKSTART.md).
+Thank you for your interest in contributing! This guide covers the contributor workflow. For the project shape, repository map, and how the runtime fits together, start with [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md). If you are evaluating the project for the first time, read [docs/START_HERE.md](docs/START_HERE.md). For a first local run, follow [docs/QUICKSTART.md](docs/QUICKSTART.md).
+
+For project governance, maintainer roles, sponsorship boundaries, branch protection, and architecture scope, see [docs/project/governance.md](docs/project/governance.md), [docs/project/maintainers.md](docs/project/maintainers.md), [docs/project/sponsors.md](docs/project/sponsors.md), [docs/project/branch-protection.md](docs/project/branch-protection.md), [docs/ARCHITECTURE_BOUNDARIES.md](docs/ARCHITECTURE_BOUNDARIES.md), [docs/CAPABILITY_MATRIX.md](docs/CAPABILITY_MATRIX.md), and [docs/architecture/optional-dependency-split.md](docs/architecture/optional-dependency-split.md).
 
 ## Prerequisites
 
@@ -14,13 +16,14 @@ Thank you for your interest in contributing! This guide covers the contributor w
 git clone https://github.com/clawdotnet/openclaw.net
 cd openclaw.net
 
-dotnet build
+dotnet restore OpenClaw.Net.slnx
+dotnet build OpenClaw.Net.slnx --configuration Release --no-restore
 
 # All tests
-dotnet test
+dotnet test OpenClaw.Net.slnx --configuration Release --no-build
 
-# A specific test project
-dotnet test src/OpenClaw.Tests
+# First deterministic runtime smoke
+dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
 ```
 
 ## Code Style
@@ -39,12 +42,21 @@ dotnet test src/OpenClaw.Tests
 4. **Verify before submitting:**
 
    ```bash
-   dotnet test
-   dotnet build -warnaserror
-   # Optional: dotnet publish src/OpenClaw.Gateway -c Release
+   dotnet build OpenClaw.Net.slnx --configuration Release --no-restore
+   dotnet test OpenClaw.Net.slnx --configuration Release --no-build
+   dotnet run --project samples/OpenClaw.HelloAgent -c Release --no-build
    ```
 
 5. **Open a PR.** Fill out the template, reference related issues (`Fixes #123`), and keep PRs focused — one feature or fix per PR. Rebase on `main` if your branch is behind.
+
+## Good First Contribution Areas
+
+- Documentation gaps where a setup or diagnostic step is unclear.
+- Focused regression tests for existing runtime, gateway, CLI, setup, or plugin behavior.
+- Small CLI/help-text improvements that make failures more actionable.
+- Compatibility catalog additions that exercise a real upstream package or intentionally unsupported case.
+- Sample improvements that demonstrate existing behavior without adding new runtime architecture.
+- Optional protocol or provider work that follows the split guidance in [docs/architecture/optional-dependency-split.md](docs/architecture/optional-dependency-split.md).
 
 ## Pull Request Review
 
@@ -56,9 +68,11 @@ PRs need at least one approval before merging. Reviewers check for:
 - **Security** — does it handle untrusted input safely?
 - **Style** — does it follow project conventions?
 
+Maintainers use the scoped review guidance in [docs/maintainers/review-checklist.md](docs/maintainers/review-checklist.md). If a contribution directly supports a company or customer use case, disclose that context in the PR so reviewers can evaluate scope, vendor neutrality, and whether the work belongs in core or an extension.
+
 ## Adding a New Tool or LLM Provider
 
-Tools implement `ITool` in `src/OpenClaw.Agent/Tools/` and register their JSON types in `CoreJsonContext`. Providers plug in through `Microsoft.Extensions.AI` and the gateway composition pipeline — add through the active provider registration path, not a `Program.cs` factory. Both must be wired through the current composition seams (see [docs/architecture-startup-refactor.md](docs/architecture-startup-refactor.md)) and covered by tests in `src/OpenClaw.Tests/`.
+Tools implement `ITool` in `src/OpenClaw.Agent/Tools/` when they are part of the default agent surface. Protocol-specific optional tools should live in an optional project, as Browser does in `src/OpenClaw.Protocols.Browser` and MQTT does in `src/OpenClaw.Protocols.Mqtt`, and be composed through the gateway or another explicit extension seam. Providers plug in through `Microsoft.Extensions.AI` and the gateway composition pipeline — add through the active provider registration path, not a `Program.cs` factory. Both must be wired through the current composition seams (see [docs/architecture-startup-refactor.md](docs/architecture-startup-refactor.md)) and covered by tests in `src/OpenClaw.Tests/`.
 
 ## Reporting Bugs and Feature Requests
 

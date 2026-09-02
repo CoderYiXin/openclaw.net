@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using OpenClaw.Gateway.Bootstrap;
 using OpenClaw.Gateway.Extensions;
@@ -7,6 +8,52 @@ namespace OpenClaw.Tests;
 
 public sealed class GatewayBootstrapExtensionsTests
 {
+    [Fact]
+    public void LoadGatewayConfig_LegacyTelegramConfigWithoutUpdateMode_DefaultsToWebhook()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OpenClaw:Channels:Telegram:Enabled"] = "true",
+                ["OpenClaw:Channels:Telegram:BotTokenRef"] = "env:TELEGRAM_BOT_TOKEN",
+                ["OpenClaw:Channels:Telegram:WebhookPath"] = "/telegram/custom-inbound",
+                ["OpenClaw:Channels:Telegram:WebhookPublicBaseUrl"] = "https://bot.example.com",
+                ["OpenClaw:Channels:Telegram:ValidateSignature"] = "true",
+                ["OpenClaw:Channels:Telegram:WebhookSecretTokenRef"] = "env:TELEGRAM_WEBHOOK_SECRET"
+            })
+            .Build();
+
+        var telegram = GatewayBootstrapExtensions.LoadGatewayConfig(configuration).Channels.Telegram;
+
+        Assert.Equal("webhook", telegram.UpdateMode);
+        Assert.Equal("/telegram/custom-inbound", telegram.WebhookPath);
+        Assert.Equal("https://bot.example.com", telegram.WebhookPublicBaseUrl);
+        Assert.True(telegram.ValidateSignature);
+        Assert.Equal("env:TELEGRAM_WEBHOOK_SECRET", telegram.WebhookSecretTokenRef);
+    }
+
+    [Fact]
+    public void LoadGatewayConfig_ConfiguredTelegramPollingSettings_AreBound()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OpenClaw:Channels:Telegram:UpdateMode"] = " Long-Polling ",
+                ["OpenClaw:Channels:Telegram:PollingTimeoutSeconds"] = "45",
+                ["OpenClaw:Channels:Telegram:PollingRetryDelaySeconds"] = "12",
+                ["OpenClaw:Channels:Telegram:DropPendingUpdatesOnStart"] = "true"
+            })
+            .Build();
+
+        var telegram = GatewayBootstrapExtensions.LoadGatewayConfig(configuration).Channels.Telegram;
+
+        Assert.True(telegram.UsesLongPolling());
+        Assert.False(telegram.UsesWebhook());
+        Assert.Equal(45, telegram.PollingTimeoutSeconds);
+        Assert.Equal(12, telegram.PollingRetryDelaySeconds);
+        Assert.True(telegram.DropPendingUpdatesOnStart);
+    }
+
     [Fact]
     public void LoadGatewayConfig_ConfiguredToolRootsReplaceWildcardDefaults()
     {
@@ -27,6 +74,51 @@ public sealed class GatewayBootstrapExtensionsTests
         Assert.Equal(["/app/workspace"], config.Tooling.AllowedReadRoots);
         Assert.Equal(["/app/workspace"], config.Tooling.AllowedWriteRoots);
         GatewaySecurityExtensions.EnforcePublicBindHardening(config, isNonLoopbackBind: true);
+    }
+
+    [Fact]
+    public void LoadGatewayConfig_HydratesPluginEntryConfigJson()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OpenClaw:Plugins:Entries:bridge-plugin:Enabled"] = "true",
+                ["OpenClaw:Plugins:Entries:bridge-plugin:Config:apiKey"] = "secret",
+                ["OpenClaw:Plugins:Entries:bridge-plugin:Config:retries"] = "3"
+            })
+            .Build();
+
+        var config = GatewayBootstrapExtensions.LoadGatewayConfig(configuration);
+
+        Assert.True(config.Plugins.Entries.TryGetValue("bridge-plugin", out var entry));
+        Assert.NotNull(entry!.Config);
+        var element = entry.Config!.Value;
+        Assert.Equal("secret", element.GetProperty("apiKey").GetString());
+        Assert.Equal(3, element.GetProperty("retries").GetInt32());
+    }
+
+    [Fact]
+    public void LoadGatewayConfig_HydratesDynamicNativePluginEntryConfigJson()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OpenClaw:Plugins:DynamicNative:Enabled"] = "true",
+                ["OpenClaw:Plugins:DynamicNative:Entries:native-plugin:Enabled"] = "true",
+                ["OpenClaw:Plugins:DynamicNative:Entries:native-plugin:Config:endpoint"] = "https://example.com",
+                ["OpenClaw:Plugins:DynamicNative:Entries:native-plugin:Config:maxItems"] = "42"
+            })
+            .Build();
+
+        var config = GatewayBootstrapExtensions.LoadGatewayConfig(configuration);
+
+        Assert.True(config.Plugins.DynamicNative.Entries.TryGetValue("native-plugin", out var entry));
+        Assert.True(entry!.Enabled);
+        Assert.NotNull(entry.Config);
+        var element = entry.Config!.Value;
+        Assert.Equal(JsonValueKind.Object, element.ValueKind);
+        Assert.Equal("https://example.com", element.GetProperty("endpoint").GetString());
+        Assert.Equal(42, element.GetProperty("maxItems").GetInt32());
     }
 
     [Fact]

@@ -29,7 +29,7 @@ public sealed class SqliteSessionSearchTests
                         Content = "invoice status"
                     }
                 ]
-            }, CancellationToken.None);
+            }, TestContext.Current.CancellationToken);
 
             await store.SaveSessionAsync(new Session
             {
@@ -44,7 +44,7 @@ public sealed class SqliteSessionSearchTests
                         Content = "invoice status"
                     }
                 ]
-            }, CancellationToken.None);
+            }, TestContext.Current.CancellationToken);
 
             var results = await ((ISessionSearchStore)store).SearchSessionsAsync(
                 new SessionSearchQuery
@@ -52,7 +52,7 @@ public sealed class SqliteSessionSearchTests
                     Text = "invoice",
                     ChannelId = "sms"
                 },
-                CancellationToken.None);
+                TestContext.Current.CancellationToken);
 
             var hit = Assert.Single(results.Items);
             Assert.Equal("session-sms", hit.SessionId);
@@ -96,14 +96,14 @@ public sealed class SqliteSessionSearchTests
                         ]
                     }
                 ]
-            }, CancellationToken.None);
+            }, TestContext.Current.CancellationToken);
 
             var results = await ((ISessionSearchStore)store).SearchSessionsAsync(
                 new SessionSearchQuery
                 {
                     Text = "invoice"
                 },
-                CancellationToken.None);
+                TestContext.Current.CancellationToken);
 
             var hit = Assert.Single(results.Items);
             Assert.Equal("session-tool", hit.SessionId);
@@ -137,7 +137,7 @@ public sealed class SqliteSessionSearchTests
                         Content = "hello world"
                     }
                 ]
-            }, CancellationToken.None);
+            }, TestContext.Current.CancellationToken);
 
             var results = await ((ISessionSearchStore)store).SearchSessionsAsync(
                 new SessionSearchQuery
@@ -145,7 +145,7 @@ public sealed class SqliteSessionSearchTests
                     // Unclosed phrase quote is invalid FTS5 syntax.
                     Text = "\"unclosed"
                 },
-                CancellationToken.None);
+                TestContext.Current.CancellationToken);
 
             Assert.Empty(results.Items);
         }
@@ -162,25 +162,29 @@ public sealed class SqliteSessionSearchTests
         try
         {
             var dbPath = Path.Combine(root, "memory.db");
-            using var store = new SqliteMemoryStore(dbPath, enableFts: false);
-
-            await store.SaveSessionAsync(new Session
+            using (var store = new SqliteMemoryStore(dbPath, enableFts: false))
             {
-                Id = "session-corrupt",
-                ChannelId = "websocket",
-                SenderId = "alice"
-            }, CancellationToken.None);
+                await store.SaveSessionAsync(new Session
+                {
+                    Id = "session-corrupt",
+                    ChannelId = "websocket",
+                    SenderId = "alice"
+                }, TestContext.Current.CancellationToken);
 
-            await using var conn = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString());
-            await conn.OpenAsync();
-            await using var cmd = conn.CreateCommand();
-            cmd.CommandText = "UPDATE sessions SET json = '{not valid json' WHERE id = $id;";
-            cmd.Parameters.AddWithValue("$id", "session-corrupt");
-            await cmd.ExecuteNonQueryAsync();
+                await using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = dbPath }.ToString()))
+                {
+                    await conn.OpenAsync();
+                    await using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "UPDATE sessions SET json = '{not valid json' WHERE id = $id;";
+                    cmd.Parameters.AddWithValue("$id", "session-corrupt");
+                    await cmd.ExecuteNonQueryAsync();
+                }
 
-            var ex = await Assert.ThrowsAsync<MemoryStoreCorruptionException>(async () =>
-                await store.GetSessionAsync("session-corrupt", CancellationToken.None));
-            Assert.Equal("session-corrupt", ex.SessionId);
+                var ex = await Assert.ThrowsAsync<MemoryStoreCorruptionException>(async () =>
+                    await store.GetSessionAsync("session-corrupt", TestContext.Current.CancellationToken));
+                Assert.Equal("session-corrupt", ex.SessionId);
+            }
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         }
         finally
         {
