@@ -800,7 +800,7 @@ public static class SkillLoader
                     var key = keyNode is YamlScalarNode keyScalar && keyScalar.Value is not null
                         ? keyScalar.Value
                         : keyNode.ToString() ?? string.Empty;
-                    writer.WritePropertyName(key);
+                    writer.WritePropertyName(NormalizeYamlPropertyName(key));
                     if (!WriteYamlNode(writer, entry.Value, depth + 1, ancestors))
                     {
                         ok = false;
@@ -859,7 +859,7 @@ public static class SkillLoader
             return;
         }
 
-        if (trimmed.Equals("null", StringComparison.Ordinal) || trimmed.Equals("~", StringComparison.Ordinal))
+        if (trimmed.Equals("null", StringComparison.OrdinalIgnoreCase) || trimmed.Equals("~", StringComparison.Ordinal))
         {
             writer.WriteNullValue();
             return;
@@ -885,6 +885,17 @@ public static class SkillLoader
 
         writer.WriteStringValue(value);
     }
+
+    private static string NormalizeYamlPropertyName(string key)
+        => key switch
+        {
+            "skill_exec_entrypoint" => "entrypoint",
+            "skill_exec_args" => "args",
+            "skill_exec_stdin" => "stdin",
+            "skill_exec_cwd" => "cwd",
+            "skill_exec_parse_mode" => "parse_mode",
+            _ => key
+        };
 
     private static string UnquoteYamlScalar(string value)
     {

@@ -331,6 +331,65 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_YamlCompositionLegacySkillExecFields_AreNormalized()
+    {
+        var content = """
+            ---
+            name: legacy-skill-exec-fields
+            description: Legacy skill_exec field aliases remain supported
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: skill_exec
+                  skill: web-research
+                  skill_exec_entrypoint: report
+                  skill_exec_args: ["--format", "json"]
+                  skill_exec_stdin: "{{ input }}"
+                  skill_exec_cwd: artifacts/meta
+                  skill_exec_parse_mode: json
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/legacy-skill-exec-fields", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        Assert.Equal("report", step.SkillExecEntrypoint);
+        Assert.Equal(["--format", "json"], step.SkillExecArgs);
+        Assert.Equal("{{ input }}", step.SkillExecStdin);
+        Assert.Equal("artifacts/meta", step.SkillExecCwd);
+        Assert.Equal("json", step.SkillExecParseMode);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlCompositionUppercaseNull_PreservesLegacyInference()
+    {
+        var content = """
+            ---
+            name: uppercase-null
+            description: Uppercase null keeps legacy scalar inference
+            kind: meta
+            composition:
+              steps:
+                - id: s1
+                  kind: llm_chat
+                  with:
+                    value: NULL
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/uppercase-null", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        using var withDoc = JsonDocument.Parse(step.WithJson!);
+        Assert.Equal(JsonValueKind.Null, withDoc.RootElement.GetProperty("value").ValueKind);
+    }
+
+    [Fact]
     public void ParseSkillContent_YamlBlockBeyondDepthLimit_FailsGracefully()
     {
         var nesting = 80; // deeper than the conversion depth limit
