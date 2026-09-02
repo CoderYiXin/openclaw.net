@@ -364,6 +364,58 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_YamlCompositionLegacyNamedWithProperty_IsPreserved()
+    {
+        var content = """
+            ---
+            name: legacy-named-payload
+            description: Arbitrary payload keys are preserved
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: llm_chat
+                  with:
+                    skill_exec_args: payload-value
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/legacy-named-payload", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        using var withDoc = JsonDocument.Parse(step.WithJson!);
+        Assert.Equal("payload-value", withDoc.RootElement.GetProperty("skill_exec_args").GetString());
+        Assert.False(withDoc.RootElement.TryGetProperty("args", out _));
+    }
+
+    [Fact]
+    public void TryParseSkillContent_YamlCompositionDuplicateSkillExecAlias_IsRejected()
+    {
+        var content = """
+            ---
+            name: duplicate-skill-exec-field
+            description: Duplicate skill_exec field spellings are rejected
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: skill_exec
+                  skill: web-research
+                  args: ["canonical"]
+                  skill_exec_args: ["legacy"]
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/duplicate-skill-exec-field", SkillSource.Workspace, out _, out var errorCode);
+
+        Assert.False(ok);
+        Assert.Equal("invalid_skill_exec", errorCode);
+    }
+
+    [Fact]
     public void ParseSkillContent_YamlCompositionUppercaseNull_PreservesLegacyInference()
     {
         var content = """

@@ -800,7 +800,7 @@ public static class SkillLoader
                     var key = keyNode is YamlScalarNode keyScalar && keyScalar.Value is not null
                         ? keyScalar.Value
                         : keyNode.ToString() ?? string.Empty;
-                    writer.WritePropertyName(NormalizeYamlPropertyName(key));
+                    writer.WritePropertyName(key);
                     if (!WriteYamlNode(writer, entry.Value, depth + 1, ancestors))
                     {
                         ok = false;
@@ -885,17 +885,6 @@ public static class SkillLoader
 
         writer.WriteStringValue(value);
     }
-
-    private static string NormalizeYamlPropertyName(string key)
-        => key switch
-        {
-            "skill_exec_entrypoint" => "entrypoint",
-            "skill_exec_args" => "args",
-            "skill_exec_stdin" => "stdin",
-            "skill_exec_cwd" => "cwd",
-            "skill_exec_parse_mode" => "parse_mode",
-            _ => key
-        };
 
     private static string UnquoteYamlScalar(string value)
     {
@@ -1886,7 +1875,13 @@ public static class SkillLoader
 
         var isSkillExec = string.Equals(stepKind, "skill_exec", StringComparison.OrdinalIgnoreCase);
 
-        if (stepElement.TryGetProperty("entrypoint", out var entrypointElement))
+        if (!TryGetSkillExecProperty(stepElement, "entrypoint", "skill_exec_entrypoint", isSkillExec, out var entrypointElement, out var hasEntrypoint))
+        {
+            errorCode = "invalid_skill_exec";
+            return false;
+        }
+
+        if (hasEntrypoint)
         {
             if (!isSkillExec || entrypointElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(entrypointElement.GetString()))
             {
@@ -1897,16 +1892,42 @@ public static class SkillLoader
             entrypoint = entrypointElement.GetString()!.Trim();
         }
 
-        if (stepElement.TryGetProperty("args", out _))
+        if (!TryGetSkillExecProperty(stepElement, "args", "skill_exec_args", isSkillExec, out var argsElement, out var hasArgs))
         {
-            if (!isSkillExec || !TryParseStringArrayProperty(stepElement, "args", out args, out _))
+            errorCode = "invalid_skill_exec";
+            return false;
+        }
+
+        if (hasArgs)
+        {
+            if (!isSkillExec || argsElement.ValueKind != JsonValueKind.Array)
             {
                 errorCode = "invalid_skill_exec";
                 return false;
             }
+
+            var parsedArgs = new List<string>();
+            foreach (var itemElement in argsElement.EnumerateArray())
+            {
+                if (itemElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(itemElement.GetString()))
+                {
+                    errorCode = "invalid_skill_exec";
+                    return false;
+                }
+
+                parsedArgs.Add(itemElement.GetString()!);
+            }
+
+            args = parsedArgs;
         }
 
-        if (stepElement.TryGetProperty("stdin", out var stdinElement))
+        if (!TryGetSkillExecProperty(stepElement, "stdin", "skill_exec_stdin", isSkillExec, out var stdinElement, out var hasStdin))
+        {
+            errorCode = "invalid_skill_exec";
+            return false;
+        }
+
+        if (hasStdin)
         {
             if (!isSkillExec || stdinElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(stdinElement.GetString()))
             {
@@ -1917,7 +1938,13 @@ public static class SkillLoader
             stdin = stdinElement.GetString();
         }
 
-        if (stepElement.TryGetProperty("cwd", out var cwdElement))
+        if (!TryGetSkillExecProperty(stepElement, "cwd", "skill_exec_cwd", isSkillExec, out var cwdElement, out var hasCwd))
+        {
+            errorCode = "invalid_skill_exec";
+            return false;
+        }
+
+        if (hasCwd)
         {
             if (!isSkillExec || cwdElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(cwdElement.GetString()))
             {
@@ -1933,7 +1960,13 @@ public static class SkillLoader
             }
         }
 
-        if (stepElement.TryGetProperty("parse_mode", out var parseModeElement))
+        if (!TryGetSkillExecProperty(stepElement, "parse_mode", "skill_exec_parse_mode", isSkillExec, out var parseModeElement, out var hasParseMode))
+        {
+            errorCode = "invalid_skill_exec";
+            return false;
+        }
+
+        if (hasParseMode)
         {
             if (!isSkillExec || parseModeElement.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(parseModeElement.GetString()))
             {
@@ -1949,6 +1982,30 @@ public static class SkillLoader
             }
         }
 
+        return true;
+    }
+
+    private static bool TryGetSkillExecProperty(
+        JsonElement stepElement,
+        string canonicalName,
+        string legacyName,
+        bool isSkillExec,
+        out JsonElement value,
+        out bool found)
+    {
+        var hasCanonical = stepElement.TryGetProperty(canonicalName, out var canonicalValue);
+        JsonElement legacyValue = default;
+        var hasLegacy = isSkillExec && stepElement.TryGetProperty(legacyName, out legacyValue);
+
+        if (hasCanonical && hasLegacy)
+        {
+            value = default;
+            found = false;
+            return false;
+        }
+
+        found = hasCanonical || hasLegacy;
+        value = hasCanonical ? canonicalValue : hasLegacy ? legacyValue : default;
         return true;
     }
 
