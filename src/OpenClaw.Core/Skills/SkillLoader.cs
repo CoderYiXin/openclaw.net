@@ -758,7 +758,13 @@ public static class SkillLoader
             using var output = new MemoryStream();
             using (var writer = new Utf8JsonWriter(output))
             {
-                WriteYamlNode(writer, root);
+                if (!WriteYamlNode(writer, root, depth: 0, ancestors: new HashSet<YamlNode>(ReferenceEqualityComparer.Instance)))
+                {
+                    // Abandon the partial document. Reset() clears the writer's
+                    // state so Dispose() does not throw on the unbalanced output.
+                    writer.Reset();
+                    return false;
+                }
             }
 
             json = Encoding.UTF8.GetString(output.ToArray());
@@ -770,8 +776,20 @@ public static class SkillLoader
         }
     }
 
-    private static void WriteYamlNode(Utf8JsonWriter writer, YamlNode node)
+    private const int MaxYamlNodeDepth = 64;
+
+    private static bool WriteYamlNode(
+        Utf8JsonWriter writer,
+        YamlNode node,
+        int depth,
+        HashSet<YamlNode> ancestors)
     {
+        // Guard against absurd nesting and anchor cycles (a node that
+        // references itself would otherwise recurse forever).
+        if (depth >= MaxYamlNodeDepth || !ancestors.Add(node))
+            return false;
+
+        var ok = true;
         switch (node)
         {
             case YamlMappingNode mapping:
@@ -783,30 +801,54 @@ public static class SkillLoader
                         ? keyScalar.Value
                         : keyNode.ToString() ?? string.Empty;
                     writer.WritePropertyName(key);
-                    WriteYamlNode(writer, entry.Value);
+                    if (!WriteYamlNode(writer, entry.Value, depth + 1, ancestors))
+                    {
+                        ok = false;
+                        break;
+                    }
                 }
-                writer.WriteEndObject();
+                if (ok)
+                    writer.WriteEndObject();
                 break;
             case YamlSequenceNode sequence:
                 writer.WriteStartArray();
                 foreach (var item in sequence.Children)
-                    WriteYamlNode(writer, item);
-                writer.WriteEndArray();
+                {
+                    if (!WriteYamlNode(writer, item, depth + 1, ancestors))
+                    {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok)
+                    writer.WriteEndArray();
                 break;
             case YamlScalarNode scalar:
-                WriteYamlScalar(writer, scalar.Value);
+                WriteYamlScalar(writer, scalar);
                 break;
             default:
                 writer.WriteNullValue();
                 break;
         }
+
+        ancestors.Remove(node);
+        return ok;
     }
 
-    private static void WriteYamlScalar(Utf8JsonWriter writer, string? value)
+    private static void WriteYamlScalar(Utf8JsonWriter writer, YamlScalarNode scalar)
     {
+        var value = scalar.Value;
         if (value is null)
         {
             writer.WriteNullValue();
+            return;
+        }
+
+        // Quoted and block scalars are always JSON strings; only plain scalars
+        // get boolean/number/null-like inference.
+        if (scalar.Style != ScalarStyle.Plain)
+        {
+            writer.WriteStringValue(value);
             return;
         }
 
