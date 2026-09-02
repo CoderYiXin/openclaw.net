@@ -254,6 +254,242 @@ public class SkillLoaderTests
     }
 
     [Fact]
+    public void ParseSkillContent_YamlTriggersQuotedScalars_RemainStrings()
+    {
+        var content = """
+            ---
+            name: quoted-triggers
+            description: Quoted scalars must serialize as JSON strings
+            triggers:
+              - "123"
+              - "true"
+              - "null"
+              - "~"
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/quoted-triggers", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        Assert.Equal(["123", "true", "null", "~"], skill!.Triggers);
+    }
+
+    [Theory]
+    [InlineData("123")]
+    [InlineData("true")]
+    [InlineData("~")]
+    public void ParseSkillContent_YamlTriggersPlainInferredScalar_FailsAsNonString(string plainValue)
+    {
+        // Plain scalars keep their boolean/number/null-like inference, so a
+        // plain 123/true/~ converts to a non-string JSON value and cannot be a trigger.
+        var content = $"""
+            ---
+            name: plain-trigger
+            description: Plain inferred scalar trigger
+            triggers:
+              - {plainValue}
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/plain-trigger", SkillSource.Workspace, out _, out _);
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlCompositionQuotedScalars_RemainStrings()
+    {
+        var content = """
+            ---
+            name: quoted-composition
+            description: Quoted scalars in a YAML composition block
+            kind: meta
+            composition:
+              steps:
+                - id: s1
+                  kind: llm_chat
+                  with:
+                    prompt: "123"
+                    truthy: "true"
+                    nothing: "null"
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/quoted-composition", SkillSource.Workspace, out var skill, out var errorCode);
+
+        Assert.True(ok, errorCode);
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        using var withDoc = JsonDocument.Parse(step.WithJson!);
+        Assert.Equal(JsonValueKind.String, withDoc.RootElement.GetProperty("prompt").ValueKind);
+        Assert.Equal("123", withDoc.RootElement.GetProperty("prompt").GetString());
+        Assert.Equal("true", withDoc.RootElement.GetProperty("truthy").GetString());
+        Assert.Equal("null", withDoc.RootElement.GetProperty("nothing").GetString());
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlCompositionLegacySkillExecFields_AreNormalized()
+    {
+        var content = """
+            ---
+            name: legacy-skill-exec-fields
+            description: Legacy skill_exec field aliases remain supported
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: skill_exec
+                  skill: web-research
+                  skill_exec_entrypoint: report
+                  skill_exec_args: ["--format", "json"]
+                  skill_exec_stdin: "{{ input }}"
+                  skill_exec_cwd: artifacts/meta
+                  skill_exec_parse_mode: json
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/legacy-skill-exec-fields", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        Assert.Equal("report", step.SkillExecEntrypoint);
+        Assert.Equal(["--format", "json"], step.SkillExecArgs);
+        Assert.Equal("{{ input }}", step.SkillExecStdin);
+        Assert.Equal("artifacts/meta", step.SkillExecCwd);
+        Assert.Equal("json", step.SkillExecParseMode);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlCompositionLegacyNamedWithProperty_IsPreserved()
+    {
+        var content = """
+            ---
+            name: legacy-named-payload
+            description: Arbitrary payload keys are preserved
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: llm_chat
+                  with:
+                    skill_exec_args: payload-value
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/legacy-named-payload", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        using var withDoc = JsonDocument.Parse(step.WithJson!);
+        Assert.Equal("payload-value", withDoc.RootElement.GetProperty("skill_exec_args").GetString());
+        Assert.False(withDoc.RootElement.TryGetProperty("args", out _));
+    }
+
+    [Fact]
+    public void TryParseSkillContent_YamlCompositionDuplicateSkillExecAlias_IsRejected()
+    {
+        var content = """
+            ---
+            name: duplicate-skill-exec-field
+            description: Duplicate skill_exec field spellings are rejected
+            kind: meta
+            composition:
+              steps:
+                - id: delegate
+                  kind: skill_exec
+                  skill: web-research
+                  args: ["canonical"]
+                  skill_exec_args: ["legacy"]
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/duplicate-skill-exec-field", SkillSource.Workspace, out _, out var errorCode);
+
+        Assert.False(ok);
+        Assert.Equal("invalid_skill_exec", errorCode);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlCompositionUppercaseNull_PreservesLegacyInference()
+    {
+        var content = """
+            ---
+            name: uppercase-null
+            description: Uppercase null keeps legacy scalar inference
+            kind: meta
+            composition:
+              steps:
+                - id: s1
+                  kind: llm_chat
+                  with:
+                    value: NULL
+            ---
+            Instructions.
+            """;
+
+        var skill = SkillLoader.ParseSkillContent(content, "/skills/uppercase-null", SkillSource.Workspace);
+
+        Assert.NotNull(skill);
+        var step = Assert.Single(skill!.Composition!.Steps);
+        using var withDoc = JsonDocument.Parse(step.WithJson!);
+        Assert.Equal(JsonValueKind.Null, withDoc.RootElement.GetProperty("value").ValueKind);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlBlockBeyondDepthLimit_FailsGracefully()
+    {
+        var nesting = 80; // deeper than the conversion depth limit
+        var nestedLines = Enumerable.Range(0, nesting)
+            .Select(i => new string(' ', i * 2) + "n:")
+            .Append(new string(' ', nesting * 2) + "leaf");
+        var block = string.Join('\n', nestedLines.Select(line => "        " + line));
+
+        var content = $"""
+            ---
+            name: deep-yaml
+            description: YAML nested deeper than the conversion limit
+            kind: meta
+            composition:
+            {block}
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/deep-yaml", SkillSource.Workspace, out _, out _);
+
+        Assert.False(ok);
+    }
+
+    [Fact]
+    public void ParseSkillContent_YamlSelfReferencingAnchor_FailsGracefully()
+    {
+        var content = """
+            ---
+            name: cyclic-yaml
+            description: Self-referencing YAML anchor
+            kind: meta
+            composition:
+              steps: &steps
+                - id: cycle
+                  kind: llm_chat
+                  with:
+                    again: *steps
+            ---
+            Instructions.
+            """;
+
+        var ok = SkillLoader.TryParseSkillContent(content, "/skills/cyclic-yaml", SkillSource.Workspace, out _, out _);
+
+        Assert.False(ok);
+    }
+
+    [Fact]
     public void ParseSkillContent_MetaOpenSquillaDslFields_ParsesSuccessfully()
     {
         var content = """
